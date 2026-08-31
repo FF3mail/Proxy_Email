@@ -1,0 +1,139 @@
+[Unit]
+Description=DELTA-transit Mail Proxy Daemon
+Documentation=file:///usr/local/bin/mail-proxy-daemon.py
+After=network.target mariadb.service dovecot.service postfix.service
+Requires=mariadb.service
+
+[Service]
+Type=simple
+User=vmail
+Group=vmail
+ExecStart=/usr/bin/python3 /usr/local/bin/mail-proxy-daemon.py
+ExecStartPre=/bin/bash -c 'touch /var/log/mail-proxy/mail-proxy-daemon.log && chmod 0640 /var/log/mail-proxy/mail-proxy-daemon.log && chown vmail:mail-proxy-logs /var/log/mail-proxy/mail-proxy-daemon.log'
+Restart=on-failure
+RestartSec=30s
+StandardOutput=journal
+StandardError=journal
+
+# --- Лимиты ресурсов ---
+# Максимум открытых файловых дескрипторов:
+# 20 IMAP + 20 SMTP воркеров × несколько сокетов каждый + логи + БД
+LimitNOFILE=65536
+# Максимум дочерних процессов/потоков для одного процесса
+LimitNPROC=512
+# Таймаут остановки — даём воркерам завершить активные IMAP/SMTP сессии
+TimeoutStopSec=60s
+
+# --- Файловая система ---
+# Монтирует /usr, /boot, /efi как read-only.
+# Защищает системные бинарники от модификации скомпрометированным демоном.
+ProtectSystem=strict
+
+# Запрещает доступ к домашним директориям пользователей (/home, /root, /run/user).
+# Демон работает с /var/vmail — это не home-директория.
+ProtectHome=true
+
+# Явно разрешаем только те пути, которые демону реально нужны для записи.
+# Все остальные пути недоступны для записи даже при ProtectSystem=strict.
+# /tmp исключён — демон использует /var/spool/mail-proxy/tmp
+ReadWritePaths=/var/log/mail-proxy /var/vmail/vmail1 /var/spool/mail-proxy
+
+# Конфигурационные файлы — только чтение.
+# Криптоключ и db.conf не должны изменяться демоном.
+ReadOnlyPaths=/etc/mail-proxy
+
+# Запрещает доступ к /proc/<pid>/ других процессов.
+# Демон не может читать память или файловые дескрипторы соседних процессов.
+ProtectProc=invisible
+
+# --- Привилегии и capabilities ---
+# Запрещает setuid/setgid и приобретение новых привилегий через execve.
+# Даже если демон скомпрометирован — он не сможет повысить привилегии.
+NoNewPrivileges=true
+
+# Запрещает установку setuid/setgid битов на файлы.
+# Исключает создание setuid-бинарников из-под демона.
+RestrictSUIDSGID=true
+
+# Удаляем все Linux capabilities кроме явно необходимых.
+# Демон работает от имени vmail (непривилегированный пользователь),
+# дополнительные capabilities не требуются.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# --- Защита ядра ---
+# Запрещает загрузку и выгрузку модулей ядра.
+ProtectKernelModules=true
+
+# Запрещает запись в sysctl-параметры ядра (/proc/sys, /sys).
+ProtectKernelTunables=true
+
+# Запрещает запись в журналы ядра (/dev/kmsg, /proc/kmsg).
+ProtectKernelLogs=true
+
+# Запрещает доступ к /sys/firmware и /sys/kernel/security.
+ProtectFirmware=true
+
+# --- Изоляция процесса ---
+# Фиксирует personality (ABI) процесса — запрещает переключение в 32-битный режим.
+# Снижает поверхность атаки через syscall ABI.
+LockPersonality=true
+
+# Запрещает одновременно записываемые и исполняемые маппинги памяти (W^X).
+# Блокирует большинство техник инъекции shellcode.
+# Совместимо с CPython — интерпретатор не использует JIT.
+MemoryDenyWriteExecute=true
+
+# Запрещает создание пространств имён (namespaces) изнутри демона.
+# Снижает риск побега из контейнера и privilege escalation.
+RestrictNamespaces=true
+
+# Ограничивает доступные семейства адресов сокетов.
+# Демон использует только IPv4/IPv6 (IMAP, SMTP, MariaDB) и Unix-сокеты (MariaDB).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Ограничивает доступные типы IPC.
+# Демон использует только POSIX-потоки — System V IPC не нужен.
+RestrictRealtime=true
+
+# --- Системные вызовы ---
+# Белый список syscall-групп. Запрещает все системные вызовы,
+# не входящие в перечисленные группы. При попытке вызова запрещённого
+# syscall процесс получает SIGSYS и завершается.
+#
+# @system-service — базовый набор для серверных процессов
+# @network-io     — сокеты, recv/send (IMAP, SMTP, MariaDB)
+# @file-system    — open, read, write, stat (Maildir, логи)
+# @io-event       — epoll, inotify (watchdog)
+# @process        — fork, clone для потоков threading
+# @signal         — обработка SIGTERM/SIGINT
+# @timer          — time, sleep
+SystemCallFilter=@system-service @network-io @file-system @io-event @process @signal @timer
+SystemCallErrorNumber=EPERM
+
+# --- Временная директория ---
+# PrivateTmp=false: демон использует /var/spool/mail-proxy/tmp
+# (после применения патча PROMPT 06) для временных .eml файлов,
+# которые должны быть видны в рамках всей системы.
+# Если патч PROMPT 06 не применён и используется /tmp — установить true.
+PrivateTmp=true
+
+# Изолирует /dev — демон видит только базовые псевдоустройства
+# (null, zero, random, urandom, tty).
+# Блокирует доступ к физическим устройствам и raw-дискам.
+PrivateDevices=true
+
+# Монтирует отдельный tmpfs для /tmp внутри сервиса (только при PrivateTmp=true).
+# При PrivateTmp=false — не имеет эффекта, оставлено для документирования намерения.
+
+# Изолирует UTS-namespace — демон не может менять hostname системы.
+ProtectHostname=true
+
+# Изолирует clock namespace — демон не может менять системное время.
+ProtectClock=true
+
+# Запрещает запись в /sys/fs/cgroup — демон не управляет cgroup'ами.
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
