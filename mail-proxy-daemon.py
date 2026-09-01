@@ -425,12 +425,14 @@ class MailHandler:
         if not data or not data[0]:
             return ''
         part = data[0]
+        if isinstance(part, bytes):
+            return part.decode('ascii', errors='replace')
         if isinstance(part, tuple) and part[0]:
             meta = part[0]
             if isinstance(meta, bytes):
                 return meta.decode('ascii', errors='replace')
             return str(meta)
-        return ''
+        return str(part)
 
     def _parse_uid_and_rfc822_size(self, meta: str) -> tuple[Optional[str], Optional[int]]:
         uid_match = re.search(r'UID\s+(\d+)', meta, re.IGNORECASE)
@@ -731,6 +733,7 @@ class MailHandler:
             smtp = smtplib.SMTP(
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
             )
+            smtp.ehlo()
             return self._stream_file_via_smtp(
                 smtp, mail_from, local_rcpts, mail_file
             )
