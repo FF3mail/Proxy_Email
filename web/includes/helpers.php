@@ -156,6 +156,63 @@ function writeLog(string $message): void
 }
 
 /**
+ * Parses one INI section without parse_ini_file() (often disabled on hardened PHP-FPM).
+ *
+ * Compatible with ConfigParser-style db.conf written by delta-transit-install.sh.
+ *
+ * @return array<string, string>
+ */
+function parseIniSection(string $content, string $section): array
+{
+    $result = [];
+    $inSection = false;
+    $sectionLower = strtolower($section);
+
+    foreach (preg_split('/\R/', $content) as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, ';') || str_starts_with($line, '#')) {
+            continue;
+        }
+
+        if (preg_match('/^\[(.+)\]$/', $line, $matches)) {
+            $inSection = (strtolower(trim($matches[1])) === $sectionLower);
+            continue;
+        }
+
+        if (!$inSection) {
+            continue;
+        }
+
+        $equalsPos = strpos($line, '=');
+        if ($equalsPos === false) {
+            continue;
+        }
+
+        $key = trim(substr($line, 0, $equalsPos));
+        $value = trim(substr($line, $equalsPos + 1));
+
+        if ($key === '') {
+            continue;
+        }
+
+        if (
+            strlen($value) >= 2
+            && (
+                ($value[0] === '"' && $value[strlen($value) - 1] === '"')
+                || ($value[0] === "'" && $value[strlen($value) - 1] === "'")
+            )
+        ) {
+            $value = substr($value, 1, -1);
+        }
+
+        $result[$key] = $value;
+    }
+
+    return $result;
+}
+
+/**
  * Загружает секцию [db] из INI-файла конфигурации MariaDB.
  *
  * @return array<string, string>
@@ -166,19 +223,16 @@ function loadDbConfig(string $configFile = '/etc/mail-proxy/db.conf'): array
         throw new RuntimeException('DB config file not found: ' . $configFile);
     }
 
-    $cfg = parse_ini_file($configFile, true, INI_SCANNER_TYPED);
-
-    if ($cfg === false || !isset($cfg['db']) || !is_array($cfg['db'])) {
-        throw new RuntimeException(
-            'Invalid DB config: missing [db] section in ' . $configFile
-        );
+    $content = file_get_contents($configFile);
+    if ($content === false) {
+        throw new RuntimeException('Unable to read DB config file: ' . $configFile);
     }
 
-    $db = $cfg['db'];
+    $db = parseIniSection($content, 'db');
 
-    if (empty($db['db_user']) || !array_key_exists('db_pass', $db)) {
+    if ($db === [] || empty($db['db_user']) || !array_key_exists('db_pass', $db)) {
         throw new RuntimeException(
-            'Invalid DB config: db_user or db_pass missing in [db] section of ' . $configFile
+            'Invalid DB config: missing [db] section in ' . $configFile
         );
     }
 
