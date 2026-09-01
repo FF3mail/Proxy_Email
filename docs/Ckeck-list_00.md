@@ -170,6 +170,13 @@ journalctl -u mail-proxy -n 100
 - [ ] Получение вложений работает
 - [ ] Кириллица в темах отображается корректно
 - [ ] UTF-8 адреса обрабатываются корректно
+- [ ] Oversized inbound: skipped before RFC822 fetch, logged with UID, marked `\Seen` after retry threshold (P4 size guard)
+
+Проверка P4 size guard (staging, `MAX_INBOUND_MESSAGE_BYTES` temporarily lowered):
+
+```bash
+grep -E "IMAP size skip|IMAP size probe failed|IMAP size skip limit reached" /var/log/mail-proxy/mail-proxy-daemon.log | tail -10
+```
 - [ ] Недопустимый `auth_type` / `imap_encryption` / `smtp_encryption` в БД не открывает IMAP/SMTP-соединение (лог + пропуск аккаунта, FIX P7)
 
 Проверка FIX P7 (на staging, после вставки тестовой записи с недопустимым значением):

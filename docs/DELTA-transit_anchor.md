@@ -138,6 +138,9 @@ DELTA-transit/
 | `REQUIRE_TLS` | `True` (STARTTLS обязателен для SMTP с `smtp_encryption=tls`) |
 | `VALID_AUTH_TYPES` | `('plain', 'oauth2')` — FIX P7 |
 | `VALID_ENCRYPTION_MODES` | `('none', 'ssl', 'tls')` — FIX P7 |
+| `MAX_INBOUND_MESSAGE_BYTES` | `200 * 1024 * 1024` (override: env `MAX_INBOUND_MESSAGE_BYTES`) |
+| `MAX_SIZE_SKIP_RETRIES` | `3` — forced `\Seen` after consecutive size skips |
+| `MAX_SIZE_SKIP_TRACKER_ENTRIES` | `10000` — cap on process-local skip tracker |
 | `LOG_FILE` | `/var/log/mail-proxy/mail-proxy-daemon.log` |
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
 
@@ -183,14 +186,21 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | FIX-3.2-8 | Logrotate-файл без стандартного имени | `logrotate-mail-proxy` |
 | FIX-3.2-9 | `delta-transit-install.sh` ожидал flat `web/` | `WEB_FILES` включает `config.php` и `includes/*` |
 
-### P4 — уточнённый статус (частично закрыт)
+### P4 — частично закрыт (pre-fetch size guard)
 
 | Этап | Статус |
 |------|--------|
 | `_deliver_to_local_smtp()` / исходящая SMTP | **Закрыт** — потоковая передача из временного файла (чанки 64 КБ) |
-| `imaplib.fetch(num, '(RFC822)')` в `poll_external_imap()` | **Открыт** — полное письмо в RAM (`data[0][1]`) до записи в `TEMP_DIR` |
+| Pre-fetch size guard в `poll_external_imap()` | **Частично закрыт** — `RFC822.SIZE` (primary), `BODYSTRUCTURE` (defensive fallback) до `fetch(RFC822)` |
+| Oversized / unknown-size inbound | **Пропуск** — без полного RFC822 fetch; fail-closed при неизвестном размере |
+| Retry / forced `\Seen` | `MAX_SIZE_SKIP_RETRIES` последовательных skip → `UID STORE` `\Seen` (fallback: `STORE` по seq) |
+| `imaplib.fetch(num, '(RFC822)')` для принятых писем | **Открыт** — письма ≤ лимита всё ещё буферизуются imaplib в RAM |
 
-Ограничение `imaplib`: штатными средствами потоковый fetch в файл недоступен без замены протокольного слоя (см. комментарий в `poll_external_imap()`, ~строки 472–476).
+Перед каждым `fetch(RFC822)` демон запрашивает `(UID RFC822.SIZE)`. Если размер неизвестен или `> MAX_INBOUND_MESSAGE_BYTES` — RFC822 fetch не выполняется. `MAX_INBOUND_MESSAGE_BYTES` задаётся через env (default 200 MiB, согласован с `configure_limits.sh`). Process-local трекер `(account_id, uid)` ограничен `MAX_SIZE_SKIP_TRACKER_ENTRIES`.
+
+BODYSTRUCTURE fallback: только однопартовые структуры без `multipart`; неоднозначный BODYSTRUCTURE → `unknown` (fail-closed), без оценки размера.
+
+> P4 не полностью закрыт: сообщения на или ниже лимита всё ещё полностью буферизуются imaplib при RFC822 fetch.
 
 ### P7 — закрыт (FIX P7)
 
@@ -269,7 +279,7 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | Инсталлятор v3.1.0 (FIX-1…FIX-8) | Закрыт |
 | Синхронизация демон ↔ schema.sql (FIX-3.2-1) | Закрыт v3.2 |
 | Структура `web/` (FIX-3.2-2) | Закрыт v3.2 |
-| P4 — imaplib.fetch RAM | **Открыт** |
+| P4 — imaplib.fetch RAM | **Частично закрыт** (pre-fetch size guard; imaplib буфер для писем ≤ лимита) |
 | P7 — whitelist encryption | **Закрыт (FIX P7)** |
 
 ---

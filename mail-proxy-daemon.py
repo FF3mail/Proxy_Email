@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 --*-
 import os
+import re
 import sys
 import time
 import base64
@@ -60,6 +61,17 @@ SMTP_QUEUE_MAXSIZE = 1000
 DB_POOL_SIZE = 12
 # Директория для временных файлов демона
 TEMP_DIR = '/var/spool/mail-proxy/tmp'
+# Default maximum inbound message size in bytes.
+# Aligned with configure_limits.sh (~200 MiB on the wire).
+# Runtime override: MAX_INBOUND_MESSAGE_BYTES=104857600
+_DEFAULT_MAX_INBOUND = 200 * 1024 * 1024
+MAX_INBOUND_MESSAGE_BYTES = int(
+    os.environ.get('MAX_INBOUND_MESSAGE_BYTES', _DEFAULT_MAX_INBOUND)
+)
+# After this many consecutive size skips for the same message, mark it Seen.
+MAX_SIZE_SKIP_RETRIES = 3
+# Hard cap on the process-local skip tracker.
+MAX_SIZE_SKIP_TRACKER_ENTRIES = 10000
 GCM_PREFIX = 'gcm:'
 GCM_NONCE_LENGTH = 12
 GCM_TAG_LENGTH = 16
@@ -269,11 +281,13 @@ class MailHandler:
     """
     Содержит бизнес-логику обработки входящей и исходящей почты.
     Не является потоком — используется воркер-пулами как разделяемый объект.
-    Все методы потокобезопасны (не хранят изменяемое состояние между вызовами).
+    Методы потокобезопасны; исключение — process-local трекер P4 size-skip.
     """
     def __init__(self, db: Database, cryptor: Cryptor):
         self._db = db
         self._cryptor = cryptor
+        self._imap_size_skip_tracker: Dict[tuple, int] = {}
+        self._imap_size_skip_lock = threading.Lock()
 
     def _plain_auth_login(self, acc: Dict[str, Any]) -> str:
         """Возвращает логин для plain-аутентификации (username или email)."""
@@ -405,6 +419,166 @@ class MailHandler:
             if cursor: cursor.close()
             if conn: conn.close()
         return None
+
+    def _decode_imap_fetch_meta(self, data: Any) -> str:
+        """Извлекает метаданные из ответа imaplib.fetch()."""
+        if not data or not data[0]:
+            return ''
+        part = data[0]
+        if isinstance(part, tuple) and part[0]:
+            meta = part[0]
+            if isinstance(meta, bytes):
+                return meta.decode('ascii', errors='replace')
+            return str(meta)
+        return ''
+
+    def _parse_uid_and_rfc822_size(self, meta: str) -> tuple[Optional[str], Optional[int]]:
+        uid_match = re.search(r'UID\s+(\d+)', meta, re.IGNORECASE)
+        size_match = re.search(r'RFC822\.SIZE\s+(\d+)', meta, re.IGNORECASE)
+        uid = uid_match.group(1) if uid_match else None
+        size = int(size_match.group(1)) if size_match else None
+        return uid, size
+
+    def _parse_bodystructure_size(self, text: str) -> Optional[int]:
+        """
+        Defensive BODYSTRUCTURE size for single-part messages only.
+        Example: BODYSTRUCTURE (("TEXT" "PLAIN" ("CHARSET" "US-ASCII") NIL NIL "7BIT" 1152 23))
+        Octet count 1152 precedes line count 23 — unambiguous for non-multipart.
+        Multipart structures have no reliable total size here → unknown.
+        """
+        if 'multipart' in text.lower():
+            return None
+        match = re.search(
+            r'"(?:7BIT|8BIT|BINARY|BASE64|QUOTED-PRINTABLE)"\s+(\d+)\s+\d+\)',
+            text,
+            re.IGNORECASE,
+        )
+        return int(match.group(1)) if match else None
+
+    def _imap_size_skip_key(
+        self, account_id: int, uid: Optional[str], seq: str
+    ) -> tuple:
+        if uid:
+            return (account_id, f'uid:{uid}')
+        return (account_id, f'seq:{seq}')
+
+    def _prune_imap_size_skip_tracker(self) -> None:
+        if len(self._imap_size_skip_tracker) <= MAX_SIZE_SKIP_TRACKER_ENTRIES:
+            return
+        excess = len(self._imap_size_skip_tracker) - MAX_SIZE_SKIP_TRACKER_ENTRIES
+        for key in list(self._imap_size_skip_tracker.keys())[:excess]:
+            del self._imap_size_skip_tracker[key]
+
+    def _clear_imap_size_skip_entry(
+        self, account_id: int, uid: Optional[str], seq: str
+    ) -> None:
+        key = self._imap_size_skip_key(account_id, uid, seq)
+        with self._imap_size_skip_lock:
+            self._imap_size_skip_tracker.pop(key, None)
+
+    def _mark_imap_message_seen(
+        self, mail: imaplib.IMAP4, uid: Optional[str], num: bytes
+    ) -> bool:
+        if uid:
+            try:
+                status, _ = mail.uid('STORE', uid, '+FLAGS', '\\Seen')
+                return status == 'OK'
+            except Exception as e:
+                logger.error(f"Failed UID STORE Seen for uid={uid}: {e}")
+                return False
+        try:
+            status, _ = mail.store(num, '+FLAGS', '\\Seen')
+            return status == 'OK'
+        except Exception as e:
+            logger.error(f"Failed STORE Seen for seq={num!r}: {e}")
+            return False
+
+    def _probe_imap_message_size(
+        self, mail: imaplib.IMAP4, num: bytes
+    ) -> tuple[Optional[str], Optional[int], Optional[str]]:
+        """
+        Returns (uid, size_bytes, probe_error).
+        size_bytes is None when unknown (fail-closed). probe_error set on exception.
+        """
+        uid: Optional[str] = None
+        try:
+            status, data = mail.fetch(num, '(UID RFC822.SIZE)')
+            if status != 'OK':
+                return uid, None, f'UID RFC822.SIZE fetch status={status!r}'
+            meta = self._decode_imap_fetch_meta(data)
+            uid, size = self._parse_uid_and_rfc822_size(meta)
+            if size is not None:
+                return uid, size, None
+
+            status, data = mail.fetch(num, '(BODYSTRUCTURE)')
+            if status != 'OK':
+                return uid, None, f'BODYSTRUCTURE fetch status={status!r}'
+            bodystruct_meta = self._decode_imap_fetch_meta(data)
+            bodystruct_text = bodystruct_meta
+            if (
+                data
+                and data[0]
+                and isinstance(data[0], tuple)
+                and len(data[0]) > 1
+                and data[0][1]
+            ):
+                payload = data[0][1]
+                if isinstance(payload, bytes):
+                    bodystruct_text = payload.decode('ascii', errors='replace')
+                else:
+                    bodystruct_text = str(payload)
+            size = self._parse_bodystructure_size(bodystruct_text)
+            return uid, size, None
+        except Exception as e:
+            return uid, None, str(e)
+
+    def _handle_imap_size_skip(
+        self,
+        mail: imaplib.IMAP4,
+        acc: Dict[str, Any],
+        num: bytes,
+        uid: Optional[str],
+        size: Optional[int],
+        limit: int,
+        probe_error: Optional[str] = None,
+    ) -> None:
+        account_id = int(acc['id'])
+        account_email = acc['email']
+        seq = num.decode() if isinstance(num, bytes) else str(num)
+        key = self._imap_size_skip_key(account_id, uid, seq)
+
+        with self._imap_size_skip_lock:
+            count = self._imap_size_skip_tracker.get(key, 0) + 1
+            self._imap_size_skip_tracker[key] = count
+            self._prune_imap_size_skip_tracker()
+
+        if probe_error:
+            logger.warning(
+                f"IMAP size probe failed (fail-closed skip): "
+                f"account={account_email} uid={uid or 'n/a'} error={probe_error}"
+            )
+        elif size is None:
+            logger.warning(
+                f"IMAP size probe failed (fail-closed skip): "
+                f"account={account_email} uid={uid or 'n/a'} error=size unknown"
+            )
+        else:
+            logger.warning(
+                f"IMAP size skip: account={account_email} uid={uid or seq} "
+                f"size={size} limit={limit} skip={count}/{MAX_SIZE_SKIP_RETRIES}"
+            )
+
+        if count >= MAX_SIZE_SKIP_RETRIES:
+            logger.warning(
+                f"IMAP size skip limit reached; marking Seen: "
+                f"account={account_email} uid={uid or seq} "
+                f"size={size if size is not None else 'unknown'} "
+                f"limit={limit} retries={count}"
+            )
+            if self._mark_imap_message_seen(mail, uid, num):
+                with self._imap_size_skip_lock:
+                    self._imap_size_skip_tracker.pop(key, None)
+
     # -------------------------------------------------------------------------
     # Входящая почта: опрос внешнего IMAP и доставка на локальный SMTP
     # -------------------------------------------------------------------------
@@ -464,7 +638,30 @@ class MailHandler:
             logger.info(
                 f"Found {len(msg_nums)} unread messages for {acc['email']}"
             )
+            account_id = int(acc['id'])
             for num in msg_nums:
+                seq = num.decode() if isinstance(num, bytes) else str(num)
+                uid, msg_size, probe_error = self._probe_imap_message_size(mail, num)
+
+                if probe_error is not None:
+                    self._handle_imap_size_skip(
+                        mail, acc, num, uid, None,
+                        MAX_INBOUND_MESSAGE_BYTES, probe_error=probe_error,
+                    )
+                    continue
+
+                if msg_size is None:
+                    self._handle_imap_size_skip(
+                        mail, acc, num, uid, None, MAX_INBOUND_MESSAGE_BYTES,
+                    )
+                    continue
+
+                if msg_size > MAX_INBOUND_MESSAGE_BYTES:
+                    self._handle_imap_size_skip(
+                        mail, acc, num, uid, msg_size, MAX_INBOUND_MESSAGE_BYTES,
+                    )
+                    continue
+
                 status, data = mail.fetch(num, '(RFC822)')
                 if status != 'OK' or not data or not data[0]:
                     continue
@@ -504,6 +701,7 @@ class MailHandler:
 
                     if self._deliver_to_local_smtp(temp_path, referent_data):
                         mail.store(num, '+FLAGS', '\\Seen')
+                        self._clear_imap_size_skip_entry(account_id, uid, seq)
                 finally:
                     if temp_path is not None and temp_path.exists():
                         try:
