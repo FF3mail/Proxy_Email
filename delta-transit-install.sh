@@ -2015,11 +2015,76 @@ wait_for_service() {
     return 1
 }
 
-VALIDATION_START_EPOCH=""
+VALIDATION_LOG_SINCE_EPOCH=""
 
 start_mail_proxy() {
-    VALIDATION_START_EPOCH="$(date +%s)"
     systemctl restart mail-proxy.service
+}
+
+capture_validation_log_boundary() {
+    local active_enter_ts
+
+    active_enter_ts="$(
+        systemctl show mail-proxy.service -p ActiveEnterTimestamp --value 2>/dev/null || true
+    )"
+
+    if [[ -z "$active_enter_ts" || "$active_enter_ts" == "n/a" ]]
+    then
+        fatal "Unable to determine mail-proxy ActiveEnterTimestamp for log validation"
+    fi
+
+    VALIDATION_LOG_SINCE_EPOCH="$(date -d "$active_enter_ts" +%s 2>/dev/null || echo 0)"
+    if [[ "$VALIDATION_LOG_SINCE_EPOCH" -le 0 ]]
+    then
+        fatal "Unable to parse mail-proxy ActiveEnterTimestamp: ${active_enter_ts}"
+    fi
+
+    log_info "Validation log boundary: ${active_enter_ts} (epoch ${VALIDATION_LOG_SINCE_EPOCH})"
+}
+
+runtime_log_line_epoch() {
+    local line_ts="$1"
+    date -d "$line_ts" +%s 2>/dev/null || echo 0
+}
+
+runtime_log_line_is_error() {
+    local line="$1"
+    echo "$line" | grep -qE '\[(CRITICAL|ERROR)\]' \
+        || echo "$line" | grep -qE 'Traceback \(most recent call last\):'
+}
+
+verify_runtime_log() {
+    local errors=""
+    local line line_ts line_epoch
+
+    [[ -n "$VALIDATION_LOG_SINCE_EPOCH" ]] \
+        || fatal "Validation log boundary not recorded"
+
+    while IFS= read -r line
+    do
+        [[ -n "$line" ]] || continue
+
+        line_ts="$(
+            echo "$line" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' || true
+        )"
+        [[ -n "$line_ts" ]] || continue
+
+        line_epoch="$(runtime_log_line_epoch "$line_ts")"
+        [[ "$line_epoch" -ge "$VALIDATION_LOG_SINCE_EPOCH" ]] || continue
+
+        if runtime_log_line_is_error "$line"
+        then
+            errors+="${line}"$'\n'
+        fi
+    done < <(tail -n 500 "$DAEMON_LOG")
+
+    if [[ -n "$errors" ]]
+    then
+        echo
+        echo "$errors"
+        echo
+        fatal "Runtime errors detected since current service start"
+    fi
 }
 
 verify_service_active() {
@@ -2047,38 +2112,6 @@ verify_no_placeholder_url() {
     return 0
 }
 
-verify_runtime_log() {
-    local errors=""
-    local line line_epoch line_ts
-
-    if [[ -n "$VALIDATION_START_EPOCH" ]]
-    then
-        while IFS= read -r line
-        do
-            line_ts="$(echo "$line" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}')"
-            if [[ -n "$line_ts" ]]
-            then
-                line_epoch="$(date -d "$line_ts" +%s 2>/dev/null || echo 0)"
-                [[ "$line_epoch" -ge "$VALIDATION_START_EPOCH" ]] || continue
-            fi
-            if echo "$line" | grep -qE 'CRITICAL|ERROR|Traceback'
-            then
-                errors+="${line}"$'\n'
-            fi
-        done < <(tail -n 500 "$DAEMON_LOG")
-    else
-        errors="$(tail -n 200 "$DAEMON_LOG" | grep -E 'CRITICAL|ERROR|Traceback' || true)"
-    fi
-
-    if [[ -n "$errors" ]]
-    then
-        echo
-        echo "$errors"
-        echo
-        fatal "Runtime errors detected"
-    fi
-}
-
 verify_process_running() {
     local i
     for ((i=0; i<10; i++))
@@ -2093,10 +2126,12 @@ verify_process_running() {
 }
 
 verify_database_login() {
+    local db_pass
+    db_pass="$(read_db_pass_from_conf)"
     mysql \
-        -u "$DB_USER" \
-        -p"$PARAM_DB_PASS" \
-        "$DB_NAME" \
+        -u "${DB_USER}" \
+        -p"${db_pass}" \
+        "${DB_NAME}" \
         -e "SELECT 1;" \
         >/dev/null
 }
@@ -2242,6 +2277,7 @@ phase_validation() {
 
     start_mail_proxy
     verify_service_active
+    capture_validation_log_boundary
     verify_process_running
     verify_log_exists
     verify_database_login
@@ -2399,6 +2435,27 @@ run_all_phases() {
 
 main() {
     install_traps
+
+    if [[ "${DELTA_VALIDATION_LOG_ONLY:-}" == "1" ]]
+    then
+        require_root
+        verify_log_exists
+        capture_validation_log_boundary
+        verify_runtime_log
+        log_ok "Runtime log validation passed"
+        exit 0
+    fi
+
+    if [[ "${DELTA_VALIDATION_ONLY:-}" == "1" ]]
+    then
+        require_root
+        initialize_phase_status
+        phase_validation
+        render_report
+        log_ok "Validation-only run completed"
+        exit 0
+    fi
+
     initialize_phase_status
     run_all_phases
     render_report
