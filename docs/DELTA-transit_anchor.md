@@ -168,7 +168,10 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | Nginx `client_max_body_size` | 210M |
 | PHP `upload_max_filesize` | 200M |
 | PHP `post_max_size` | 210M |
+| PHP-FPM `pm.max_children` | 10 on staging (~8 GB RAM; override `PHP_FPM_MAX_CHILDREN`) |
 | MariaDB `max_allowed_packet` | 256M |
+
+> PHP-FPM 8.1–8.3: `configure_limits.sh` and `delta-transit-install.sh` detect the installed version under `/etc/php/<version>/fpm/` instead of hard-coding 8.1. Staging/integration hosts (Ubuntu 24.04 + PHP 8.3) are supported; production pool sizing is evaluated separately.
 
 ---
 

@@ -251,12 +251,30 @@ generate_password() {
 # -----------------------------------------------------------------------------
 
 ask_public_url() {
+    local postfix_hostname=""
+    postfix_hostname="$(postconf -h myhostname 2>/dev/null || true)"
+    if [[ -n "$postfix_hostname" ]]; then
+        log_info "Postfix myhostname is '${postfix_hostname}' — panel URL hostname must differ"
+    fi
+
     while true
     do
-        read -rp "Public URL (https://mail.company.com): " PARAM_APP_URL
+        read -rp "Public URL (https://panel.example.com): " PARAM_APP_URL
         [[ -n "$PARAM_APP_URL" ]]                          || continue
         [[ "$PARAM_APP_URL" != "https://mail-proxy.local" ]] || continue
         [[ "$PARAM_APP_URL" =~ ^https://  ]]               || continue
+        if [[ -n "$postfix_hostname" ]]; then
+            local panel_hostname=""
+            panel_hostname="$(
+                printf '%s\n' "$PARAM_APP_URL" \
+                    | sed -E 's#^https://##' \
+                    | sed -E 's#/.*$##'
+            )"
+            if [[ "$panel_hostname" == "$postfix_hostname" ]]; then
+                log_warn "Panel hostname equals Postfix myhostname (${postfix_hostname}); choose another URL"
+                continue
+            fi
+        fi
         break
     done
 }
@@ -1284,8 +1302,14 @@ validate_dovecot_configuration() {
 
 reload_dovecot() {
     if systemctl is-active --quiet dovecot
-    then systemctl restart dovecot
-    else systemctl start   dovecot
+    then
+        if systemctl reload dovecot >/dev/null 2>&1
+        then
+            return 0
+        fi
+        systemctl restart dovecot
+    else
+        systemctl start dovecot
     fi
 }
 
@@ -1329,9 +1353,76 @@ PHP_UPLOAD_LIMIT="200M"
 PHP_POST_LIMIT="210M"
 PHP_MEMORY_LIMIT="512M"
 PHP_MAX_EXECUTION_TIME="600"
+PHP_FPM_MIN_VERSION="8.1"
+PHP_FPM_MAX_CHILDREN="${PHP_FPM_MAX_CHILDREN:-10}"
+PHP_FPM_VERSION=""
+PHP_FPM_POOL_CONF=""
+PHP_FPM_SERVICE=""
 
 find_php_ini_files() {
     find /etc/php -type f -name php.ini 2>/dev/null
+}
+
+detect_php_fpm_environment() {
+    PHP_FPM_VERSION="$(
+        find /etc/php -mindepth 3 -maxdepth 3 -path '*/fpm/php.ini' 2>/dev/null \
+            | sed 's|/etc/php/||;s|/fpm/php.ini||' \
+            | sort -V \
+            | tail -1
+    )"
+
+    if [[ -z "$PHP_FPM_VERSION" ]]; then
+        log_error "PHP-FPM not found: no /etc/php/*/fpm/php.ini"
+        return 1
+    fi
+
+    if [[ "$(printf '%s\n' "$PHP_FPM_MIN_VERSION" "$PHP_FPM_VERSION" | sort -V | tail -1)" != "$PHP_FPM_VERSION" ]]; then
+        log_error "PHP ${PHP_FPM_VERSION} is below minimum ${PHP_FPM_MIN_VERSION}"
+        return 1
+    fi
+
+    PHP_FPM_POOL_CONF="/etc/php/${PHP_FPM_VERSION}/fpm/pool.d/www.conf"
+    PHP_FPM_SERVICE="php${PHP_FPM_VERSION}-fpm"
+
+    if ! systemctl list-unit-files --no-pager "${PHP_FPM_SERVICE}.service" 2>/dev/null \
+        | awk '{print $1}' | grep -qx "${PHP_FPM_SERVICE}.service"
+    then
+        local fallback=""
+        fallback="$(
+            systemctl list-unit-files --no-pager 'php*-fpm.service' 2>/dev/null \
+                | awk '/^php[0-9.]+\-fpm\.service/ {print $1; exit}' \
+                | sed 's/\.service$//'
+        )"
+        if [[ -n "$fallback" ]]; then
+            log_warn "Unit ${PHP_FPM_SERVICE} not found, using ${fallback}"
+            PHP_FPM_SERVICE="$fallback"
+            PHP_FPM_VERSION="${fallback#php}"
+            PHP_FPM_VERSION="${PHP_FPM_VERSION%-fpm}"
+            PHP_FPM_POOL_CONF="/etc/php/${PHP_FPM_VERSION}/fpm/pool.d/www.conf"
+        else
+            log_error "PHP-FPM systemd unit not found for version ${PHP_FPM_VERSION}"
+            return 1
+        fi
+    fi
+
+    log_info "Detected PHP-FPM ${PHP_FPM_VERSION} (service=${PHP_FPM_SERVICE})"
+    return 0
+}
+
+set_php_pool_parameter() {
+    local file="$1" key="$2" value="$3"
+    if grep -Eq "^[[:space:]]*;?[[:space:]]*${key}[[:space:]]*=" "$file"
+    then
+        sed -ri "s|^[[:space:]]*;?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|g" "$file"
+    else
+        printf "\n%s = %s\n" "$key" "$value" >> "$file"
+    fi
+}
+
+configure_php_fpm_pool() {
+    [[ -f "$PHP_FPM_POOL_CONF" ]] || fatal "PHP-FPM pool config not found: ${PHP_FPM_POOL_CONF}"
+    set_php_pool_parameter "$PHP_FPM_POOL_CONF" pm.max_children "$PHP_FPM_MAX_CHILDREN"
+    log_info "PHP-FPM pool: pm.max_children=${PHP_FPM_MAX_CHILDREN} (override: PHP_FPM_MAX_CHILDREN)"
 }
 
 set_php_parameter() {
@@ -1361,11 +1452,8 @@ configure_all_php_ini() {
 }
 
 restart_php_fpm() {
-    local svc
-    while IFS= read -r svc
-    do
-        systemctl restart "$svc"
-    done < <(systemctl list-unit-files | awk '/php.*fpm.*service/ {print $1}')
+    detect_php_fpm_environment || fatal "PHP-FPM not detected"
+    systemctl restart "$PHP_FPM_SERVICE"
 }
 
 verify_php_limit() {
@@ -1381,6 +1469,11 @@ verify_php_configuration() {
         verify_php_limit "$file" upload_max_filesize "$PHP_UPLOAD_LIMIT"
         verify_php_limit "$file" post_max_size       "$PHP_POST_LIMIT"
     done < <(find_php_ini_files)
+
+    [[ -f "$PHP_FPM_POOL_CONF" ]] || fatal "PHP-FPM pool config not found: ${PHP_FPM_POOL_CONF}"
+    grep -Eq "^[[:space:]]*;?[[:space:]]*pm\\.max_children[[:space:]]*=[[:space:]]*${PHP_FPM_MAX_CHILDREN}" \
+        "$PHP_FPM_POOL_CONF" \
+        || fatal "PHP-FPM pm.max_children mismatch"
 }
 
 phase_php() {
@@ -1394,7 +1487,10 @@ phase_php() {
         return 0
     fi
 
+    detect_php_fpm_environment || fatal "PHP-FPM not detected"
+
     configure_all_php_ini
+    configure_php_fpm_pool
     restart_php_fpm
     verify_php_configuration
 
@@ -1543,7 +1639,7 @@ detect_php_fpm_socket() {
 
     # 3. Если ничего не нашли — запрашиваем вручную
     log_warn "PHP-FPM socket not found automatically."
-    echo "Укажите путь к UNIX-сокету (например, /run/php/php8.1-fpm.sock) или TCP-адрес (например, 127.0.0.1:9999)"
+    echo "Укажите путь к UNIX-сокету (например, /run/php/php8.3-fpm.sock) или TCP-адрес (например, 127.0.0.1:9999)"
     echo "Если вы не знаете, оставьте пустым и мы попробуем продолжить без веб-панели."
     read -rp "Путь к сокету или TCP-адрес: " user_input
 

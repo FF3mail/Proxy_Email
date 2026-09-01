@@ -27,6 +27,17 @@ Corporate mail proxy gateway between external IMAP/SMTP accounts and local refer
 3. Apply limits: [`configure_limits.sh`](configure_limits.sh).
 4. Follow the deployment checklist: [`docs/Ckeck-list_00.md`](docs/Ckeck-list_00.md).
 
+### Staging / integration host (Ubuntu 24.04, PHP 8.3)
+
+Verified staging baseline: Ubuntu 24.04 LTS, PHP-FPM 8.3, MariaDB 10.11, existing Postfix/Dovecot/Nginx stack.
+
+- **PHP-FPM version** is auto-detected from `/etc/php/*/fpm/php.ini` (minimum 8.1); scripts do not assume PHP 8.1.
+- **PHP-FPM concurrency ceiling** defaults to `pm.max_children = 10` on staging-sized hosts (~8 GB RAM). Override before install/limits run: `export PHP_FPM_MAX_CHILDREN=15`.
+- `memory_limit` remains the project default (`512M` per request ceiling); this is not a guaranteed RAM reservation.
+- **Production sizing** (pool size, RAM, disk) must be evaluated separately — staging is not a capacity benchmark.
+- **Panel URL** (`PARAM_APP_URL`) hostname must differ from Postfix `myhostname` (e.g. use `https://panel.mail.testvps.loc` when Postfix is `mail.testvps.loc`).
+- Installers only adjust required limit parameters; they do not replace the existing mail stack wholesale.
+
 ## Documentation
 
 | Document | Purpose |

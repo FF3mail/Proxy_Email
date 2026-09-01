@@ -42,7 +42,13 @@ MYSQL_MAX_PACKET="256M"
 
 NGINX_BODY_LIMIT="210M"
 
-PHP_INI="/etc/php/8.1/fpm/php.ini"
+PHP_FPM_MIN_VERSION="8.1"
+PHP_FPM_MAX_CHILDREN="${PHP_FPM_MAX_CHILDREN:-10}"
+PHP_FPM_VERSION=""
+PHP_INI=""
+PHP_FPM_POOL_CONF=""
+PHP_FPM_SERVICE=""
+
 PHP_UPLOAD="200M"
 PHP_POST="210M"
 PHP_MEMORY="512M"
@@ -109,6 +115,69 @@ php_set_param() {
     else
         printf "\n%s = %s\n" "$key" "$value" >> "$file"
     fi
+}
+
+php_pool_set_param() {
+    local file="$1" key="$2" value="$3"
+
+    if grep -Eq "^[[:space:]]*;?[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null; then
+        sed -i -E "s|^[[:space:]]*;?[[:space:]]*${key}([[:space:]]*)=.*|${key}\1= ${value}|" "$file"
+    else
+        printf "\n%s = %s\n" "$key" "$value" >> "$file"
+    fi
+}
+
+detect_php_fpm_environment() {
+    PHP_FPM_VERSION="$(
+        find /etc/php -mindepth 3 -maxdepth 3 -path '*/fpm/php.ini' 2>/dev/null \
+            | sed 's|/etc/php/||;s|/fpm/php.ini||' \
+            | sort -V \
+            | tail -1
+    )"
+
+    if [[ -z "$PHP_FPM_VERSION" ]]; then
+        log_error "PHP-FPM not found: no /etc/php/*/fpm/php.ini"
+        return 1
+    fi
+
+    if [[ "$(printf '%s\n' "$PHP_FPM_MIN_VERSION" "$PHP_FPM_VERSION" | sort -V | tail -1)" != "$PHP_FPM_VERSION" ]]; then
+        log_error "PHP ${PHP_FPM_VERSION} is below minimum ${PHP_FPM_MIN_VERSION}"
+        return 1
+    fi
+
+    PHP_INI="/etc/php/${PHP_FPM_VERSION}/fpm/php.ini"
+    PHP_FPM_POOL_CONF="/etc/php/${PHP_FPM_VERSION}/fpm/pool.d/www.conf"
+    PHP_FPM_SERVICE="php${PHP_FPM_VERSION}-fpm"
+
+    if ! systemctl list-unit-files --no-pager "${PHP_FPM_SERVICE}.service" 2>/dev/null \
+        | awk '{print $1}' | grep -qx "${PHP_FPM_SERVICE}.service"
+    then
+        local fallback=""
+        fallback="$(
+            systemctl list-unit-files --no-pager 'php*-fpm.service' 2>/dev/null \
+                | awk '/^php[0-9.]+\-fpm\.service/ {print $1; exit}' \
+                | sed 's/\.service$//'
+        )"
+        if [[ -n "$fallback" ]]; then
+            log_warn "Unit ${PHP_FPM_SERVICE} not found, using ${fallback}"
+            PHP_FPM_SERVICE="$fallback"
+            PHP_FPM_VERSION="${fallback#php}"
+            PHP_FPM_VERSION="${PHP_FPM_VERSION%-fpm}"
+            PHP_INI="/etc/php/${PHP_FPM_VERSION}/fpm/php.ini"
+            PHP_FPM_POOL_CONF="/etc/php/${PHP_FPM_VERSION}/fpm/pool.d/www.conf"
+        else
+            log_error "PHP-FPM systemd unit not found for version ${PHP_FPM_VERSION}"
+            return 1
+        fi
+    fi
+
+    if [[ ! -f "$PHP_INI" ]]; then
+        log_error "PHP-FPM ini not found: ${PHP_INI}"
+        return 1
+    fi
+
+    log_info "Detected PHP-FPM ${PHP_FPM_VERSION} (service=${PHP_FPM_SERVICE}, ini=${PHP_INI})"
+    return 0
 }
 
 # FIX-CL-1: для Dovecot — ищем строки БЕЗ ведущего '#'
@@ -194,18 +263,24 @@ check_bin dovecot
 check_bin mysql
 check_bin nginx
 
-if command -v php8.1-fpm >/dev/null 2>&1; then
-    log_info "Found binary: php8.1-fpm"
-elif command -v php-fpm8.1 >/dev/null 2>&1; then
-    log_info "Found binary: php-fpm8.1"
+if detect_php_fpm_environment; then
+    if command -v "${PHP_FPM_SERVICE}" >/dev/null 2>&1; then
+        log_info "Found binary: ${PHP_FPM_SERVICE}"
+    elif command -v "php-fpm${PHP_FPM_VERSION}" >/dev/null 2>&1; then
+        log_info "Found binary: php-fpm${PHP_FPM_VERSION}"
+    else
+        log_warn "PHP-FPM binary not found for version ${PHP_FPM_VERSION}"
+    fi
+    check_readable "$PHP_INI"
+    check_readable "$PHP_FPM_POOL_CONF"
 else
-    log_warn "PHP-FPM binary not found"
+    PHP_OK=false
+    log_warn "PHP-FPM environment detection failed"
 fi
 
 check_readable /etc/postfix/main.cf
 check_readable /etc/dovecot/conf.d/10-mail.conf
 check_readable /etc/mysql/mariadb.conf.d/50-server.cnf
-check_readable "$PHP_INI"
 check_readable /etc/nginx/nginx.conf
 
 # =============================================================================
@@ -463,6 +538,14 @@ if [[ -f "$PHP_INI" ]]; then
     php_set_param "$PHP_INI" "max_execution_time"  "$PHP_EXEC_TIME"
     php_set_param "$PHP_INI" "max_input_time"      "$PHP_INPUT_TIME"
 
+    if [[ -f "$PHP_FPM_POOL_CONF" ]]; then
+        backup_file "$PHP_FPM_POOL_CONF"
+        php_pool_set_param "$PHP_FPM_POOL_CONF" "pm.max_children" "$PHP_FPM_MAX_CHILDREN"
+        log_info "PHP-FPM pool: pm.max_children=${PHP_FPM_MAX_CHILDREN} (override: PHP_FPM_MAX_CHILDREN)"
+    else
+        log_warn "PHP-FPM pool config not found: ${PHP_FPM_POOL_CONF}"
+    fi
+
     PHP_OK=true
     CHANGE_STATUS["PHP-FPM"]="UPDATED"
 else
@@ -499,8 +582,13 @@ else
     log_warn "Postfix/Dovecot пропущены: ошибка конфигурации одного из сервисов"
 fi
 
-restart_if_ok php8.1-fpm PHP_OK
-restart_if_ok nginx      NGINX_OK
+if [[ -n "$PHP_FPM_SERVICE" ]]; then
+    restart_if_ok "$PHP_FPM_SERVICE" PHP_OK
+else
+    SERVICE_STATUS["php-fpm"]="SKIPPED"
+    log_warn "PHP-FPM service restart skipped (service not detected)"
+fi
+restart_if_ok nginx NGINX_OK
 
 # =============================================================================
 # ИТОГОВАЯ ТАБЛИЦА
@@ -515,5 +603,5 @@ printf "%-15s | %-20s | %-15s\n" "Postfix"  "${CHANGE_STATUS[Postfix]:-N/A}"  "$
 printf "%-15s | %-20s | %-15s\n" "Dovecot"  "${CHANGE_STATUS[Dovecot]:-N/A}"  "${SERVICE_STATUS[dovecot]:-N/A}"
 printf "%-15s | %-20s | %-15s\n" "MariaDB"  "${CHANGE_STATUS[MariaDB]:-N/A}"  "${SERVICE_STATUS[mariadb]:-N/A}"
 printf "%-15s | %-20s | %-15s\n" "Nginx"    "${CHANGE_STATUS[Nginx]:-N/A}"    "${SERVICE_STATUS[nginx]:-N/A}"
-printf "%-15s | %-20s | %-15s\n" "PHP-FPM"  "${CHANGE_STATUS[PHP-FPM]:-N/A}" "${SERVICE_STATUS[php8.1-fpm]:-N/A}"
+printf "%-15s | %-20s | %-15s\n" "PHP-FPM"  "${CHANGE_STATUS[PHP-FPM]:-N/A}" "${SERVICE_STATUS[${PHP_FPM_SERVICE:-php-fpm}]:-N/A}"
 echo "======================================================================"
