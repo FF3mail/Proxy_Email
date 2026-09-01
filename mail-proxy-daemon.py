@@ -503,12 +503,11 @@ class MailHandler:
         uid: Optional[str] = None
         try:
             status, data = mail.fetch(num, '(UID RFC822.SIZE)')
-            if status != 'OK':
-                return uid, None, f'UID RFC822.SIZE fetch status={status!r}'
-            meta = self._decode_imap_fetch_meta(data)
-            uid, size = self._parse_uid_and_rfc822_size(meta)
-            if size is not None:
-                return uid, size, None
+            if status == 'OK':
+                meta = self._decode_imap_fetch_meta(data)
+                uid, size = self._parse_uid_and_rfc822_size(meta)
+                if size is not None:
+                    return uid, size, None
 
             status, data = mail.fetch(num, '(BODYSTRUCTURE)')
             if status != 'OK':
