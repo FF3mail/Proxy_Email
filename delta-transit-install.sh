@@ -1609,6 +1609,8 @@ check_iredmail_hostname_conflict() {
 check_nginx_server_name_conflict() {
 
     local conflicts
+    local own_realpath
+    own_realpath="$(realpath "${NGINX_SITE_AVAILABLE}" 2>/dev/null || echo "")"
 
     conflicts="$(
         grep -Rnw \
@@ -1616,8 +1618,14 @@ check_nginx_server_name_conflict() {
             /etc/nginx/sites-enabled \
             -e "server_name[[:space:]].*${NGINX_SERVER_NAME}" \
             2>/dev/null \
-            | grep -v "${NGINX_SITE_AVAILABLE}" \
-            || true
+        | while IFS=: read -r file line rest; do
+            if [[ -n "$own_realpath" ]] \
+                && [[ "$(realpath "$file" 2>/dev/null || echo "")" == "$own_realpath" ]]
+            then
+                continue
+            fi
+            echo "$file:$line:$rest"
+          done
     )"
 
     if [[ -n "$conflicts" ]]
