@@ -466,45 +466,101 @@ log_info "Updated mailbox rows: ${AFFECTED_ROWS:-0}"
 # BLOCK 4: NGINX
 # FIX-CL-3: лимит 210M
 # FIX-CL-5: собираем уникальный список файлов без дублей.
-#   nginx.conf обрабатывается один раз; sites-enabled — отдельно.
-#   Директива client_max_body_size заменяется идемпотентно через sed
-#   с якорем ^ — не создаёт дублей при повторном запуске.
+# FIX-CL-7: не добавляем client_max_body_size в nginx.conf, если директива
+#           уже задана в conf-enabled/conf.d (типичный iRedMail layout).
 # =============================================================================
+
+collect_nginx_body_limit_targets() {
+    local -n _targets="$1"
+    local path file project_file
+
+    for path in /etc/nginx/conf-enabled /etc/nginx/conf.d /etc/nginx/sites-available /etc/nginx/sites-enabled
+    do
+        [[ -d "$path" ]] || continue
+        while IFS= read -r file
+        do
+            [[ -n "$file" ]] && _targets["$file"]=1
+        done < <(grep -rl '^[[:space:]]*client_max_body_size[[:space:]]' "$path" 2>/dev/null || true)
+    done
+
+    for project_file in \
+        /etc/nginx/conf.d/mail-proxy.conf \
+        /etc/nginx/sites-available/mail-proxy.conf
+    do
+        [[ -f "$project_file" ]] && _targets["$project_file"]=1
+    done
+}
+
+nginx_file_has_body_limit() {
+    grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]' "$1" 2>/dev/null
+}
+
+nginx_file_has_http_block() {
+    grep -q 'http[[:space:]]*{' "$1" 2>/dev/null
+}
+
+nginx_file_has_server_block() {
+    grep -q 'server[[:space:]]*{' "$1" 2>/dev/null
+}
+
+update_nginx_body_limit_in_file() {
+    local file="$1"
+
+    backup_file "$file"
+
+    if nginx_file_has_body_limit "$file"; then
+        sed -i -E \
+            "s|^([[:space:]]*)client_max_body_size[[:space:]]+[^;]+;|\1client_max_body_size ${NGINX_BODY_LIMIT};|g" \
+            "$file"
+        log_info "Nginx: обновлён client_max_body_size в $file"
+        return 0
+    fi
+
+    if nginx_file_has_server_block "$file"; then
+        sed -i "/server[[:space:]]*{/a\\    client_max_body_size ${NGINX_BODY_LIMIT};" "$file"
+        log_info "Nginx: добавлен client_max_body_size в server {} ($file)"
+        return 0
+    fi
+
+    if nginx_file_has_http_block "$file"; then
+        sed -i "/http[[:space:]]*{/a\\    client_max_body_size ${NGINX_BODY_LIMIT};" "$file"
+        log_info "Nginx: добавлен client_max_body_size в http {} ($file)"
+        return 0
+    fi
+
+    log_warn "Nginx: в $file нет подходящего блока для client_max_body_size"
+    return 1
+}
 
 echo
 log_info "=== BLOCK 4: NGINX ==="
 
 declare -A NGINX_FILE_SET
+collect_nginx_body_limit_targets NGINX_FILE_SET
 
-if [[ -f /etc/nginx/nginx.conf ]]; then
+if [[ ${#NGINX_FILE_SET[@]} -eq 0 && -f /etc/nginx/nginx.conf ]]; then
     NGINX_FILE_SET["/etc/nginx/nginx.conf"]=1
+    log_info "Nginx: client_max_body_size not found elsewhere, will use nginx.conf"
 fi
 
-while IFS= read -r file; do
-    NGINX_FILE_SET["$file"]=1
-done < <(find /etc/nginx/sites-enabled -maxdepth 1 -type f 2>/dev/null)
-
-for file in "${!NGINX_FILE_SET[@]}"; do
-    backup_file "$file"
-
-    if grep -Eq '^[[:space:]]*client_max_body_size[[:space:]]' "$file"; then
-        # Идемпотентная замена существующей директивы
-        sed -i -E \
-            "s|^([[:space:]]*)client_max_body_size[[:space:]]+[^;]+;|\1client_max_body_size ${NGINX_BODY_LIMIT};|g" \
-            "$file"
-        log_info "Nginx: обновлён client_max_body_size в $file"
-        NGINX_OK=true
-    else
-        # Добавляем только в секцию http {}
-        if grep -q 'http[[:space:]]*{' "$file"; then
-            sed -i '/http[[:space:]]*{/a\    client_max_body_size '"${NGINX_BODY_LIMIT}"';' "$file"
-            log_info "Nginx: добавлен client_max_body_size в $file"
+if [[ ${#NGINX_FILE_SET[@]} -eq 0 ]]; then
+    NGINX_OK=false
+    CHANGE_STATUS["Nginx"]="CONFIG NOT FOUND"
+    log_warn "Nginx: no candidate files for client_max_body_size"
+else
+    nginx_file=""
+    updated_any=0
+    for nginx_file in "${!NGINX_FILE_SET[@]}"
+    do
+        if update_nginx_body_limit_in_file "$nginx_file"; then
+            updated_any=1
             NGINX_OK=true
-        else
-            log_warn "Nginx: в $file нет секции http {}, директива не добавлена"
         fi
+    done
+    if [[ "$updated_any" -eq 0 ]]; then
+        NGINX_OK=false
     fi
-done
+fi
 
 if nginx -t >/tmp/nginx_test.log 2>&1; then
     CHANGE_STATUS["Nginx"]="UPDATED"
@@ -512,7 +568,9 @@ else
     NGINX_OK=false
     CHANGE_STATUS["Nginx"]="ERROR"
     log_error "nginx -t failed"
-    # Откат только Nginx-файлов
+    if [[ -s /tmp/nginx_test.log ]]; then
+        while IFS= read -r line; do log_error "$line"; done < /tmp/nginx_test.log
+    fi
     for original in "${!BACKUP_MAP[@]}"; do
         if [[ "$original" == *nginx* ]]; then
             cp -a "${BACKUP_MAP[$original]}" "$original"

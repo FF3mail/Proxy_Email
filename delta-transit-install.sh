@@ -572,23 +572,67 @@ write_db_config() {
     register_tmpfile "$tmp_file"
 
     python3 - "$PARAM_DB_PASS" "$tmp_file" <<'PY'
+import configparser
 import sys
 
 password = sys.argv[1]
-outfile  = sys.argv[2]
+outfile = sys.argv[2]
+
+cfg = configparser.ConfigParser()
+cfg["db"] = {
+    "db_host": "127.0.0.1",
+    "db_user": "mail_proxy",
+    "db_pass": password,
+    "db_name": "mail_proxy",
+    "db_port": "3306",
+}
 
 with open(outfile, "w", encoding="utf-8") as f:
-    f.write("[db]\n")
-    f.write("db_host = 127.0.0.1\n")
-    f.write("db_user = mail_proxy\n")
-    f.write(f"db_pass = \"{password}\"\n")
-    f.write("db_name = mail_proxy\n")
-    f.write("db_port = 3306\n")
+    cfg.write(f)
+
+# Round-trip: value read back must match exactly (covers #, =, whitespace).
+read_back = configparser.ConfigParser()
+read_back.read(outfile)
+if read_back.get("db", "db_pass") != password:
+    sys.exit("db.conf round-trip verification failed")
+
+# Regression probe for characters that break naive manual quoting.
+probe = configparser.ConfigParser()
+probe["db"] = {"db_pass": "p#ass=word with spaces"}
+probe_path = outfile + ".probe"
+with open(probe_path, "w", encoding="utf-8") as f:
+    probe.write(f)
+probe_read = configparser.ConfigParser()
+probe_read.read(probe_path)
+if probe_read.get("db", "db_pass") != "p#ass=word with spaces":
+    sys.exit("db.conf special-character round-trip failed")
 PY
 
     chmod 0640 "$tmp_file"
     chown root:"$GROUP_CRYPTO" "$tmp_file"
     mv "$tmp_file" "$DB_CONF"
+}
+
+read_db_pass_from_conf() {
+    python3 - "$DB_CONF" <<'PY'
+import configparser
+import sys
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+print(cfg.get("db", "db_pass"))
+PY
+}
+
+validate_db_connectivity() {
+    local db_pass
+    db_pass="$(read_db_pass_from_conf)"
+    mysql \
+        -u "${DB_USER}" \
+        -p"${db_pass}" \
+        "${DB_NAME}" \
+        -e "SELECT 1;" \
+        >/dev/null
 }
 
 generate_crypto_key() {
@@ -639,15 +683,6 @@ EOF
     chmod 0600 "$tmp"
     chown root:root "$tmp"
     mv "$tmp" "$SECRETS_FILE"
-}
-
-validate_db_connectivity() {
-    mysql \
-        -u "${DB_USER}" \
-        -p"${PARAM_DB_PASS}" \
-        "${DB_NAME}" \
-        -e "SELECT 1;" \
-        >/dev/null
 }
 
 validate_change_me() {
