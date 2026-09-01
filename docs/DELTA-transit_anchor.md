@@ -88,6 +88,9 @@ DELTA-transit/
 | Таблица | Назначение |
 |---------|------------|
 | `referents` | Референты: `local_inbox`, `local_outbox` |
+
+`referents.local_outbox` — абсолютный путь к корню Maildir на диске (не email-адрес);
+должен соответствовать ящику, уже созданному базовой почтовой системой (iRedMail или аналог).
 | `clients` | Клиентские email → `referent_id` |
 | `external_accounts` | Внешние ящики: IMAP/SMTP, OAuth2 |
 | `oauth_tokens` | Токены OAuth2, **UNIQUE(`account_id`)** |

@@ -351,12 +351,17 @@ function renderReferentForm(): void
         <div>
             <label class="block mb-1 font-medium">Local Outbox</label>
             <input
-                type="email"
+                type="text"
                 name="local_outbox"
                 required
                 class="w-full border rounded px-3 py-2"
+                placeholder="/var/vmail/vmail1/example.com/username/Maildir"
                 value="<?= h((string)$referent['local_outbox']) ?>"
             >
+            <p class="text-sm text-gray-600 mt-1">
+                Абсолютный путь к корню Maildir референта на базовой почтовой системе
+                (например iRedMail), не email-адрес.
+            </p>
         </div>
 
         <div>
@@ -422,6 +427,24 @@ function handleReferentSave(): void
 
     $clientEmail = trim((string)($_POST['client_email'] ?? ''));
     $clientActive = isset($_POST['client_active']) ? 1 : 0;
+
+    if ($localOutbox === '') {
+        setFlash('error', 'Local Outbox: путь не может быть пустым');
+        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+        exit();
+    }
+
+    if ($localOutbox[0] !== '/') {
+        setFlash('error', 'Local Outbox: укажите абсолютный путь (начинается с /)');
+        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+        exit();
+    }
+
+    if (str_contains($localOutbox, '..') || str_contains($localOutbox, "\0")) {
+        setFlash('error', 'Local Outbox: некорректный путь');
+        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+        exit();
+    }
 
     try {
         $pdo->beginTransaction();
