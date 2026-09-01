@@ -2129,14 +2129,7 @@ verify_process_running() {
 }
 
 verify_database_login() {
-    local db_pass
-    db_pass="$(read_db_pass_from_conf)"
-    mysql \
-        -u "${DB_USER}" \
-        -p"${db_pass}" \
-        "${DB_NAME}" \
-        -e "SELECT 1;" \
-        >/dev/null
+    validate_db_connectivity
 }
 
 # -----------------------------------------------------------------------------
@@ -2324,13 +2317,14 @@ audit_dbconf_permissions() {
 }
 
 audit_database_contents() {
-    local tables_out
+    local tables_out db_pass
     tables_out="$(mktemp)"
     register_tmpfile "$tables_out"
+    db_pass="$(read_db_pass_from_conf)"
     mysql \
-        -u "$DB_USER" \
-        -p"$PARAM_DB_PASS" \
-        "$DB_NAME" \
+        -u "${DB_USER}" \
+        -p"${db_pass}" \
+        "${DB_NAME}" \
         -e "SHOW TABLES;" \
         > "$tables_out"
     grep -q . "$tables_out" || fatal "Database schema appears empty"
