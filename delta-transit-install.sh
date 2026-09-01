@@ -1619,6 +1619,9 @@ check_nginx_server_name_conflict() {
             -e "server_name[[:space:]].*${NGINX_SERVER_NAME}" \
             2>/dev/null \
         | while IFS=: read -r file line rest; do
+            if [[ "$file" == *.bak_* ]]; then
+                continue
+            fi
             if [[ -n "$own_realpath" ]] \
                 && [[ "$(realpath "$file" 2>/dev/null || echo "")" == "$own_realpath" ]]
             then
@@ -2241,7 +2244,9 @@ validate_nginx_conflicts() {
             -e "server_name[[:space:]].*${NGINX_SERVER_NAME}" \
             2>/dev/null \
         | while IFS=: read -r file line rest; do
-            # Если файл не является нашим собственным (по realpath), выводим его
+            if [[ "$file" == *.bak_* ]]; then
+                continue
+            fi
             if [[ -n "$own_realpath" ]] && [[ "$(realpath "$file" 2>/dev/null || echo "")" != "$own_realpath" ]]; then
                 echo "$file:$line:$rest"
             fi
