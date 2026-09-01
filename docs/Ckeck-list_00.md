@@ -1,6 +1,6 @@
-# **Чек-лист развертывания DELTA-transit v3.3**
-
 # Чек-лист развертывания DELTA-transit v3.3 (Пилотная эксплуатация)
+
+> Синхронизирован с [DELTA-transit_anchor.md](DELTA-transit_anchor.md) v3.3.
 
 ## 1. Подготовка ОС
 
@@ -170,6 +170,13 @@ journalctl -u mail-proxy -n 100
 - [ ] Получение вложений работает
 - [ ] Кириллица в темах отображается корректно
 - [ ] UTF-8 адреса обрабатываются корректно
+- [ ] Недопустимый `auth_type` / `imap_encryption` / `smtp_encryption` в БД не открывает IMAP/SMTP-соединение (лог + пропуск аккаунта, FIX P7)
+
+Проверка FIX P7 (на staging, после вставки тестовой записи с недопустимым значением):
+
+```bash
+grep -E "Invalid (auth_type|imap_encryption|smtp_encryption)" /var/log/mail-proxy/mail-proxy-daemon.log | tail -5
+```
 
 ## 14. Очередь сообщений
 

@@ -1,8 +1,8 @@
-# DELTA-transit — Якорный документ v3.2
+# DELTA-transit — Якорный документ v3.3
 
 **Статус:** Production Candidate  
-**Дата:** 2026-06  
-**Синхронизирован с:** дистрибутивом v3.2 (после аудита и унификации структуры `includes/` + `web/`)
+**Дата:** 2026-09-01  
+**Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
 
 ---
 
@@ -44,7 +44,7 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 |-------|------------|
 | `Cryptor` | AES-256-GCM (+ чтение legacy AES-CBC), совместим с PHP |
 | `Database` | `MySQLConnectionPool`, `DB_POOL_SIZE=12` |
-| `MailHandler` | Бизнес-логика IMAP/SMTP |
+| `MailHandler` | Бизнес-логика IMAP/SMTP, `_validate_account_settings()` (FIX P7) |
 | `ProxyDaemon` | Lifecycle, watchdog, супервизор |
 
 ### Структура дистрибутива
@@ -52,7 +52,9 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 ```
 DELTA-transit/
 ├── docs/
-│   └── DELTA-transit_anchor.md      # этот документ
+│   ├── DELTA-transit_anchor.md      # этот документ
+│   ├── Ckeck-list_00.md             # чек-лист развёртывания
+│   └── prompts/                     # архивные промпты (не источник истины)
 ├── web/                             # деплой веб-панели (rsync → /var/www/mail-proxy)
 │   ├── index.php
 │   ├── config.php
@@ -62,8 +64,6 @@ DELTA-transit/
 │       ├── Cryptor.php
 │       ├── oauth2.php
 │       └── providers_ui.php
-├── includes/                        # зеркало web/includes/ для разработки
-├── index.php, config.php, monitor.php   # зеркало корня web/
 ├── mail-proxy-daemon.py
 ├── mail-proxy.service
 ├── mail-proxy-setup.sh              # быстрая установка демона (без полного инсталлятора)
@@ -88,13 +88,13 @@ DELTA-transit/
 | Таблица | Назначение |
 |---------|------------|
 | `referents` | Референты: `local_inbox`, `local_outbox` |
-
-`referents.local_outbox` — абсолютный путь к корню Maildir на диске (не email-адрес);
-должен соответствовать ящику, уже созданному базовой почтовой системой (iRedMail или аналог).
 | `clients` | Клиентские email → `referent_id` |
 | `external_accounts` | Внешние ящики: IMAP/SMTP, OAuth2 |
 | `oauth_tokens` | Токены OAuth2, **UNIQUE(`account_id`)** |
 | `oauth_providers` | Google, Yandex, Microsoft (идемпотентный seed) |
+
+> `referents.local_outbox` — абсолютный путь к корню Maildir на диске (не email-адрес);
+> должен соответствовать ящику, уже созданному базовой почтовой системой (iRedMail или аналог).
 
 ### `external_accounts` — важные поля
 
@@ -102,8 +102,8 @@ DELTA-transit/
 |------|------------|
 | `username` | Логин для plain IMAP/SMTP (fallback: `email`) |
 | `password_enc` | Единый зашифрованный пароль (AES-GCM / legacy CBC) |
-| `auth_type` | `plain` \| `oauth2` |
-| `imap_encryption` / `smtp_encryption` | `none` \| `ssl` \| `tls` |
+| `auth_type` | `plain` \| `oauth2` (`ENUM` в `schema.sql`) |
+| `imap_encryption` / `smtp_encryption` | `none` \| `ssl` \| `tls` (`ENUM` в `schema.sql`) |
 
 > Демон использует **`username` + `password_enc`**, не отдельные `imap_user`/`smtp_pass_enc`.
 
@@ -132,8 +132,12 @@ DELTA-transit/
 |-----------|----------|
 | `TEMP_DIR` | `/var/spool/mail-proxy/tmp` |
 | `IMAP_QUEUE_MAXSIZE` | 5000 |
+| `SMTP_QUEUE_MAXSIZE` | 1000 |
+| `IMAP_WORKER_COUNT` / `SMTP_WORKER_COUNT` | 20 / 20 |
 | `DB_POOL_SIZE` | 12 |
 | `REQUIRE_TLS` | `True` (STARTTLS обязателен для SMTP с `smtp_encryption=tls`) |
+| `VALID_AUTH_TYPES` | `('plain', 'oauth2')` — FIX P7 |
+| `VALID_ENCRYPTION_MODES` | `('none', 'ssl', 'tls')` — FIX P7 |
 | `LOG_FILE` | `/var/log/mail-proxy/mail-proxy-daemon.log` |
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
 
@@ -170,7 +174,7 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | ID | Проблема | Решение |
 |----|----------|---------|
 | FIX-3.2-1 | Демон запрашивал несуществующие колонки `imap_user`/`imap_pass_enc` | SQL → `username`, `password_enc`; хелперы `_plain_auth_login()` / `_plain_auth_password()` |
-| FIX-3.2-2 | Разрозненная структура (zip + flat web) | Единый дистрибутив: `web/` для инсталлятора, `includes/` для разработки |
+| FIX-3.2-2 | Разрозненная структура (zip + flat web) | Единый дистрибутив: `web/` для инсталлятора |
 | FIX-3.2-3 | `monitor.php` подключал `helpers.php` из корня | `require_once includes/helpers.php` |
 | FIX-3.2-4 | Навигация: `action=providers` не обрабатывался | Алиасы `providers` → `provider_list`, `referents`/`accounts` → dashboard |
 | FIX-3.2-5 | `mail-proxy.service` содержал git-артефакты `+` | Удалены из исходника; `mail-proxy-setup.sh` чистит через `sed` |
@@ -183,14 +187,25 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 
 | Этап | Статус |
 |------|--------|
-| `_deliver_to_local_smtp()` | **Закрыт** — потоковая передача из временного файла |
-| `imaplib.fetch(RFC822)` | **Открыт** — письмо целиком в RAM до записи в `TEMP_DIR` |
+| `_deliver_to_local_smtp()` / исходящая SMTP | **Закрыт** — потоковая передача из временного файла (чанки 64 КБ) |
+| `imaplib.fetch(num, '(RFC822)')` в `poll_external_imap()` | **Открыт** — полное письмо в RAM (`data[0][1]`) до записи в `TEMP_DIR` |
 
-Ограничение `imaplib` — штатными средствами потоковый fetch в файл недоступен.
+Ограничение `imaplib`: штатными средствами потоковый fetch в файл недоступен без замены протокольного слоя (см. комментарий в `poll_external_imap()`, ~строки 472–476).
 
-### P7 — открытый риск (без изменений)
+### P7 — закрыт (FIX P7)
 
-`auth_type`, `imap_encryption`, `smtp_encryption` из БД не валидируются whitelist'ом в демоне перед соединением.
+Whitelist `auth_type` и режимов шифрования реализован в `mail-proxy-daemon.py`:
+
+| Элемент | Значение в коде |
+|---------|-----------------|
+| `VALID_AUTH_TYPES` | `('plain', 'oauth2')` |
+| `VALID_ENCRYPTION_MODES` | `('none', 'ssl', 'tls')` |
+| Метод | `MailHandler._validate_account_settings(acc, encryption_field, protocol_label)` |
+| Вызов до IMAP | `poll_external_imap()` — строка ~417, до `imaplib` connect |
+| Вызов до SMTP | `send_via_external_smtp()` — строка ~653, до `smtplib` connect |
+| Невалидное значение | `logger.error(...)`, `return` / `return False` — аккаунт пропускается, **без подстановки умолчаний** |
+
+Константы синхронизированы с `ENUM` в `schema.sql` (`external_accounts.auth_type`, `imap_encryption`, `smtp_encryption`).
 
 ---
 
@@ -211,6 +226,7 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 - `getClientIp()` — доверие заголовкам только при `REMOTE_ADDR` = localhost
 - `www-data` не в группе `vmail`
 - `parse_ini_file($file, true)` для секции `[db]`
+- **FIX P7:** whitelist `auth_type` / `imap_encryption` / `smtp_encryption` через `_validate_account_settings()` перед каждым IMAP/SMTP-соединением
 
 ---
 
@@ -225,7 +241,7 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | systemd hardening | Реализовано |
 | SSRF OAuth endpoints | Реализовано (PHP + Python) |
 | CSRF веб-панели | Реализовано |
-| Whitelist auth_type/encryption | **Открыт (P7)** |
+| Whitelist auth_type/encryption | **Закрыт (P7 / FIX P7)** |
 
 ---
 
@@ -241,6 +257,7 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 - Давать `www-data` доступ к Maildir / группе `vmail`
 - Нарушать совместимость PHP `Cryptor` ↔ Python `Cryptor`
 - Доверять `X-Real-IP` без проверки `REMOTE_ADDR`
+- Удалять или обходить `_validate_account_settings()` (FIX P7)
 
 ---
 
@@ -251,10 +268,10 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | Лимиты 150 МБ (configure_limits v2.0) | Закрыт |
 | Инсталлятор v3.1.0 (FIX-1…FIX-8) | Закрыт |
 | Синхронизация демон ↔ schema.sql (FIX-3.2-1) | Закрыт v3.2 |
-| Структура `web/` + `includes/` (FIX-3.2-2) | Закрыт v3.2 |
+| Структура `web/` (FIX-3.2-2) | Закрыт v3.2 |
 | P4 — imaplib.fetch RAM | **Открыт** |
-| P7 — whitelist encryption | **Открыт** |
+| P7 — whitelist encryption | **Закрыт (FIX P7)** |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.2*
+*Конец документа · DELTA-transit Anchor v3.3*
