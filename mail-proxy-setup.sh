@@ -21,7 +21,10 @@ install -d -m 0750 -o root -g root /etc/mail-proxy
 # www-data не должен иметь доступ к Maildir и группе vmail.
 groupadd -f mail-proxy-logs
 usermod -aG mail-proxy-logs www-data
-install -d -m 0750 -o vmail -g mail-proxy-logs /var/log/mail-proxy
+install -d -m 0770 -o vmail -g mail-proxy-logs /var/log/mail-proxy
+touch /var/log/mail-proxy/web_admin.log
+chown vmail:mail-proxy-logs /var/log/mail-proxy/web_admin.log
+chmod 0660 /var/log/mail-proxy/web_admin.log
 echo "  [OK] www-data добавлен в группу mail-proxy-logs (доступ только к логам)"
 
 # Создание директории для временных файлов демона.

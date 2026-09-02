@@ -45,6 +45,7 @@ SECRETS_FILE="${CONFIG_DIR}/install-secrets.txt"
 SYSTEMD_UNIT="/etc/systemd/system/mail-proxy.service"
 LOG_DIR="/var/log/mail-proxy"
 DAEMON_LOG="${LOG_DIR}/mail-proxy-daemon.log"
+WEB_ADMIN_LOG="${LOG_DIR}/web_admin.log"
 WEB_ROOT="/var/www/mail-proxy"
 NGINX_INCLUDE_CONF="/etc/nginx/conf.d/mail-proxy.conf"
 # -----------------------------------------------------------------------------
@@ -436,7 +437,7 @@ ensure_vmail_user_exists() {
 create_base_directories() {
     install -d -m 0750 -o root  -g vmail         "$INSTALL_ROOT"
     install -d -m 0750 -o root  -g root          "$CONFIG_DIR"
-    install -d -m 0750 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
+    install -d -m 0770 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
     install -d -m 0700 -o vmail -g vmail         "$TEMP_DIR"
 }
 
@@ -762,7 +763,7 @@ secure_crypto_key() {
 }
 
 secure_log_directory() {
-    install -d -m 0750 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
+    install -d -m 0770 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
 }
 
 secure_temp_directory() {
@@ -787,6 +788,9 @@ ensure_log_file() {
     touch "$DAEMON_LOG"
     chown vmail:"$GROUP_LOGS" "$DAEMON_LOG"
     chmod 0640 "$DAEMON_LOG"
+    touch "$WEB_ADMIN_LOG"
+    chown vmail:"$GROUP_LOGS" "$WEB_ADMIN_LOG"
+    chmod 0660 "$WEB_ADMIN_LOG"
 }
 
 harden_maildir_permissions() {
