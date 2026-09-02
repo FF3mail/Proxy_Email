@@ -17,7 +17,7 @@ require_once __DIR__ . '/includes/providers_ui.php';
 
 use MailProxy\Cryptor;
 
-$action = $_GET['action'] ?? $_POST['action'] ?? 'dashboard';
+$action = $_POST['action'] ?? $_GET['action'] ?? 'dashboard';
 
 if ($action !== 'oauth_callback') {
     checkLocalNetworkAccess();
@@ -250,7 +250,7 @@ function renderDashboard(): void
 							   href="index.php?action=account_form&referent_id=<?= (int)$row['id'] ?><?= $row['ea_id'] ? '&account_id=' . (int)$row['ea_id'] : '' ?>">
 								<?= $row['ea_id'] ? 'Редактировать' : 'Создать аккаунт' ?>
 							</a>
-                            <form method="post" class="inline">
+                            <form method="post" action="index.php?action=toggle_active" class="inline">
                                 <input type="hidden" name="action" value="toggle_active">
                                 <input type="hidden" name="entity" value="referent">
                                 <input type="hidden" name="id" value="<?= (int)$row['id'] ?>">
@@ -321,7 +321,7 @@ function renderReferentForm(): void
         <?= !empty($referent['id']) ? 'Редактирование референта' : 'Новый референт' ?>
     </h2>
 
-    <form method="post" class="bg-white rounded shadow p-6 space-y-4">
+    <form method="post" action="index.php?action=referent_save" class="bg-white rounded shadow p-6 space-y-4">
         <input type="hidden" name="action" value="referent_save">
         <input type="hidden" name="id" value="<?= h((string)$referent['id']) ?>">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
@@ -621,7 +621,7 @@ function renderAccountForm(): void
         Внешний почтовый аккаунт
     </h2>
 
-    <form method="post" class="bg-white rounded shadow p-6 space-y-4">
+    <form method="post" action="index.php?action=account_save" class="bg-white rounded shadow p-6 space-y-4">
         <input type="hidden" name="action" value="account_save">
         <input type="hidden" name="referent_id" value="<?= $referentId ?>">
         <input type="hidden" name="account_id" value="<?= h((string)$account['id']) ?>">
