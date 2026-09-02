@@ -729,7 +729,9 @@ class MailHandler:
             logger.info(
                 f"Delivering incoming external mail to local SMTP: {local_rcpts}"
             )
-            mail_from = msg.get('From', 'forwarder@local-proxy')
+            # Envelope sender must be a listed local mailbox: iRedMail applies
+            # reject_unlisted_sender before permit_mynetworks on :25 injection.
+            mail_from = referent_data['local_inbox']
             smtp = smtplib.SMTP(
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
             )
@@ -1369,7 +1371,7 @@ class ProxyDaemon:
         # Шаг 4: Подбираем письма, оставшиеся с прошлого запуска
         for ref in referents:
             self._scan_existing_outgoing(ref)
-        if referents:
+        if referents and not self._observer_started:
             self._observer.start()
             self._observer_started = True
             logger.info("Watchdog file system observer started")
