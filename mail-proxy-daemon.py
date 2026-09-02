@@ -858,23 +858,43 @@ class MailHandler:
                 f"Connecting to external SMTP {acc['smtp_host']}:{acc['smtp_port']} "
                 f"for {acc['email']}"
             )
-            # Шаг 1: Соединение и STARTTLS
-            server = smtplib.SMTP(
-                acc['smtp_host'], int(acc['smtp_port']), timeout=SMTP_TIMEOUT
-            )
-            server.ehlo()
+            # Шаг 1: Соединение — implicit TLS (ssl), STARTTLS (tls), или plain (none)
             smtp_encryption = acc.get('smtp_encryption')
-            if REQUIRE_TLS and smtp_encryption == 'tls':
-                if not server.has_extn('STARTTLS'):
-                    logger.error(
-                        f"STARTTLS required but not offered by "
-                        f"{acc['smtp_host']}:{acc['smtp_port']} for {acc['email']}"
-                    )
-                    server.quit()
-                    return False
-            if server.has_extn('STARTTLS'):
-                server.starttls()
+            if smtp_encryption == 'ssl':
+                server = smtplib.SMTP_SSL(
+                    acc['smtp_host'],
+                    int(acc['smtp_port']),
+                    timeout=SMTP_TIMEOUT,
+                    context=ssl.create_default_context(),
+                )
                 server.ehlo()
+            elif smtp_encryption == 'tls':
+                server = smtplib.SMTP(
+                    acc['smtp_host'], int(acc['smtp_port']), timeout=SMTP_TIMEOUT
+                )
+                server.ehlo()
+                if REQUIRE_TLS:
+                    if not server.has_extn('STARTTLS'):
+                        logger.error(
+                            f"STARTTLS required but not offered by "
+                            f"{acc['smtp_host']}:{acc['smtp_port']} for {acc['email']}"
+                        )
+                        server.quit()
+                        return False
+                if server.has_extn('STARTTLS'):
+                    server.starttls()
+                    server.ehlo()
+            elif smtp_encryption == 'none':
+                server = smtplib.SMTP(
+                    acc['smtp_host'], int(acc['smtp_port']), timeout=SMTP_TIMEOUT
+                )
+                server.ehlo()
+            else:
+                logger.error(
+                    f"Unknown or missing smtp_encryption "
+                    f"({smtp_encryption!r}) for account {acc['email']}"
+                )
+                return False
             # Шаг 2: Аутентификация
             if acc['auth_type'] == 'oauth2':
                 token = self.get_oauth2_token(acc['id'])
