@@ -1612,10 +1612,13 @@ check_iredmail_hostname_conflict() {
 
 check_nginx_server_name_conflict() {
 
-    local conflicts
+    local conflicts=""
+    local scan_rc=0
     local own_realpath
     own_realpath="$(realpath "${NGINX_SITE_AVAILABLE}" 2>/dev/null || echo "")"
 
+    # Under set -o pipefail, grep exit 1 ("no matches") would abort the
+    # installer. Capture it: 0 = matches, 1 = none, >1 = real scan failure.
     conflicts="$(
         grep -Rnw \
             /etc/nginx/sites-available \
@@ -1633,7 +1636,11 @@ check_nginx_server_name_conflict() {
             fi
             echo "$file:$line:$rest"
           done
-    )"
+    )" || scan_rc=$?
+
+    if [[ "$scan_rc" -gt 1 ]]; then
+        fatal "Failed to scan nginx configs for server_name conflicts (exit ${scan_rc})"
+    fi
 
     if [[ -n "$conflicts" ]]
     then
@@ -1666,8 +1673,10 @@ detect_php_fpm_socket() {
     local www_conf
     www_conf="$(find /etc/php -name www.conf 2>/dev/null | head -n1)"
     if [[ -n "$www_conf" ]]; then
-        local listen_value
-        listen_value="$(grep -E '^listen\s*=' "$www_conf" | head -n1 | sed -E 's/^listen\s*=\s*//' | tr -d ' ')"
+        local listen_value=""
+        # Under set -o pipefail, grep exit 1 (no listen= line) would abort;
+        # empty listen_value is already handled below.
+        listen_value="$(grep -E '^listen\s*=' "$www_conf" | head -n1 | sed -E 's/^listen\s*=\s*//' | tr -d ' ')" || true
         if [[ -n "$listen_value" ]]; then
             if [[ "$listen_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]] || [[ "$listen_value" =~ ^[0-9]+$ ]]; then
                 # Это TCP-адрес или порт
@@ -2229,10 +2238,13 @@ validate_upload_limit() {
 
 validate_nginx_conflicts() {
 
-    local conflicts
+    local conflicts=""
+    local scan_rc=0
     local own_realpath
     own_realpath="$(realpath "${NGINX_SITE_AVAILABLE}" 2>/dev/null || echo "")"
 
+    # Under set -o pipefail, grep exit 1 ("no matches") would abort the
+    # installer. Capture it: 0 = matches, 1 = none, >1 = real scan failure.
     # Ищем все файлы с server_name, исключая наш собственный (по реальному пути)
     conflicts="$(
         grep -Rnw \
@@ -2248,7 +2260,11 @@ validate_nginx_conflicts() {
                 echo "$file:$line:$rest"
             fi
           done
-    )"
+    )" || scan_rc=$?
+
+    if [[ "$scan_rc" -gt 1 ]]; then
+        fatal "Failed to scan nginx configs for server_name conflicts (exit ${scan_rc})"
+    fi
 
     if [[ -n "$conflicts" ]]; then
         echo
