@@ -2236,10 +2236,13 @@ validate_upload_limit() {
 
 validate_nginx_conflicts() {
 
-    local conflicts
+    local conflicts=""
+    local scan_rc=0
     local own_realpath
     own_realpath="$(realpath "${NGINX_SITE_AVAILABLE}" 2>/dev/null || echo "")"
 
+    # Under set -o pipefail, grep exit 1 ("no matches") would abort the
+    # installer. Capture it: 0 = matches, 1 = none, >1 = real scan failure.
     # Ищем все файлы с server_name, исключая наш собственный (по реальному пути)
     conflicts="$(
         grep -Rnw \
@@ -2255,7 +2258,11 @@ validate_nginx_conflicts() {
                 echo "$file:$line:$rest"
             fi
           done
-    )"
+    )" || scan_rc=$?
+
+    if [[ "$scan_rc" -gt 1 ]]; then
+        fatal "Failed to scan nginx configs for server_name conflicts (exit ${scan_rc})"
+    fi
 
     if [[ -n "$conflicts" ]]; then
         echo
