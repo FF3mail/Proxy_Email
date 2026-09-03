@@ -13,11 +13,15 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/Cryptor.php';
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/panel_auth_ui.php';
 require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 
 use MailProxy\Cryptor;
+
+sanitizeLegacyPanelSession();
+bootstrapPanelAuth();
 
 $action = $_POST['action'] ?? $_GET['action'] ?? 'dashboard';
 

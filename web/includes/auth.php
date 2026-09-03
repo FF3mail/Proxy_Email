@@ -13,6 +13,38 @@ const PANEL_LOGIN_MAX_FAILURES = 5;
 const PANEL_LOGIN_WINDOW_SECONDS = 900; // 15 minutes
 
 /**
+ * Normalize or discard pre-PROMPT-24 / malformed session auth keys.
+ * Legacy sessions (csrf/oauth/flash only) remain valid for login flow.
+ */
+function sanitizeLegacyPanelSession(): void
+{
+    if (!array_key_exists('admin_id', $_SESSION)) {
+        unset($_SESSION['admin_role_display'], $_SESSION['admin_username_display']);
+        return;
+    }
+
+    $raw = $_SESSION['admin_id'];
+    if (is_int($raw)) {
+        if ($raw <= 0) {
+            clearPanelSession();
+            writeLog('Panel session sanitized: non-positive admin_id ip=' . getClientIp());
+        }
+        return;
+    }
+
+    if (is_string($raw) && ctype_digit($raw)) {
+        $id = (int)$raw;
+        if ($id > 0) {
+            $_SESSION['admin_id'] = $id;
+            return;
+        }
+    }
+
+    clearPanelSession();
+    writeLog('Panel session sanitized: invalid admin_id structure ip=' . getClientIp());
+}
+
+/**
  * Require any active panel operator (master or admin).
  * Re-queries active=1 so a deactivated account loses access on the next request.
  */
@@ -25,7 +57,7 @@ function requirePanelAdmin(): void
 
     $row = fetchPanelAdminById($adminId);
     if ($row === null || !(int)$row['active']) {
-        unset($_SESSION['admin_id'], $_SESSION['admin_role_display'], $_SESSION['admin_username_display']);
+        clearPanelSession();
         writeLog('Panel session rejected: admin_id=' . $adminId . ' inactive or missing ip=' . getClientIp());
         redirectToLogin();
     }
@@ -70,12 +102,18 @@ function fetchPanelAdminById(int $id): ?array
     if ($id <= 0) {
         return null;
     }
-    $stmt = getPdo()->prepare(
-        'SELECT id, username, password_hash, role, active FROM panel_admins WHERE id = ? LIMIT 1'
-    );
-    $stmt->execute([$id]);
-    $row = $stmt->fetch();
-    return $row === false ? null : $row;
+
+    try {
+        $stmt = getPdo()->prepare(
+            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE id = ? LIMIT 1'
+        );
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    } catch (PDOException) {
+        writeLog('Panel auth DB lookup failed for admin_id=' . $id . ' (panel_admins may be missing)');
+        return null;
+    }
 }
 
 /**
@@ -83,12 +121,17 @@ function fetchPanelAdminById(int $id): ?array
  */
 function fetchPanelAdminByUsername(string $username): ?array
 {
-    $stmt = getPdo()->prepare(
-        'SELECT id, username, password_hash, role, active FROM panel_admins WHERE username = ? LIMIT 1'
-    );
-    $stmt->execute([$username]);
-    $row = $stmt->fetch();
-    return $row === false ? null : $row;
+    try {
+        $stmt = getPdo()->prepare(
+            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE username = ? LIMIT 1'
+        );
+        $stmt->execute([$username]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    } catch (PDOException) {
+        writeLog("Panel auth DB lookup failed for username='{$username}' (panel_admins may be missing)");
+        return null;
+    }
 }
 
 function redirectToLogin(): void

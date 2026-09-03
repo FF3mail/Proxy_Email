@@ -94,6 +94,8 @@ ON DUPLICATE KEY UPDATE
 -- Application rule: UI may only INSERT role='admin'. Exactly one role='master'
 -- row is seeded by the installer. A second master via direct SQL is an
 -- accepted limitation (no DB trigger).
+-- Upgrade (PROMPT 25): CREATE IF NOT EXISTS is replayed by installer and
+-- web/includes/panel_migration.php; existing mail data is never dropped.
 CREATE TABLE IF NOT EXISTS panel_admins (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(100) NOT NULL,

@@ -8,6 +8,10 @@ session_start();
 // ============================================================
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/panel_migration.php';
+
+sanitizeLegacyPanelSession();
+bootstrapPanelAuth();
 
 // Проверяем доступ только из локальной сети (используем существующую функцию)
 checkLocalNetworkAccess();

@@ -6,6 +6,17 @@ declare(strict_types=1);
 function renderLoginForm(): void
 {
     global $flash;
+    $loginAllowed = panelAuthLoginAllowed();
+    $setupMessage = '';
+    if (!$loginAllowed) {
+        if (!panelAdminsTableExists()) {
+            $setupMessage = 'Таблица panel_admins отсутствует. Запустите установщик или дождитесь автоматической миграции схемы.';
+        } elseif (panelInactiveMasterExists()) {
+            $setupMessage = 'Учётная запись master деактивирована. Реактивируйте через SQL или установщик.';
+        } else {
+            $setupMessage = 'Учётная запись master не настроена. Запустите установщик на сервере (интерактивно).';
+        }
+    }
     ?>
 <!DOCTYPE html>
 <html lang="ru">
@@ -25,6 +36,11 @@ function renderLoginForm(): void
             <?= h((string)$flash['message']) ?>
         </div>
     <?php endif; ?>
+    <?php if (!$loginAllowed): ?>
+        <div class="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4 text-sm">
+            <?= h($setupMessage) ?>
+        </div>
+    <?php endif; ?>
     <form method="post" action="/index.php" class="space-y-4">
         <input type="hidden" name="action" value="login_submit">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
@@ -36,7 +52,7 @@ function renderLoginForm(): void
             <label class="block text-sm font-medium mb-1" for="password">Пароль</label>
             <input class="w-full border rounded px-3 py-2" type="password" id="password" name="password" required autocomplete="current-password">
         </div>
-        <button type="submit" class="w-full bg-slate-800 text-white rounded py-2">Войти</button>
+        <button type="submit" class="w-full bg-slate-800 text-white rounded py-2"<?= $loginAllowed ? '' : ' disabled' ?>>Войти</button>
     </form>
 </div>
 </body>
@@ -53,6 +69,12 @@ function handleLoginSubmit(): void
     $username = trim((string)($_POST['username'] ?? ''));
     $password = (string)($_POST['password'] ?? '');
     $ip = getClientIp();
+
+    if (!panelAuthLoginAllowed()) {
+        writeLog("Panel login rejected ip={$ip} reason=auth_not_ready");
+        setFlash('error', 'Вход временно недоступен. Настройте учётную запись master через установщик.');
+        redirectTo('login');
+    }
 
     if ($username === '' || $password === '') {
         writeLog("Panel login failed for user='{$username}' ip={$ip} reason=empty");

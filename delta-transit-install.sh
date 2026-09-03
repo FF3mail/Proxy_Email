@@ -409,14 +409,64 @@ panel_master_exists() {
     [[ "${count}" -gt 0 ]]
 }
 
+panel_active_master_exists() {
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${PARAM_DB_PASS}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;"
+    )"
+    [[ "${count}" -gt 0 ]]
+}
+
+installer_has_tty() {
+    [[ -t 0 ]]
+}
+
+# Idempotent panel-auth migration: schema + master seed (PROMPT 25 upgrade path).
+migrate_panel_auth() {
+    log_info "Panel auth migration (idempotent)"
+    ensure_panel_admins_table
+    seed_panel_master
+}
+
 # Seeds exactly one master via PHP password_hash(); never logs or stores plaintext.
 seed_panel_master() {
-    if panel_master_exists
+    if panel_active_master_exists
     then
-        log_warn "panel_admins master already present — skipping seed"
+        log_ok "Active panel master present — skipping seed"
         PANEL_MASTER_USERNAME=""
         PANEL_MASTER_PASSWORD=""
         return 0
+    fi
+
+    if panel_master_exists
+    then
+        fatal "Panel master exists but active=0. Remediation: UPDATE panel_admins SET active=1 WHERE role='master' LIMIT 1; then re-run installer."
+    fi
+
+    if ! installer_has_tty
+    then
+        cat >&2 <<'EOF'
+[ERROR] No active panel master and no interactive TTY available.
+
+Non-interactive upgrade cannot auto-generate operator credentials.
+
+Remediation (choose one):
+  1. Run from a console session:
+       sudo ./delta-transit-install.sh
+     Complete the Database phase prompts for master username/password.
+
+  2. Seed master manually (hash only, never store plaintext in files):
+       HASH=$(php -r 'echo password_hash("YOUR_PASSWORD", PASSWORD_DEFAULT);')
+       mysql -u mail_proxy -p mail_proxy -e \
+         "INSERT INTO panel_admins (username, password_hash, role, active) VALUES ('YOUR_USER', '$HASH', 'master', 1);"
+
+Then re-run validation or reload the panel login page.
+EOF
+        exit 1
     fi
 
     ask_panel_master_credentials
@@ -449,6 +499,25 @@ seed_panel_master() {
 
     PANEL_MASTER_USERNAME=""
     log_ok "Panel master account seeded"
+}
+
+validate_panel_auth() {
+    log_info "Validating panel authentication (upgrade safety)"
+    ensure_panel_admins_table
+
+    if panel_active_master_exists
+    then
+        log_ok "Panel auth: active master present"
+        return 0
+    fi
+
+    if panel_master_exists
+    then
+        log_warn "Panel auth: master exists but inactive — panel login disabled until reactivated"
+        return 0
+    fi
+
+    log_warn "Panel auth: no master account — panel login disabled; run installer interactively to seed"
 }
 
 # =============================================================================
@@ -828,8 +897,7 @@ phase_database() {
     create_database_user
     import_schema
     write_db_config
-    ensure_panel_admins_table
-    seed_panel_master
+    migrate_panel_auth
     generate_crypto_key
     write_install_secrets
     validate_db_connectivity
@@ -1197,6 +1265,9 @@ WEB_FILES=(
     monitor.php
     includes/helpers.php
     includes/Cryptor.php
+    includes/auth.php
+    includes/panel_migration.php
+    includes/panel_auth_ui.php
     includes/oauth2.php
     includes/providers_ui.php
 )
@@ -2426,6 +2497,7 @@ phase_validation() {
     verify_process_running
     verify_log_exists
     verify_database_login
+    validate_panel_auth
     verify_no_change_me
     verify_no_placeholder_url
     verify_runtime_log
