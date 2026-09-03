@@ -81,6 +81,7 @@ APT_PACKAGES=(
     logrotate
     openssl
     curl
+    php-cli
     php-fpm
 )
 
@@ -324,6 +325,130 @@ ask_mysql_root_password() {
     read -rsp "MariaDB root password: " MYSQL_ROOT_PASSWORD
     echo
     mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null
+}
+
+# Panel master account (PROMPT 24). Username + password are interactive only;
+# plaintext is never written to install-secrets.txt or any other file.
+ask_panel_master_credentials() {
+    local pass1 pass2
+    while true
+    do
+        read -rp "Panel master username: " PANEL_MASTER_USERNAME
+        PANEL_MASTER_USERNAME="${PANEL_MASTER_USERNAME#"${PANEL_MASTER_USERNAME%%[![:space:]]*}"}"
+        PANEL_MASTER_USERNAME="${PANEL_MASTER_USERNAME%"${PANEL_MASTER_USERNAME##*[![:space:]]}"}"
+        if [[ -z "${PANEL_MASTER_USERNAME}" ]]
+        then
+            echo "Username must not be empty." >&2
+            continue
+        fi
+        if (( ${#PANEL_MASTER_USERNAME} > 100 ))
+        then
+            echo "Username must be at most 100 characters." >&2
+            continue
+        fi
+        break
+    done
+
+    while true
+    do
+        read -rsp "Panel master password: " pass1
+        echo
+        read -rsp "Confirm panel master password: " pass2
+        echo
+        if [[ -z "${pass1}" ]]
+        then
+            echo "Password must not be empty." >&2
+            continue
+        fi
+        if (( ${#pass1} < 8 ))
+        then
+            echo "Password must be at least 8 characters." >&2
+            continue
+        fi
+        if [[ "${pass1}" != "${pass2}" ]]
+        then
+            echo "Passwords do not match." >&2
+            continue
+        fi
+        PANEL_MASTER_PASSWORD="${pass1}"
+        pass1=""
+        pass2=""
+        break
+    done
+}
+
+ensure_panel_admins_table() {
+    log_info "Ensuring panel_admins table exists"
+    mysql \
+        -u "${DB_USER}" \
+        -p"${PARAM_DB_PASS}" \
+        "${DB_NAME}" \
+        <<'SQL'
+CREATE TABLE IF NOT EXISTS panel_admins (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('master','admin') NOT NULL DEFAULT 'admin',
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_panel_admins_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL
+}
+
+panel_master_exists() {
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${PARAM_DB_PASS}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master';"
+    )"
+    [[ "${count}" -gt 0 ]]
+}
+
+# Seeds exactly one master via PHP password_hash(); never logs or stores plaintext.
+seed_panel_master() {
+    if panel_master_exists
+    then
+        log_warn "panel_admins master already present — skipping seed"
+        PANEL_MASTER_USERNAME=""
+        PANEL_MASTER_PASSWORD=""
+        return 0
+    fi
+
+    ask_panel_master_credentials
+    require_command php
+
+    log_info "Seeding panel master account (hash only)"
+    local hash user_sql hash_sql
+    hash="$(
+        PANEL_MASTER_PASSWORD="${PANEL_MASTER_PASSWORD}" php -r \
+            'echo password_hash(getenv("PANEL_MASTER_PASSWORD"), PASSWORD_DEFAULT);'
+    )"
+    unset PANEL_MASTER_PASSWORD
+    PANEL_MASTER_PASSWORD=""
+
+    if [[ -z "${hash}" ]]
+    then
+        fatal "password_hash produced empty output"
+    fi
+
+    user_sql="$(escape_sql_string "${PANEL_MASTER_USERNAME}")"
+    hash_sql="$(escape_sql_string "${hash}")"
+    hash=""
+
+    mysql \
+        -u "${DB_USER}" \
+        -p"${PARAM_DB_PASS}" \
+        "${DB_NAME}" \
+        -e "INSERT INTO panel_admins (username, password_hash, role, active)
+            VALUES ('${user_sql}', '${hash_sql}', 'master', 1);"
+
+    PANEL_MASTER_USERNAME=""
+    log_ok "Panel master account seeded"
 }
 
 # =============================================================================
@@ -703,6 +828,8 @@ phase_database() {
     create_database_user
     import_schema
     write_db_config
+    ensure_panel_admins_table
+    seed_panel_master
     generate_crypto_key
     write_install_secrets
     validate_db_connectivity

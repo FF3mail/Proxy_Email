@@ -89,3 +89,18 @@ ON DUPLICATE KEY UPDATE
     extra_params_json = VALUES(extra_params_json),
     active = VALUES(active),
     updated_at = CURRENT_TIMESTAMP;
+
+-- 6. Panel operators (web UI login; separate from mail referents/clients)
+-- Application rule: UI may only INSERT role='admin'. Exactly one role='master'
+-- row is seeded by the installer. A second master via direct SQL is an
+-- accepted limitation (no DB trigger).
+CREATE TABLE IF NOT EXISTS panel_admins (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('master','admin') NOT NULL DEFAULT 'admin',
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_panel_admins_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

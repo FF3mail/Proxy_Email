@@ -12,6 +12,8 @@ if (empty($_SESSION['csrf_token'])) {
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/Cryptor.php';
 require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/panel_auth_ui.php';
 require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 
@@ -23,14 +25,22 @@ if ($action !== 'oauth_callback') {
     checkLocalNetworkAccess();
 }
 
+// Pre-auth actions: reachable without admin session, still behind IP allow-list
+// (except oauth_callback, which skips the IP check but still requires admin_id below).
+$preAuthActions = ['login', 'login_submit'];
+
 // CSRF-защита для всех POST-действий (кроме OAuth callback — GET-запрос)
 $postActionsRequiringCsrf = [
+    'login_submit',
+    'logout',
     'referent_save',
     'account_save',
     'toggle_active',
     'provider_save',
     'provider_toggle',
     'oauth_initiate',
+    'operator_create',
+    'operator_deactivate',
 ];
 
 if (
@@ -38,6 +48,15 @@ if (
     && in_array($action, $postActionsRequiringCsrf, true)
 ) {
     requireValidCsrfToken();
+}
+
+if (!in_array($action, $preAuthActions, true)) {
+    // Includes oauth_callback: requires active $_SESSION['admin_id'] (any role).
+    requirePanelAdmin();
+}
+
+if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate'], true)) {
+    requireMasterAdmin();
 }
 
 $flash = $_SESSION['flash'] ?? null;
@@ -59,7 +78,7 @@ function setFlash(string $type, string $message): void
 
 function renderHeader(string $title): void
 {
-    global $flash;
+    global $flash, $action;
 
     ?>
 <!DOCTYPE html>
@@ -76,6 +95,9 @@ function renderHeader(string $title): void
     <aside class="w-64 bg-slate-800 text-white">
         <div class="p-6 border-b border-slate-700">
             <h1 class="text-xl font-bold">DELTA-транзит</h1>
+            <?php if (!empty($_SESSION['admin_username_display'])): ?>
+                <p class="text-xs text-slate-300 mt-2"><?= h((string)$_SESSION['admin_username_display']) ?></p>
+            <?php endif; ?>
         </div>
 
         <nav class="p-4 space-y-2">
@@ -90,6 +112,17 @@ function renderHeader(string $title): void
                <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active"' : '' ?>>
                Мониторинг
             </a>
+            <?php if (isPanelMasterDisplay()): ?>
+            <a href="/index.php?action=operator_list"
+               <?= in_array($action ?? '', ['operator_list'], true) ? 'class="active"' : '' ?>>
+               Операторы
+            </a>
+            <?php endif; ?>
+            <form method="post" action="/index.php" class="pt-4">
+                <input type="hidden" name="action" value="logout">
+                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+                <button type="submit" class="text-left text-slate-300 hover:text-white text-sm">Выход</button>
+            </form>
         </nav>
     </aside>
 
@@ -115,6 +148,30 @@ function renderFooter(): void
 }
 
 switch ($action) {
+    case 'login':
+        renderLoginForm();
+        break;
+
+    case 'login_submit':
+        handleLoginSubmit();
+        break;
+
+    case 'logout':
+        handleLogout();
+        break;
+
+    case 'operator_list':
+        renderOperatorList();
+        break;
+
+    case 'operator_create':
+        handleOperatorCreate();
+        break;
+
+    case 'operator_deactivate':
+        handleOperatorDeactivate();
+        break;
+
     case 'dashboard':
         renderDashboard();
         break;
