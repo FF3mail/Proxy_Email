@@ -161,3 +161,18 @@ See §1 DDL (`panel_admins`) — not applied.
 ## Go / no-go to PROMPT 24
 
 **GO to implement** once open questions **1** and **3** are answered (defaults above are safe if approved as-is).
+
+---
+
+## Addendum — resolved open questions (2026-09-03)
+
+Human review of this design (commit `45d73ea` on `prompt-23-panel-auth-design`) resolved the open questions as follows. These **replace** the “single shared admin” default proposed in §C item 1; everything else in the original sections above still stands unless superseded here.
+
+- **Multiple operators, not a single shared admin:** the panel will be used by several distinct people on an ongoing basis; each needs their own login for per-operator traceability in `writeLog()`.
+- **Role model:** `panel_admins` gets an additional column `role ENUM('master','admin') NOT NULL DEFAULT 'admin'`.
+- **Exactly one master account ever exists,** seeded only by the installer at first run (same interactive pattern as `ask_mysql_root_password()` — prompt for master username **and** password, confirm, store only the hash, never write plaintext to `install-secrets.txt` or anywhere else).
+- **The web UI must NEVER be able to create or promote an account to `role='master'`** — any operator created through the panel is always `role='admin'`. This is an application-level rule (there is no DB constraint preventing a second master via direct SQL — document this in code comments as an accepted limitation; do not attempt to enforce it with a trigger).
+- **Master-only feature “Manage operators”:** list existing `panel_admins` (username, role, active, created_at); form to add a new operator (username + password, entered directly by the master, no email/invite flow); action to deactivate (`active=0`) an existing non-master operator. No delete. No role change via UI.
+- **Visibility:** management UI visible/reachable **only** when the currently logged-in session’s admin is `role='master'`. A regular admin hitting the action URL directly must be rejected — and this check must **re-query** `panel_admins.role` (and `active`) from the database at request time, not rely solely on a cached role value in `$_SESSION`, so that a master who gets deactivated mid-session loses the privilege immediately on the next request.
+- **`oauth_callback` still requires an active `$_SESSION['admin_id']`** regardless of role (master or admin) — unchanged from the earlier design.
+- **Username policy:** free-form `VARCHAR(100)`, unique, not tied to email or any external identity — the master chooses it when creating an operator; the installer prompts for the master’s own username the same way.
