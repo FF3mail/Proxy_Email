@@ -1673,8 +1673,10 @@ detect_php_fpm_socket() {
     local www_conf
     www_conf="$(find /etc/php -name www.conf 2>/dev/null | head -n1)"
     if [[ -n "$www_conf" ]]; then
-        local listen_value
-        listen_value="$(grep -E '^listen\s*=' "$www_conf" | head -n1 | sed -E 's/^listen\s*=\s*//' | tr -d ' ')"
+        local listen_value=""
+        # Under set -o pipefail, grep exit 1 (no listen= line) would abort;
+        # empty listen_value is already handled below.
+        listen_value="$(grep -E '^listen\s*=' "$www_conf" | head -n1 | sed -E 's/^listen\s*=\s*//' | tr -d ' ')" || true
         if [[ -n "$listen_value" ]]; then
             if [[ "$listen_value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]] || [[ "$listen_value" =~ ^[0-9]+$ ]]; then
                 # Это TCP-адрес или порт
