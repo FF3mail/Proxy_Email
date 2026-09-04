@@ -1,7 +1,16 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+// IP allow-list before session_start() so a 403 never emits Set-Cookie (PROMPT-29).
+require_once __DIR__ . '/includes/helpers.php';
+
+$action = $_POST['action'] ?? $_GET['action'] ?? 'dashboard';
+
+if ($action !== 'oauth_callback') {
+    checkLocalNetworkAccess();
+}
+
+startPanelSession();
 
 // CSRF-токен — генерируется один раз за сессию
 if (empty($_SESSION['csrf_token'])) {
@@ -11,7 +20,6 @@ if (empty($_SESSION['csrf_token'])) {
 // Подключение централизованного файла конфигурации общих констант
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/includes/Cryptor.php';
-require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/panel_auth_ui.php';
@@ -22,12 +30,6 @@ use MailProxy\Cryptor;
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
-
-$action = $_POST['action'] ?? $_GET['action'] ?? 'dashboard';
-
-if ($action !== 'oauth_callback') {
-    checkLocalNetworkAccess();
-}
 
 // Pre-auth actions: reachable without admin session, still behind IP allow-list
 // (except oauth_callback, which skips the IP check but still requires admin_id below).

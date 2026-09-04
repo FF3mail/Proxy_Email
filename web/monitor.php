@@ -1,20 +1,21 @@
 <?php
 declare(strict_types=1);
 
-session_start();
+// IP allow-list before session_start() so a 403 never emits Set-Cookie (PROMPT-29).
+require_once __DIR__ . '/includes/helpers.php';
+checkLocalNetworkAccess();
+
+startPanelSession();
 
 // ============================================================
 // Подключение общих зависимостей панели управления
 // ============================================================
-require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
 
-// Проверяем доступ только из локальной сети (используем существующую функцию)
-checkLocalNetworkAccess();
 requirePanelAdmin();
 
 // ============================================================
