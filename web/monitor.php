@@ -31,9 +31,9 @@ const MONITOR_EVENTS_PER_SECTION = 30;
 const LOG_DIR = '/var/log/mail-proxy';
 
 // Путь к pid-файлу демона для определения его статуса
-const DAEMON_PID_FILE = '/var/run/mail-proxy/mail-proxy.pid';
+const DAEMON_PID_FILE = '/run/mail-proxy/mail-proxy.pid';
 
-// Имя systemd-юнита для проверки через systemctl
+// Имя systemd-юнита (документация; статус читается через pid-файл + /proc, без shell)
 const DAEMON_SERVICE_NAME = 'mail-proxy';
 
 // ============================================================
@@ -221,53 +221,144 @@ function loadLogEvents(
 // ============================================================
 
 /**
- * Проверяет состояние демона через systemctl is-active.
- * Возвращает массив с полем status (active|inactive|failed|unknown)
- * и uptime если демон активен.
+ * Read PID from daemon pid file (no shell). Returns null if unavailable.
+ */
+function readDaemonPidFile(string $pidFile): ?int
+{
+    if (!is_readable($pidFile)) {
+        return null;
+    }
+
+    $raw = @file_get_contents($pidFile);
+    if ($raw === false) {
+        return null;
+    }
+
+    $pid = (int)trim($raw);
+    return $pid > 1 ? $pid : null;
+}
+
+/**
+ * True if /proc/$pid exists (process table entry). Avoids shell_exec/posix_kill
+ * which are commonly listed in PHP-FPM disable_functions on iRedMail hosts.
+ */
+function isProcPidAlive(int $pid): bool
+{
+    if ($pid <= 1) {
+        return false;
+    }
+
+    return @is_dir('/proc/' . $pid);
+}
+
+/**
+ * Best-effort check that a PID is the mail-proxy daemon (cmdline or exe).
+ * Returns true if evidence matches, false if evidence contradicts, null if unknown.
+ */
+function procLooksLikeMailProxy(int $pid): ?bool
+{
+    $cmdlinePath = '/proc/' . $pid . '/cmdline';
+    if (is_readable($cmdlinePath)) {
+        $cmdline = @file_get_contents($cmdlinePath);
+        if ($cmdline === false || $cmdline === '') {
+            return null;
+        }
+        $flat = str_replace("\0", ' ', $cmdline);
+        if (stripos($flat, 'mail-proxy-daemon') !== false) {
+            return true;
+        }
+        // Readable cmdline that does not mention the daemon → not ours
+        return false;
+    }
+
+    $exe = @readlink('/proc/' . $pid . '/exe');
+    if (is_string($exe) && $exe !== '') {
+        if (stripos($exe, 'python') !== false) {
+            return null; // inconclusive without cmdline
+        }
+        return false;
+    }
+
+    return null;
+}
+
+/**
+ * Uptime seconds from /proc/$pid (starttime via stat, else ctime of /proc entry).
+ */
+function procUptimeSeconds(int $pid): ?int
+{
+    $statPath = '/proc/' . $pid . '/stat';
+    if (is_readable($statPath)) {
+        $stat = @file_get_contents($statPath);
+        if (is_string($stat) && $stat !== '') {
+            // comm may contain spaces/parens; starttime is field 22 after ") "
+            $rparen = strrpos($stat, ')');
+            if ($rparen !== false) {
+                $rest = trim(substr($stat, $rparen + 1));
+                $fields = preg_split('/\s+/', $rest) ?: [];
+                // After ')': state(1) ... starttime is index 19 (field 22 overall)
+                if (isset($fields[19]) && ctype_digit((string)$fields[19])) {
+                    $startTicks = (int)$fields[19];
+                    $hz = 100;
+                    $uptimeFile = @file_get_contents('/proc/uptime');
+                    if (is_string($uptimeFile)) {
+                        $parts = explode(' ', trim($uptimeFile), 2);
+                        $systemUptime = (float)($parts[0] ?? 0);
+                        if ($systemUptime > 0) {
+                            $startSeconds = $startTicks / $hz;
+                            return (int)max(0, (int)floor($systemUptime - $startSeconds));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    $ctime = @filectime('/proc/' . $pid);
+    if ($ctime !== false && $ctime > 0) {
+        return max(0, time() - $ctime);
+    }
+
+    return null;
+}
+
+/**
+ * Daemon status without shell_exec/system/exec/passthru/proc_open.
+ * Uses pid file + /proc; missing sources yield status=unknown (never HTTP 500).
  *
  * @return array{status: string, uptime: string, pid: int|null}
  */
 function getDaemonStatus(): array
 {
-    // Получаем статус через systemctl
-    $statusOutput = shell_exec(
-        'systemctl is-active ' . escapeshellarg(DAEMON_SERVICE_NAME) . ' 2>/dev/null'
-    );
-    $status = trim((string)($statusOutput ?? ''));
-
-    // Допустимые значения: active, inactive, failed, activating, deactivating
-    if (!in_array($status, ['active', 'inactive', 'failed', 'activating'], true)) {
-        $status = 'unknown';
-    }
-
+    $status = 'unknown';
     $uptime = '';
-    $pid    = null;
+    $pid = null;
 
-    if ($status === 'active') {
-        // Получаем время запуска через systemctl show
-        $activeEnter = shell_exec(
-            'systemctl show ' . escapeshellarg(DAEMON_SERVICE_NAME)
-            . ' --property=ActiveEnterTimestamp --value 2>/dev/null'
-        );
-        $activeEnter = trim((string)($activeEnter ?? ''));
+    try {
+        $filePid = readDaemonPidFile(DAEMON_PID_FILE);
 
-        if ($activeEnter !== '' && $activeEnter !== 'n/a') {
-            $startTime = strtotime($activeEnter);
-            if ($startTime !== false) {
-                $seconds = time() - $startTime;
-                $uptime  = formatUptime($seconds);
+        if ($filePid !== null && isProcPidAlive($filePid)) {
+            $looks = procLooksLikeMailProxy($filePid);
+            if ($looks === false) {
+                // Stale pid file pointing at unrelated process
+                $status = 'inactive';
+            } else {
+                $status = 'active';
+                $pid = $filePid;
+                $seconds = procUptimeSeconds($filePid);
+                if ($seconds !== null) {
+                    $uptime = formatUptime($seconds);
+                }
             }
+        } elseif (is_readable(DAEMON_PID_FILE)) {
+            // Pid file present but process gone
+            $status = 'inactive';
         }
-
-        // Получаем PID главного процесса
-        $pidOutput = shell_exec(
-            'systemctl show ' . escapeshellarg(DAEMON_SERVICE_NAME)
-            . ' --property=MainPID --value 2>/dev/null'
-        );
-        $pidVal = (int)trim((string)($pidOutput ?? ''));
-        if ($pidVal > 0) {
-            $pid = $pidVal;
-        }
+        // else: no pid file → unknown (daemon pre-PROMPT-26 or RuntimeDirectory missing)
+    } catch (Throwable) {
+        $status = 'unknown';
+        $uptime = '';
+        $pid = null;
     }
 
     return ['status' => $status, 'uptime' => $uptime, 'pid' => $pid];

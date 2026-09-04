@@ -115,6 +115,8 @@ MYSQL_ROOT_PASSWORD=""
 PARAM_DB_PASS=""
 PARAM_APP_URL=""
 PARAM_PIP_MIRROR=""
+PANEL_MASTER_USERNAME=""
+PANEL_MASTER_PASSWORD=""
 
 # -----------------------------------------------------------------------------
 # Цвета
@@ -425,6 +427,73 @@ installer_has_tty() {
     [[ -t 0 ]]
 }
 
+abort_panel_master_no_tty() {
+    cat >&2 <<'EOF'
+[ERROR] No active panel master and no interactive TTY available.
+
+Non-interactive install/upgrade cannot auto-generate operator credentials.
+Aborting in preflight before schema or credential changes.
+
+Remediation (choose one):
+  1. Run from a console session (or wrap with a pseudo-TTY):
+       sudo ./delta-transit-install.sh
+       # or:  script -q -c './delta-transit-install.sh' /tmp/install.log
+     Complete the prompts for master username/password.
+
+  2. If the database already exists, seed master manually (hash only):
+       HASH=$(php -r 'echo password_hash("YOUR_PASSWORD", PASSWORD_DEFAULT);')
+       mysql -u mail_proxy -p mail_proxy -e \
+         "INSERT INTO panel_admins (username, password_hash, role, active) VALUES ('YOUR_USER', '$HASH', 'master', 1);"
+
+Then re-run the installer.
+EOF
+    exit 1
+}
+
+# Best-effort: true if db.conf exists and an active master row is present.
+try_detect_active_panel_master() {
+    local db_pass="${PARAM_DB_PASS:-}"
+    if [[ -z "${db_pass}" && -f "${DB_CONF}" ]]
+    then
+        db_pass="$(read_db_pass_from_conf 2>/dev/null || true)"
+    fi
+    [[ -n "${db_pass}" ]] || return 1
+
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${db_pass}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;" \
+            2>/dev/null || true
+    )"
+    [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${count}" -gt 0 ]]
+}
+
+# PROMPT-26: fail before Database phase when master cannot be seeded.
+preflight_panel_master_readiness() {
+    log_info "Checking panel master bootstrap path (before schema/credential changes)"
+
+    if try_detect_active_panel_master
+    then
+        log_ok "Active panel master already present — interactive master seed not required"
+        return 0
+    fi
+
+    if ! installer_has_tty
+    then
+        abort_panel_master_no_tty
+    fi
+
+    if [[ -z "${PANEL_MASTER_USERNAME:-}" || -z "${PANEL_MASTER_PASSWORD:-}" ]]
+    then
+        ask_panel_master_credentials
+    fi
+    log_ok "Panel master credentials collected for Database phase seed"
+}
+
 # Idempotent panel-auth migration: schema + master seed (PROMPT 25 upgrade path).
 migrate_panel_auth() {
     log_info "Panel auth migration (idempotent)"
@@ -447,29 +516,17 @@ seed_panel_master() {
         fatal "Panel master exists but active=0. Remediation: UPDATE panel_admins SET active=1 WHERE role='master' LIMIT 1; then re-run installer."
     fi
 
-    if ! installer_has_tty
+    if [[ -z "${PANEL_MASTER_USERNAME:-}" || -z "${PANEL_MASTER_PASSWORD:-}" ]]
     then
-        cat >&2 <<'EOF'
-[ERROR] No active panel master and no interactive TTY available.
-
-Non-interactive upgrade cannot auto-generate operator credentials.
-
-Remediation (choose one):
-  1. Run from a console session:
-       sudo ./delta-transit-install.sh
-     Complete the Database phase prompts for master username/password.
-
-  2. Seed master manually (hash only, never store plaintext in files):
-       HASH=$(php -r 'echo password_hash("YOUR_PASSWORD", PASSWORD_DEFAULT);')
-       mysql -u mail_proxy -p mail_proxy -e \
-         "INSERT INTO panel_admins (username, password_hash, role, active) VALUES ('YOUR_USER', '$HASH', 'master', 1);"
-
-Then re-run validation or reload the panel login page.
-EOF
-        exit 1
+        if installer_has_tty
+        then
+            ask_panel_master_credentials
+        else
+            # Should have been caught in preflight; keep as hard safety net.
+            abort_panel_master_no_tty
+        fi
     fi
 
-    ask_panel_master_credentials
     require_command php
 
     log_info "Seeding panel master account (hash only)"
@@ -539,6 +596,7 @@ phase_preflight() {
     ask_public_url
     ask_mysql_root_password
     ask_pip_mirror
+    preflight_panel_master_readiness
 
     command -v systemd-analyze >/dev/null 2>&1 \
         || log_warn "systemd-analyze not available"

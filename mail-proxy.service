@@ -8,6 +8,9 @@ Requires=mariadb.service
 Type=simple
 User=vmail
 Group=vmail
+# Panel monitor.php reads this pid file under PHP-FPM (no shell_exec).
+RuntimeDirectory=mail-proxy
+RuntimeDirectoryMode=0755
 ExecStart=/usr/bin/python3 /usr/local/bin/mail-proxy-daemon.py
 ExecStartPre=/bin/bash -c 'touch /var/log/mail-proxy/mail-proxy-daemon.log && chmod 0640 /var/log/mail-proxy/mail-proxy-daemon.log && chown vmail:mail-proxy-logs /var/log/mail-proxy/mail-proxy-daemon.log'
 Restart=on-failure

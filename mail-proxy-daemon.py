@@ -34,6 +34,8 @@ from watchdog.events import FileSystemEventHandler
 CRYPTO_KEY_FILE = '/etc/mail-proxy/crypto.key'
 DB_CONF_FILE = '/etc/mail-proxy/db.conf'
 LOG_FILE = '/var/log/mail-proxy/mail-proxy-daemon.log'
+# Written for panel monitor.php (PHP-FPM cannot call systemctl/shell_exec).
+PID_FILE = '/run/mail-proxy/mail-proxy.pid'
 MAILDIR_BASE = '/var/vmail/vmail1'
 LOCAL_SMTP_HOST = '127.0.0.1'
 LOCAL_SMTP_PORT = 25
@@ -1698,12 +1700,43 @@ class ProxyDaemon:
         self._imap_pool.join(timeout=30)
         self._smtp_pool.join(timeout=30)
         logger.info("ProxyDaemon shutdown complete")
+def write_pid_file(path: str = PID_FILE) -> None:
+    """Best-effort PID file for panel monitor (no shell). Failures are logged only."""
+    try:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, mode=0o755, exist_ok=True)
+        with open(path, 'w', encoding='ascii') as fh:
+            fh.write(str(os.getpid()) + '\n')
+        try:
+            os.chmod(path, 0o644)
+        except OSError:
+            pass
+        logger.info(f"Wrote pid file {path}")
+    except OSError as e:
+        logger.warning(f"Could not write pid file {path}: {e}")
+
+
+def remove_pid_file(path: str = PID_FILE) -> None:
+    """Remove PID file if it belongs to this process."""
+    try:
+        if not os.path.isfile(path):
+            return
+        with open(path, 'r', encoding='ascii') as fh:
+            raw = fh.read().strip()
+        if raw.isdigit() and int(raw) == os.getpid():
+            os.unlink(path)
+    except OSError as e:
+        logger.warning(f"Could not remove pid file {path}: {e}")
+
+
 # Главная точка входа в приложение
 def main():
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
     logger.info("=" * 60)
     daemon = None
+    write_pid_file()
     try:
         daemon = ProxyDaemon()
         daemon.start()
@@ -1717,5 +1750,6 @@ def main():
         # Внутренний _shutdown_lock исключает двойной вызов.
         if daemon:
             daemon._shutdown()
+        remove_pid_file()
 if __name__ == '__main__':
     main()
