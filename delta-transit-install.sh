@@ -1981,14 +1981,192 @@ detect_php_fpm_socket() {
 }
 
 # -----------------------------------------------------------------------------
-# Самоподписанный сертификат
+# TLS certificate (self-signed / existing paths / certbot) — PROMPT-31
 # -----------------------------------------------------------------------------
+
+# True if $1 looks like a publicly routable IPv4 (not RFC1918 / loopback / link-local).
+is_public_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$ip" =~ ^127\. ]] && return 1
+    [[ "$ip" =~ ^10\. ]] && return 1
+    [[ "$ip" =~ ^192\.168\. ]] && return 1
+    [[ "$ip" =~ ^169\.254\. ]] && return 1
+    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] && return 1
+    return 0
+}
+
+# Heuristic: NGINX_SERVER_NAME has at least one A record that is a public IPv4.
+# No DNS-challenge tunneling or other network workarounds.
+hostname_resolves_publicly() {
+    local host="$1"
+    local ip=""
+
+    [[ -n "$host" ]] || return 1
+
+    if command -v getent >/dev/null 2>&1
+    then
+        ip="$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')"
+    fi
+
+    if [[ -z "$ip" ]] && command -v dig >/dev/null 2>&1
+    then
+        ip="$(dig +short A "$host" 2>/dev/null | awk '/^[0-9]+\./ {print; exit}')"
+    fi
+
+    if [[ -z "$ip" ]]
+    then
+        ip="$(
+            python3 - "$host" <<'PY' 2>/dev/null || true
+import socket, sys
+host = sys.argv[1]
+try:
+    for info in socket.getaddrinfo(host, None, socket.AF_INET):
+        print(info[4][0])
+        break
+except OSError:
+    pass
+PY
+        )"
+    fi
+
+    [[ -n "$ip" ]] || return 1
+    is_public_ipv4 "$ip"
+}
+
+ask_existing_certificate_paths() {
+    local cert_path key_path
+    while true
+    do
+        read -rp "TLS certificate file path (fullchain/PEM): " cert_path
+        read -rp "TLS private key file path: " key_path
+        cert_path="${cert_path#"${cert_path%%[![:space:]]*}"}"
+        cert_path="${cert_path%"${cert_path##*[![:space:]]}"}"
+        key_path="${key_path#"${key_path%%[![:space:]]*}"}"
+        key_path="${key_path%"${key_path##*[![:space:]]}"}"
+        if [[ -z "$cert_path" || -z "$key_path" ]]
+        then
+            log_warn "Both certificate and key paths are required"
+            continue
+        fi
+        if [[ ! -f "$cert_path" || ! -r "$cert_path" ]]
+        then
+            log_warn "Certificate not found or not readable: ${cert_path}"
+            continue
+        fi
+        if [[ ! -f "$key_path" || ! -r "$key_path" ]]
+        then
+            log_warn "Private key not found or not readable: ${key_path}"
+            continue
+        fi
+        NGINX_SSL_CERT="$cert_path"
+        NGINX_SSL_KEY="$key_path"
+        SSL_MODE="existing"
+        log_info "Using existing certificate: ${NGINX_SSL_CERT}"
+        return 0
+    done
+}
+
+# Ensure certbot is on PATH; offer apt install if missing (not assumed on Epic A baseline).
+ensure_certbot_available() {
+    if command -v certbot >/dev/null 2>&1
+    then
+        log_info "certbot already installed: $(command -v certbot)"
+        return 0
+    fi
+
+    log_warn "certbot is not installed"
+    local yn=""
+    read -rp "Install certbot via apt now? [Y/n]: " yn
+    yn="${yn:-Y}"
+    if [[ ! "$yn" =~ ^[Yy]$ ]]
+    then
+        return 1
+    fi
+
+    ensure_package certbot
+    if command -v certbot >/dev/null 2>&1
+    then
+        log_ok "certbot installed"
+        return 0
+    fi
+    log_warn "certbot still not available after apt install"
+    return 1
+}
+
+run_certbot_for_panel_hostname() {
+    local live_dir="/etc/letsencrypt/live/${NGINX_SERVER_NAME}"
+    local fullchain="${live_dir}/fullchain.pem"
+    local privkey="${live_dir}/privkey.pem"
+
+    if [[ -f "$fullchain" && -f "$privkey" ]]
+    then
+        log_info "Reusing existing Let's Encrypt material under ${live_dir}"
+        NGINX_SSL_CERT="$fullchain"
+        NGINX_SSL_KEY="$privkey"
+        SSL_MODE="certbot"
+        return 0
+    fi
+
+    local le_email=""
+    local -a email_args=()
+    read -rp "Let's Encrypt registration email (Enter to register without email): " le_email
+    le_email="${le_email#"${le_email%%[![:space:]]*}"}"
+    le_email="${le_email%"${le_email##*[![:space:]]}"}"
+    if [[ -n "$le_email" ]]
+    then
+        email_args=(--email "$le_email")
+    else
+        email_args=(--register-unsafely-without-email)
+    fi
+
+    # Standalone HTTP-01: does not require changing the panel allow-list.
+    # Briefly stop nginx if it holds :80 (typical on iRedMail hosts).
+    local nginx_was_active=0
+    if systemctl is-active --quiet nginx 2>/dev/null
+    then
+        nginx_was_active=1
+        log_info "Temporarily stopping nginx for certbot standalone HTTP-01"
+        systemctl stop nginx
+    fi
+
+    local ec=0
+    set +e
+    certbot certonly \
+        --standalone \
+        --preferred-challenges http \
+        -d "$NGINX_SERVER_NAME" \
+        --non-interactive \
+        --agree-tos \
+        "${email_args[@]}"
+    ec=$?
+    set -e
+
+    if [[ "$nginx_was_active" -eq 1 ]]
+    then
+        log_info "Restarting nginx after certbot"
+        systemctl start nginx || log_warn "nginx start failed after certbot; will retry later in Nginx phase"
+    fi
+
+    if [[ "$ec" -ne 0 || ! -f "$fullchain" || ! -f "$privkey" ]]
+    then
+        log_warn "certbot did not produce certificates for ${NGINX_SERVER_NAME} (exit=${ec})"
+        return 1
+    fi
+
+    NGINX_SSL_CERT="$fullchain"
+    NGINX_SSL_KEY="$privkey"
+    SSL_MODE="certbot"
+    log_ok "Let's Encrypt certificate issued for ${NGINX_SERVER_NAME}"
+    return 0
+}
 
 generate_self_signed_certificate() {
 
     if [[ -f "$NGINX_SSL_CERT" && -f "$NGINX_SSL_KEY" ]]
     then
         SSL_MODE="existing"
+        log_info "Reusing certificate files already at default paths"
         return 0
     fi
 
@@ -2022,6 +2200,88 @@ generate_self_signed_certificate() {
     chown root:root "$NGINX_SSL_CERT"
 
     SSL_MODE="self-signed"
+}
+
+# Interactive TLS source selection (PROMPT-31). Default remains self-signed.
+ask_tls_certificate_source() {
+    local choice=""
+    local certbot_ok=0
+
+    echo
+    echo "TLS certificate source:"
+    echo "  1) self-signed (default, test/lab only)"
+    echo "  2) existing certificate files (prompt for paths)"
+    if hostname_resolves_publicly "$NGINX_SERVER_NAME"
+    then
+        echo "  3) certbot / Let's Encrypt (${NGINX_SERVER_NAME} resolves to a public IP)"
+        certbot_ok=1
+    else
+        log_info "Option 3 (certbot) omitted: ${NGINX_SERVER_NAME} does not resolve to a public IPv4"
+    fi
+
+    while true
+    do
+        if [[ "$certbot_ok" -eq 1 ]]
+        then
+            read -rp "Choose TLS source [1/2/3] (default 1): " choice
+        else
+            read -rp "Choose TLS source [1/2] (default 1): " choice
+        fi
+        choice="${choice:-1}"
+        case "$choice" in
+            1|2)
+                break
+                ;;
+            3)
+                if [[ "$certbot_ok" -eq 1 ]]
+                then
+                    break
+                fi
+                log_warn "certbot is not offered for this hostname; choose 1 or 2"
+                ;;
+            *)
+                log_warn "Invalid choice; enter 1, 2${certbot_ok:+, or 3}"
+                ;;
+        esac
+    done
+
+    case "$choice" in
+        1)
+            generate_self_signed_certificate
+            ;;
+        2)
+            ask_existing_certificate_paths
+            ;;
+        3)
+            if ensure_certbot_available && run_certbot_for_panel_hostname
+            then
+                return 0
+            fi
+            log_warn "certbot path unavailable or failed — falling back to existing-file prompt"
+            echo "Provide certificate paths, or leave blank after canceling to use self-signed."
+            local fallback=""
+            read -rp "Use existing certificate files now? [Y/n]: " fallback
+            fallback="${fallback:-Y}"
+            if [[ "$fallback" =~ ^[Yy]$ ]]
+            then
+                ask_existing_certificate_paths
+            else
+                log_info "Falling back to self-signed certificate"
+                generate_self_signed_certificate
+            fi
+            ;;
+    esac
+}
+
+configure_tls_certificate() {
+    # Bare / non-interactive installs must not hard-block on TLS (Epic A test VPS).
+    if ! installer_has_tty
+    then
+        log_info "No TTY: applying self-signed/existing certificate defaults (no TLS prompt)"
+        generate_self_signed_certificate
+        return 0
+    fi
+    ask_tls_certificate_source
 }
 
 # -----------------------------------------------------------------------------
@@ -2193,7 +2453,7 @@ phase_nginx() {
     check_nginx_server_name_conflict
     detect_php_fpm_socket
     install_nginx_delta_profile
-    generate_self_signed_certificate
+    configure_tls_certificate
     create_mail_proxy_virtual_host
     enable_mail_proxy_virtual_host
     validate_nginx_configuration
