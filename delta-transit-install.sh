@@ -254,6 +254,24 @@ generate_password() {
 # Интерактивный ввод
 # -----------------------------------------------------------------------------
 
+# Closed stdin (e.g. </dev/null) before preflight: explicit message, not ERR trap.
+abort_preflight_stdin_eof() {
+    cat >&2 <<'EOF'
+[ERROR] Installer input ended before required prompts could be answered.
+
+Non-interactive runs must pipe at least the panel HTTPS URL on the first line of
+stdin (then any further prompts your path needs), or run from a console / pseudo-TTY:
+  sudo ./delta-transit-install.sh
+  # or: script -q -c './delta-transit-install.sh' /tmp/install.log
+
+Fully closed stdin (</dev/null) is not supported. See README.md (Quick start).
+
+If no active panel master exists, the installer aborts in preflight with further
+remediation after the URL is supplied on stdin.
+EOF
+    exit 1
+}
+
 ask_public_url() {
     local postfix_hostname=""
     postfix_hostname="$(postconf -h myhostname 2>/dev/null || true)"
@@ -263,7 +281,13 @@ ask_public_url() {
 
     while true
     do
-        read -rp "Public URL (https://panel.example.com): " PARAM_APP_URL
+        if ! read -rp "Public URL (https://panel.example.com): " PARAM_APP_URL
+        then
+            if [[ -z "${PARAM_APP_URL:-}" ]]
+            then
+                abort_preflight_stdin_eof
+            fi
+        fi
         [[ -n "$PARAM_APP_URL" ]]                          || continue
         [[ "$PARAM_APP_URL" != "https://mail-proxy.local" ]] || continue
         [[ "$PARAM_APP_URL" =~ ^https://  ]]               || continue
@@ -289,7 +313,8 @@ ask_pip_mirror() {
     echo "Например, рабочее зеркало от Яндекса: https://mirror.yandex.ru/pypi/simple/"
     echo "Вводите полный URL, включая http:// или https://, и желательно с /simple/ на конце."
     echo "Если не знаете, что делать, просто нажмите Enter."
-    read -rp "Адрес зеркала (или Enter для стандарта): " PARAM_PIP_MIRROR
+    read -rp "Адрес зеркала (или Enter для стандарта): " PARAM_PIP_MIRROR \
+        || PARAM_PIP_MIRROR=""
 
     if [[ -n "$PARAM_PIP_MIRROR" ]]; then
         # Если не начинается с http:// или https://, добавляем https://
@@ -324,7 +349,10 @@ ask_mysql_root_password() {
     then
         return 0
     fi
-    read -rsp "MariaDB root password: " MYSQL_ROOT_PASSWORD
+    if ! read -rsp "MariaDB root password: " MYSQL_ROOT_PASSWORD
+    then
+        abort_preflight_stdin_eof
+    fi
     echo
     mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null
 }
