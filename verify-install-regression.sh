@@ -116,5 +116,46 @@ else
     fail "client_max_body_size 210M not found in expected nginx locations"
 fi
 
+# PROMPT-34 (D1): /var/vmail must be owned by Dovecot mail user before hardening.
+if [[ -d /var/vmail ]]; then
+    _vmail_expected=""
+    _vmail_actual="$(stat -c '%U:%G' /var/vmail)"
+    if command -v doveconf >/dev/null 2>&1; then
+        _uid="$(doveconf -h mail_uid 2>/dev/null || true)"
+        _gid="$(doveconf -h mail_gid 2>/dev/null || true)"
+        if [[ -n "$_uid" ]]; then
+            if [[ "$_uid" =~ ^[0-9]+$ ]]; then
+                _u="$(id -nu "$_uid" 2>/dev/null || echo "$_uid")"
+            else
+                _u="$_uid"
+            fi
+        else
+            _u="vmail"
+        fi
+        if [[ -n "$_gid" ]]; then
+            if [[ "$_gid" =~ ^[0-9]+$ ]]; then
+                _g="$(id -ng "$_gid" 2>/dev/null || echo "$_gid")"
+            else
+                _g="$_gid"
+            fi
+        else
+            _g="vmail"
+        fi
+        _vmail_expected="${_u}:${_g}"
+    else
+        _vmail_expected="vmail:vmail"
+    fi
+    if [[ "$_vmail_actual" == "$_vmail_expected" ]]; then
+        pass "/var/vmail ownership ${_vmail_actual} matches Dovecot mail user (${_vmail_expected})"
+    else
+        fail "/var/vmail ownership ${_vmail_actual} does not match Dovecot mail user (${_vmail_expected})"
+    fi
+    if runuser -u "${_u:-vmail}" -- test -x /var/vmail 2>/dev/null; then
+        pass "mail user can traverse /var/vmail"
+    else
+        fail "mail user (${_u:-vmail}) cannot traverse /var/vmail"
+    fi
+fi
+
 echo "=== Summary: ${FAILURES} failure(s) ==="
 exit "$FAILURES"

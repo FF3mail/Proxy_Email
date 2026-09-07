@@ -793,9 +793,79 @@ ensure_log_file() {
     chmod 0660 "$WEB_ADMIN_LOG"
 }
 
+# Dovecot mail delivery user:group (numeric or name from doveconf; fallback vmail:vmail).
+detect_dovecot_mail_store_owner() {
+    local uid="" gid="" user="" group=""
+
+    if command -v doveconf >/dev/null 2>&1
+    then
+        uid="$(doveconf -h mail_uid 2>/dev/null || true)"
+        gid="$(doveconf -h mail_gid 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$uid" ]]
+    then
+        if [[ "$uid" =~ ^[0-9]+$ ]]
+        then
+            user="$(id -nu "$uid" 2>/dev/null || echo "$uid")"
+        else
+            user="$uid"
+        fi
+    else
+        user="vmail"
+    fi
+
+    if [[ -n "$gid" ]]
+    then
+        if [[ "$gid" =~ ^[0-9]+$ ]]
+        then
+            group="$(id -ng "$gid" 2>/dev/null || echo "$gid")"
+        else
+            group="$gid"
+        fi
+    else
+        group="vmail"
+    fi
+
+    printf '%s:%s' "$user" "$group"
+}
+
+# PROMPT-34 (D1): refuse chmod on /var/vmail unless owned by Dovecot mail user.
+verify_vmail_ownership_before_harden() {
+    local path="/var/vmail"
+    [[ -d "$path" ]] || return 0
+
+    local expected actual
+    expected="$(detect_dovecot_mail_store_owner)"
+    actual="$(stat -c '%U:%G' "$path")"
+
+    if [[ "$actual" == "$expected" ]]
+    then
+        log_info "Mail store ${path} ownership ${actual} matches Dovecot mail user"
+        return 0
+    fi
+
+    cat >&2 <<EOF
+
+[ERROR] ${path} ownership is ${actual}, but Dovecot mail delivery runs as ${expected}.
+
+Applying chmod o-rwx on a mail store not owned by the mail user can break mailbox
+traversal and silently stop mail delivery (D1 — see docs/reports/PROMPT-20.1-report.md).
+
+Remediation (operator must fix ownership before re-running installer):
+  1. Confirm the mail user:  doveconf -h mail_uid mail_gid
+  2. If ${expected} should own ${path}, fix ownership per your iRedMail / host docs
+     (this installer does NOT auto-chown an existing mail store).
+  3. Re-run:  sudo ./delta-transit-install.sh
+
+EOF
+    fatal "Refusing to harden ${path} until ownership is ${expected} (found ${actual})"
+}
+
 harden_maildir_permissions() {
     if [[ -d /var/vmail ]]
     then
+        verify_vmail_ownership_before_harden
         chmod o-rwx /var/vmail
     fi
 
