@@ -117,6 +117,60 @@ HTML;
     exit();
 }
 
+/**
+ * Whether the current request arrived over HTTPS.
+ * Trusts X-Forwarded-Proto only when REMOTE_ADDR is loopback (same proxy rule as getClientIp).
+ */
+function isHttpsRequest(): bool
+{
+    $https = $_SERVER['HTTPS'] ?? '';
+    if ($https !== '' && strtolower((string)$https) !== 'off') {
+        return true;
+    }
+
+    if (strtolower((string)($_SERVER['REQUEST_SCHEME'] ?? '')) === 'https') {
+        return true;
+    }
+
+    if ((string)($_SERVER['SERVER_PORT'] ?? '') === '443') {
+        return true;
+    }
+
+    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+    if ($remote === '127.0.0.1' || $remote === '::1') {
+        $fwd = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+        if ($fwd === 'https') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Start the panel PHP session with hardened cookie flags.
+ * Call only after checkLocalNetworkAccess() (except oauth_callback, which skips the IP gate).
+ *
+ * SameSite=Lax (not Strict): OAuth providers return via top-level GET to oauth_callback;
+ * Strict would omit PHPSESSID on that hop and break requirePanelAdmin() on the callback.
+ */
+function startPanelSession(): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return;
+    }
+
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => isHttpsRequest(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+
+    session_start();
+}
+
 function writeLog(string $message): void
 {
     $directory = '/var/log/mail-proxy';

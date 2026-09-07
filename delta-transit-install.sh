@@ -81,6 +81,7 @@ APT_PACKAGES=(
     logrotate
     openssl
     curl
+    php-cli
     php-fpm
 )
 
@@ -114,6 +115,8 @@ MYSQL_ROOT_PASSWORD=""
 PARAM_DB_PASS=""
 PARAM_APP_URL=""
 PARAM_PIP_MIRROR=""
+PANEL_MASTER_USERNAME=""
+PANEL_MASTER_PASSWORD=""
 
 # -----------------------------------------------------------------------------
 # Цвета
@@ -251,6 +254,24 @@ generate_password() {
 # Интерактивный ввод
 # -----------------------------------------------------------------------------
 
+# Closed stdin (e.g. </dev/null) before preflight: explicit message, not ERR trap.
+abort_preflight_stdin_eof() {
+    cat >&2 <<'EOF'
+[ERROR] Installer input ended before required prompts could be answered.
+
+Non-interactive runs must pipe at least the panel HTTPS URL on the first line of
+stdin (then any further prompts your path needs), or run from a console / pseudo-TTY:
+  sudo ./delta-transit-install.sh
+  # or: script -q -c './delta-transit-install.sh' /tmp/install.log
+
+Fully closed stdin (</dev/null) is not supported. See README.md (Quick start).
+
+If no active panel master exists, the installer aborts in preflight with further
+remediation after the URL is supplied on stdin.
+EOF
+    exit 1
+}
+
 ask_public_url() {
     local postfix_hostname=""
     postfix_hostname="$(postconf -h myhostname 2>/dev/null || true)"
@@ -260,7 +281,13 @@ ask_public_url() {
 
     while true
     do
-        read -rp "Public URL (https://panel.example.com): " PARAM_APP_URL
+        if ! read -rp "Public URL (https://panel.example.com): " PARAM_APP_URL
+        then
+            if [[ -z "${PARAM_APP_URL:-}" ]]
+            then
+                abort_preflight_stdin_eof
+            fi
+        fi
         [[ -n "$PARAM_APP_URL" ]]                          || continue
         [[ "$PARAM_APP_URL" != "https://mail-proxy.local" ]] || continue
         [[ "$PARAM_APP_URL" =~ ^https://  ]]               || continue
@@ -286,7 +313,8 @@ ask_pip_mirror() {
     echo "Например, рабочее зеркало от Яндекса: https://mirror.yandex.ru/pypi/simple/"
     echo "Вводите полный URL, включая http:// или https://, и желательно с /simple/ на конце."
     echo "Если не знаете, что делать, просто нажмите Enter."
-    read -rp "Адрес зеркала (или Enter для стандарта): " PARAM_PIP_MIRROR
+    read -rp "Адрес зеркала (или Enter для стандарта): " PARAM_PIP_MIRROR \
+        || PARAM_PIP_MIRROR=""
 
     if [[ -n "$PARAM_PIP_MIRROR" ]]; then
         # Если не начинается с http:// или https://, добавляем https://
@@ -321,9 +349,260 @@ ask_mysql_root_password() {
     then
         return 0
     fi
-    read -rsp "MariaDB root password: " MYSQL_ROOT_PASSWORD
+    if ! read -rsp "MariaDB root password: " MYSQL_ROOT_PASSWORD
+    then
+        abort_preflight_stdin_eof
+    fi
     echo
     mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null
+}
+
+# Panel master account (PROMPT 24). Username + password are interactive only;
+# plaintext is never written to install-secrets.txt or any other file.
+ask_panel_master_credentials() {
+    local pass1 pass2
+    while true
+    do
+        read -rp "Panel master username: " PANEL_MASTER_USERNAME
+        PANEL_MASTER_USERNAME="${PANEL_MASTER_USERNAME#"${PANEL_MASTER_USERNAME%%[![:space:]]*}"}"
+        PANEL_MASTER_USERNAME="${PANEL_MASTER_USERNAME%"${PANEL_MASTER_USERNAME##*[![:space:]]}"}"
+        if [[ -z "${PANEL_MASTER_USERNAME}" ]]
+        then
+            echo "Username must not be empty." >&2
+            continue
+        fi
+        if (( ${#PANEL_MASTER_USERNAME} > 100 ))
+        then
+            echo "Username must be at most 100 characters." >&2
+            continue
+        fi
+        break
+    done
+
+    while true
+    do
+        read -rsp "Panel master password: " pass1
+        echo
+        read -rsp "Confirm panel master password: " pass2
+        echo
+        if [[ -z "${pass1}" ]]
+        then
+            echo "Password must not be empty." >&2
+            continue
+        fi
+        if (( ${#pass1} < 8 ))
+        then
+            echo "Password must be at least 8 characters." >&2
+            continue
+        fi
+        if [[ "${pass1}" != "${pass2}" ]]
+        then
+            echo "Passwords do not match." >&2
+            continue
+        fi
+        PANEL_MASTER_PASSWORD="${pass1}"
+        pass1=""
+        pass2=""
+        break
+    done
+}
+
+ensure_panel_admins_table() {
+    log_info "Ensuring panel_admins table exists"
+    mysql \
+        -u "${DB_USER}" \
+        -p"${PARAM_DB_PASS}" \
+        "${DB_NAME}" \
+        <<'SQL'
+CREATE TABLE IF NOT EXISTS panel_admins (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('master','admin') NOT NULL DEFAULT 'admin',
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_panel_admins_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL
+}
+
+panel_master_exists() {
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${PARAM_DB_PASS}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master';"
+    )"
+    [[ "${count}" -gt 0 ]]
+}
+
+panel_active_master_exists() {
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${PARAM_DB_PASS}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;"
+    )"
+    [[ "${count}" -gt 0 ]]
+}
+
+installer_has_tty() {
+    [[ -t 0 ]]
+}
+
+abort_panel_master_no_tty() {
+    cat >&2 <<'EOF'
+[ERROR] No active panel master and no interactive TTY available.
+
+Non-interactive install/upgrade cannot auto-generate operator credentials.
+Aborting in preflight before schema or credential changes.
+
+Remediation (choose one):
+  1. Run from a console session (or wrap with a pseudo-TTY):
+       sudo ./delta-transit-install.sh
+       # or:  script -q -c './delta-transit-install.sh' /tmp/install.log
+     Complete the prompts for master username/password.
+
+  2. If the database already exists, seed master manually (hash only):
+       HASH=$(php -r 'echo password_hash("YOUR_PASSWORD", PASSWORD_DEFAULT);')
+       mysql -u mail_proxy -p mail_proxy -e \
+         "INSERT INTO panel_admins (username, password_hash, role, active) VALUES ('YOUR_USER', '$HASH', 'master', 1);"
+
+Then re-run the installer.
+EOF
+    exit 1
+}
+
+# Best-effort: true if db.conf exists and an active master row is present.
+try_detect_active_panel_master() {
+    local db_pass="${PARAM_DB_PASS:-}"
+    if [[ -z "${db_pass}" && -f "${DB_CONF}" ]]
+    then
+        db_pass="$(read_db_pass_from_conf 2>/dev/null || true)"
+    fi
+    [[ -n "${db_pass}" ]] || return 1
+
+    local count
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${db_pass}" \
+            "${DB_NAME}" \
+            -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;" \
+            2>/dev/null || true
+    )"
+    [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${count}" -gt 0 ]]
+}
+
+# PROMPT-26: fail before Database phase when master cannot be seeded.
+preflight_panel_master_readiness() {
+    log_info "Checking panel master bootstrap path (before schema/credential changes)"
+
+    if try_detect_active_panel_master
+    then
+        log_ok "Active panel master already present — interactive master seed not required"
+        return 0
+    fi
+
+    if ! installer_has_tty
+    then
+        abort_panel_master_no_tty
+    fi
+
+    if [[ -z "${PANEL_MASTER_USERNAME:-}" || -z "${PANEL_MASTER_PASSWORD:-}" ]]
+    then
+        ask_panel_master_credentials
+    fi
+    log_ok "Panel master credentials collected for Database phase seed"
+}
+
+# Idempotent panel-auth migration: schema + master seed (PROMPT 25 upgrade path).
+migrate_panel_auth() {
+    log_info "Panel auth migration (idempotent)"
+    ensure_panel_admins_table
+    seed_panel_master
+}
+
+# Seeds exactly one master via PHP password_hash(); never logs or stores plaintext.
+seed_panel_master() {
+    if panel_active_master_exists
+    then
+        log_ok "Active panel master present — skipping seed"
+        PANEL_MASTER_USERNAME=""
+        PANEL_MASTER_PASSWORD=""
+        return 0
+    fi
+
+    if panel_master_exists
+    then
+        fatal "Panel master exists but active=0. Remediation: UPDATE panel_admins SET active=1 WHERE role='master' LIMIT 1; then re-run installer."
+    fi
+
+    if [[ -z "${PANEL_MASTER_USERNAME:-}" || -z "${PANEL_MASTER_PASSWORD:-}" ]]
+    then
+        if installer_has_tty
+        then
+            ask_panel_master_credentials
+        else
+            # Should have been caught in preflight; keep as hard safety net.
+            abort_panel_master_no_tty
+        fi
+    fi
+
+    require_command php
+
+    log_info "Seeding panel master account (hash only)"
+    local hash user_sql hash_sql
+    hash="$(
+        PANEL_MASTER_PASSWORD="${PANEL_MASTER_PASSWORD}" php -r \
+            'echo password_hash(getenv("PANEL_MASTER_PASSWORD"), PASSWORD_DEFAULT);'
+    )"
+    unset PANEL_MASTER_PASSWORD
+    PANEL_MASTER_PASSWORD=""
+
+    if [[ -z "${hash}" ]]
+    then
+        fatal "password_hash produced empty output"
+    fi
+
+    user_sql="$(escape_sql_string "${PANEL_MASTER_USERNAME}")"
+    hash_sql="$(escape_sql_string "${hash}")"
+    hash=""
+
+    mysql \
+        -u "${DB_USER}" \
+        -p"${PARAM_DB_PASS}" \
+        "${DB_NAME}" \
+        -e "INSERT INTO panel_admins (username, password_hash, role, active)
+            VALUES ('${user_sql}', '${hash_sql}', 'master', 1);"
+
+    PANEL_MASTER_USERNAME=""
+    log_ok "Panel master account seeded"
+}
+
+validate_panel_auth() {
+    log_info "Validating panel authentication (upgrade safety)"
+    ensure_panel_admins_table
+
+    if panel_active_master_exists
+    then
+        log_ok "Panel auth: active master present"
+        return 0
+    fi
+
+    if panel_master_exists
+    then
+        log_warn "Panel auth: master exists but inactive — panel login disabled until reactivated"
+        return 0
+    fi
+
+    log_warn "Panel auth: no master account — panel login disabled; run installer interactively to seed"
 }
 
 # =============================================================================
@@ -345,6 +624,7 @@ phase_preflight() {
     ask_public_url
     ask_mysql_root_password
     ask_pip_mirror
+    preflight_panel_master_readiness
 
     command -v systemd-analyze >/dev/null 2>&1 \
         || log_warn "systemd-analyze not available"
@@ -703,6 +983,7 @@ phase_database() {
     create_database_user
     import_schema
     write_db_config
+    migrate_panel_auth
     generate_crypto_key
     write_install_secrets
     validate_db_connectivity
@@ -1140,6 +1421,9 @@ WEB_FILES=(
     monitor.php
     includes/helpers.php
     includes/Cryptor.php
+    includes/auth.php
+    includes/panel_migration.php
+    includes/panel_auth_ui.php
     includes/oauth2.php
     includes/providers_ui.php
 )
@@ -1795,14 +2079,192 @@ detect_php_fpm_socket() {
 }
 
 # -----------------------------------------------------------------------------
-# Самоподписанный сертификат
+# TLS certificate (self-signed / existing paths / certbot) — PROMPT-31
 # -----------------------------------------------------------------------------
+
+# True if $1 looks like a publicly routable IPv4 (not RFC1918 / loopback / link-local).
+is_public_ipv4() {
+    local ip="$1"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$ip" =~ ^127\. ]] && return 1
+    [[ "$ip" =~ ^10\. ]] && return 1
+    [[ "$ip" =~ ^192\.168\. ]] && return 1
+    [[ "$ip" =~ ^169\.254\. ]] && return 1
+    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] && return 1
+    return 0
+}
+
+# Heuristic: NGINX_SERVER_NAME has at least one A record that is a public IPv4.
+# No DNS-challenge tunneling or other network workarounds.
+hostname_resolves_publicly() {
+    local host="$1"
+    local ip=""
+
+    [[ -n "$host" ]] || return 1
+
+    if command -v getent >/dev/null 2>&1
+    then
+        ip="$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')"
+    fi
+
+    if [[ -z "$ip" ]] && command -v dig >/dev/null 2>&1
+    then
+        ip="$(dig +short A "$host" 2>/dev/null | awk '/^[0-9]+\./ {print; exit}')"
+    fi
+
+    if [[ -z "$ip" ]]
+    then
+        ip="$(
+            python3 - "$host" <<'PY' 2>/dev/null || true
+import socket, sys
+host = sys.argv[1]
+try:
+    for info in socket.getaddrinfo(host, None, socket.AF_INET):
+        print(info[4][0])
+        break
+except OSError:
+    pass
+PY
+        )"
+    fi
+
+    [[ -n "$ip" ]] || return 1
+    is_public_ipv4 "$ip"
+}
+
+ask_existing_certificate_paths() {
+    local cert_path key_path
+    while true
+    do
+        read -rp "TLS certificate file path (fullchain/PEM): " cert_path
+        read -rp "TLS private key file path: " key_path
+        cert_path="${cert_path#"${cert_path%%[![:space:]]*}"}"
+        cert_path="${cert_path%"${cert_path##*[![:space:]]}"}"
+        key_path="${key_path#"${key_path%%[![:space:]]*}"}"
+        key_path="${key_path%"${key_path##*[![:space:]]}"}"
+        if [[ -z "$cert_path" || -z "$key_path" ]]
+        then
+            log_warn "Both certificate and key paths are required"
+            continue
+        fi
+        if [[ ! -f "$cert_path" || ! -r "$cert_path" ]]
+        then
+            log_warn "Certificate not found or not readable: ${cert_path}"
+            continue
+        fi
+        if [[ ! -f "$key_path" || ! -r "$key_path" ]]
+        then
+            log_warn "Private key not found or not readable: ${key_path}"
+            continue
+        fi
+        NGINX_SSL_CERT="$cert_path"
+        NGINX_SSL_KEY="$key_path"
+        SSL_MODE="existing"
+        log_info "Using existing certificate: ${NGINX_SSL_CERT}"
+        return 0
+    done
+}
+
+# Ensure certbot is on PATH; offer apt install if missing (not assumed on Epic A baseline).
+ensure_certbot_available() {
+    if command -v certbot >/dev/null 2>&1
+    then
+        log_info "certbot already installed: $(command -v certbot)"
+        return 0
+    fi
+
+    log_warn "certbot is not installed"
+    local yn=""
+    read -rp "Install certbot via apt now? [Y/n]: " yn
+    yn="${yn:-Y}"
+    if [[ ! "$yn" =~ ^[Yy]$ ]]
+    then
+        return 1
+    fi
+
+    ensure_package certbot
+    if command -v certbot >/dev/null 2>&1
+    then
+        log_ok "certbot installed"
+        return 0
+    fi
+    log_warn "certbot still not available after apt install"
+    return 1
+}
+
+run_certbot_for_panel_hostname() {
+    local live_dir="/etc/letsencrypt/live/${NGINX_SERVER_NAME}"
+    local fullchain="${live_dir}/fullchain.pem"
+    local privkey="${live_dir}/privkey.pem"
+
+    if [[ -f "$fullchain" && -f "$privkey" ]]
+    then
+        log_info "Reusing existing Let's Encrypt material under ${live_dir}"
+        NGINX_SSL_CERT="$fullchain"
+        NGINX_SSL_KEY="$privkey"
+        SSL_MODE="certbot"
+        return 0
+    fi
+
+    local le_email=""
+    local -a email_args=()
+    read -rp "Let's Encrypt registration email (Enter to register without email): " le_email
+    le_email="${le_email#"${le_email%%[![:space:]]*}"}"
+    le_email="${le_email%"${le_email##*[![:space:]]}"}"
+    if [[ -n "$le_email" ]]
+    then
+        email_args=(--email "$le_email")
+    else
+        email_args=(--register-unsafely-without-email)
+    fi
+
+    # Standalone HTTP-01: does not require changing the panel allow-list.
+    # Briefly stop nginx if it holds :80 (typical on iRedMail hosts).
+    local nginx_was_active=0
+    if systemctl is-active --quiet nginx 2>/dev/null
+    then
+        nginx_was_active=1
+        log_info "Temporarily stopping nginx for certbot standalone HTTP-01"
+        systemctl stop nginx
+    fi
+
+    local ec=0
+    set +e
+    certbot certonly \
+        --standalone \
+        --preferred-challenges http \
+        -d "$NGINX_SERVER_NAME" \
+        --non-interactive \
+        --agree-tos \
+        "${email_args[@]}"
+    ec=$?
+    set -e
+
+    if [[ "$nginx_was_active" -eq 1 ]]
+    then
+        log_info "Restarting nginx after certbot"
+        systemctl start nginx || log_warn "nginx start failed after certbot; will retry later in Nginx phase"
+    fi
+
+    if [[ "$ec" -ne 0 || ! -f "$fullchain" || ! -f "$privkey" ]]
+    then
+        log_warn "certbot did not produce certificates for ${NGINX_SERVER_NAME} (exit=${ec})"
+        return 1
+    fi
+
+    NGINX_SSL_CERT="$fullchain"
+    NGINX_SSL_KEY="$privkey"
+    SSL_MODE="certbot"
+    log_ok "Let's Encrypt certificate issued for ${NGINX_SERVER_NAME}"
+    return 0
+}
 
 generate_self_signed_certificate() {
 
     if [[ -f "$NGINX_SSL_CERT" && -f "$NGINX_SSL_KEY" ]]
     then
         SSL_MODE="existing"
+        log_info "Reusing certificate files already at default paths"
         return 0
     fi
 
@@ -1836,6 +2298,88 @@ generate_self_signed_certificate() {
     chown root:root "$NGINX_SSL_CERT"
 
     SSL_MODE="self-signed"
+}
+
+# Interactive TLS source selection (PROMPT-31). Default remains self-signed.
+ask_tls_certificate_source() {
+    local choice=""
+    local certbot_ok=0
+
+    echo
+    echo "TLS certificate source:"
+    echo "  1) self-signed (default, test/lab only)"
+    echo "  2) existing certificate files (prompt for paths)"
+    if hostname_resolves_publicly "$NGINX_SERVER_NAME"
+    then
+        echo "  3) certbot / Let's Encrypt (${NGINX_SERVER_NAME} resolves to a public IP)"
+        certbot_ok=1
+    else
+        log_info "Option 3 (certbot) omitted: ${NGINX_SERVER_NAME} does not resolve to a public IPv4"
+    fi
+
+    while true
+    do
+        if [[ "$certbot_ok" -eq 1 ]]
+        then
+            read -rp "Choose TLS source [1/2/3] (default 1): " choice
+        else
+            read -rp "Choose TLS source [1/2] (default 1): " choice
+        fi
+        choice="${choice:-1}"
+        case "$choice" in
+            1|2)
+                break
+                ;;
+            3)
+                if [[ "$certbot_ok" -eq 1 ]]
+                then
+                    break
+                fi
+                log_warn "certbot is not offered for this hostname; choose 1 or 2"
+                ;;
+            *)
+                log_warn "Invalid choice; enter 1, 2${certbot_ok:+, or 3}"
+                ;;
+        esac
+    done
+
+    case "$choice" in
+        1)
+            generate_self_signed_certificate
+            ;;
+        2)
+            ask_existing_certificate_paths
+            ;;
+        3)
+            if ensure_certbot_available && run_certbot_for_panel_hostname
+            then
+                return 0
+            fi
+            log_warn "certbot path unavailable or failed — falling back to existing-file prompt"
+            echo "Provide certificate paths, or leave blank after canceling to use self-signed."
+            local fallback=""
+            read -rp "Use existing certificate files now? [Y/n]: " fallback
+            fallback="${fallback:-Y}"
+            if [[ "$fallback" =~ ^[Yy]$ ]]
+            then
+                ask_existing_certificate_paths
+            else
+                log_info "Falling back to self-signed certificate"
+                generate_self_signed_certificate
+            fi
+            ;;
+    esac
+}
+
+configure_tls_certificate() {
+    # Bare / non-interactive installs must not hard-block on TLS (Epic A test VPS).
+    if ! installer_has_tty
+    then
+        log_info "No TTY: applying self-signed/existing certificate defaults (no TLS prompt)"
+        generate_self_signed_certificate
+        return 0
+    fi
+    ask_tls_certificate_source
 }
 
 # -----------------------------------------------------------------------------
@@ -2007,7 +2551,7 @@ phase_nginx() {
     check_nginx_server_name_conflict
     detect_php_fpm_socket
     install_nginx_delta_profile
-    generate_self_signed_certificate
+    configure_tls_certificate
     create_mail_proxy_virtual_host
     enable_mail_proxy_virtual_host
     validate_nginx_configuration
@@ -2369,6 +2913,7 @@ phase_validation() {
     verify_process_running
     verify_log_exists
     verify_database_login
+    validate_panel_auth
     verify_no_change_me
     verify_no_placeholder_url
     verify_runtime_log
