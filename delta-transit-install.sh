@@ -408,10 +408,12 @@ ask_panel_master_credentials() {
 }
 
 ensure_panel_admins_table() {
+    local db_pass
+    db_pass="$(resolve_db_pass)"
     log_info "Ensuring panel_admins table exists"
     mysql \
         -u "${DB_USER}" \
-        -p"${PARAM_DB_PASS}" \
+        -p"${db_pass}" \
         "${DB_NAME}" \
         <<'SQL'
 CREATE TABLE IF NOT EXISTS panel_admins (
@@ -428,11 +430,12 @@ SQL
 }
 
 panel_master_exists() {
-    local count
+    local count db_pass
+    db_pass="$(resolve_db_pass)"
     count="$(
         mysql \
             -u "${DB_USER}" \
-            -p"${PARAM_DB_PASS}" \
+            -p"${db_pass}" \
             "${DB_NAME}" \
             -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master';"
     )"
@@ -440,11 +443,12 @@ panel_master_exists() {
 }
 
 panel_active_master_exists() {
-    local count
+    local count db_pass
+    db_pass="$(resolve_db_pass)"
     count="$(
         mysql \
             -u "${DB_USER}" \
-            -p"${PARAM_DB_PASS}" \
+            -p"${db_pass}" \
             "${DB_NAME}" \
             -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;"
     )"
@@ -480,14 +484,11 @@ EOF
 
 # Best-effort: true if db.conf exists and an active master row is present.
 try_detect_active_panel_master() {
-    local db_pass="${PARAM_DB_PASS:-}"
-    if [[ -z "${db_pass}" && -f "${DB_CONF}" ]]
-    then
-        db_pass="$(read_db_pass_from_conf 2>/dev/null || true)"
-    fi
+    local db_pass count
+
+    db_pass="$(resolve_db_pass 2>/dev/null || true)"
     [[ -n "${db_pass}" ]] || return 1
 
-    local count
     count="$(
         mysql \
             -u "${DB_USER}" \
@@ -575,9 +576,12 @@ seed_panel_master() {
     hash_sql="$(escape_sql_string "${hash}")"
     hash=""
 
+    local db_pass
+    db_pass="$(resolve_db_pass)"
+
     mysql \
         -u "${DB_USER}" \
-        -p"${PARAM_DB_PASS}" \
+        -p"${db_pass}" \
         "${DB_NAME}" \
         -e "INSERT INTO panel_admins (username, password_hash, role, active)
             VALUES ('${user_sql}', '${hash_sql}', 'master', 1);"
@@ -903,6 +907,17 @@ cfg = configparser.ConfigParser()
 cfg.read(sys.argv[1])
 print(cfg.get("db", "db_pass"))
 PY
+}
+
+# mail_proxy password for mysql CLI: PARAM_DB_PASS during fresh Database phase,
+# else read from db.conf (validation-only re-runs, upgrades).
+resolve_db_pass() {
+    if [[ -n "${PARAM_DB_PASS}" ]]
+    then
+        printf '%s\n' "${PARAM_DB_PASS}"
+        return 0
+    fi
+    read_db_pass_from_conf
 }
 
 validate_db_connectivity() {
