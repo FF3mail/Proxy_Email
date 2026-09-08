@@ -25,6 +25,7 @@ require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/panel_auth_ui.php';
 require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
+require_once __DIR__ . '/includes/maildir_resolver.php';
 
 use MailProxy\Cryptor;
 
@@ -401,31 +402,31 @@ function renderReferentForm(): void
         </div>
 
         <div>
-            <label class="block mb-1 font-medium">Local Inbox</label>
+            <label class="block mb-1 font-medium">Email референта</label>
             <input
                 type="email"
                 name="local_inbox"
                 required
                 class="w-full border rounded px-3 py-2"
+                placeholder="referent@example.com"
                 value="<?= h((string)$referent['local_inbox']) ?>"
             >
-        </div>
-
-        <div>
-            <label class="block mb-1 font-medium">Local Outbox</label>
-            <input
-                type="text"
-                name="local_outbox"
-                required
-                class="w-full border rounded px-3 py-2"
-                placeholder="/var/vmail/vmail1/example.com/username/Maildir"
-                value="<?= h((string)$referent['local_outbox']) ?>"
-            >
             <p class="text-sm text-gray-600 mt-1">
-                Абсолютный путь к корню Maildir референта на базовой почтовой системе
-                (например iRedMail), не email-адрес.
+                Почтовый ящик референта на iRedMail. Путь Maildir определяется автоматически.
             </p>
         </div>
+
+        <?php if (!empty($referent['local_outbox'])): ?>
+        <div>
+            <label class="block mb-1 font-medium">Maildir (автоматически)</label>
+            <input
+                type="text"
+                readonly
+                class="w-full border rounded px-3 py-2 bg-slate-50 text-slate-700"
+                value="<?= h((string)$referent['local_outbox']) ?>"
+            >
+        </div>
+        <?php endif; ?>
 
         <div>
             <label class="inline-flex items-center gap-2">
@@ -484,30 +485,46 @@ function handleReferentSave(): void
 
     $username = trim((string)($_POST['username'] ?? ''));
     $localInbox = trim((string)($_POST['local_inbox'] ?? ''));
-    $localOutbox = trim((string)($_POST['local_outbox'] ?? ''));
 
     $active = isset($_POST['active']) ? 1 : 0;
 
     $clientEmail = trim((string)($_POST['client_email'] ?? ''));
     $clientActive = isset($_POST['client_active']) ? 1 : 0;
 
-    if ($localOutbox === '') {
-        setFlash('error', 'Local Outbox: путь не может быть пустым');
+    $existingInbox = '';
+    $existingOutbox = '';
+
+    if ($id > 0) {
+        $stmt = $pdo->prepare('SELECT local_inbox, local_outbox FROM referents WHERE id = ?');
+        $stmt->execute([$id]);
+        $existing = $stmt->fetch();
+        if ($existing) {
+            $existingInbox = strtolower(trim((string)$existing['local_inbox']));
+            $existingOutbox = trim((string)$existing['local_outbox']);
+        }
+    }
+
+    try {
+        $normalizedInbox = normalizeReferentEmail($localInbox);
+    } catch (ReferentMaildirException $e) {
+        setFlash('error', $e->getMessage());
         header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
         exit();
     }
 
-    if ($localOutbox[0] !== '/') {
-        setFlash('error', 'Local Outbox: укажите абсолютный путь (начинается с /)');
-        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
-        exit();
+    if ($id > 0 && $normalizedInbox === $existingInbox && $existingOutbox !== '') {
+        $localOutbox = $existingOutbox;
+    } else {
+        try {
+            $localOutbox = resolveReferentMaildir($normalizedInbox);
+        } catch (ReferentMaildirException $e) {
+            setFlash('error', $e->getMessage());
+            header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+            exit();
+        }
     }
 
-    if (str_contains($localOutbox, '..') || str_contains($localOutbox, "\0")) {
-        setFlash('error', 'Local Outbox: некорректный путь');
-        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
-        exit();
-    }
+    $localInbox = $normalizedInbox;
 
     try {
         $pdo->beginTransaction();
