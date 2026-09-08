@@ -75,9 +75,10 @@ if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate'
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
-function redirectTo(string $action): void
+function redirectTo(string $action, array $params = []): void
 {
-    header('Location: index.php?action=' . urlencode($action));
+    $params['action'] = $action;
+    header('Location: index.php?' . http_build_query($params));
     exit();
 }
 
@@ -124,14 +125,20 @@ function renderHeader(string $title): void
 
         <nav class="p-4 space-y-2">
             <a href="/index.php?action=dashboard"
-               <?= in_array($action ?? '', ['dashboard', 'referents', 'accounts'], true) ? 'class="active"' : '' ?>><?= h(__('nav.referents')) ?></a>
-            <a href="/index.php?action=dashboard"
-               <?= ($action ?? '') === 'accounts' ? 'class="active"' : '' ?>><?= h(__('nav.accounts')) ?></a>
+               <?= ($action ?? '') === 'dashboard' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.dashboard')) ?></a>
+            <a href="/index.php?action=referent_list"
+               <?= in_array($action ?? '', ['referent_list', 'referents', 'referent_form', 'referent_view'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.referents')) ?></a>
+            <a href="/index.php?action=account_list"
+               <?= in_array($action ?? '', ['account_list', 'accounts', 'account_form'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.accounts')) ?></a>
             <a href="/index.php?action=provider_list"
-               <?= in_array($action ?? '', ['provider_list', 'provider_form', 'providers'], true) ? 'class="active"' : '' ?>><?= h(__('nav.providers')) ?></a>
+               <?= in_array($action ?? '', ['provider_list', 'provider_form', 'providers'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.providers')) ?></a>
             <a href="/monitor.php"
-               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active"' : '' ?>>
+               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
                <?= h(__('nav.monitor')) ?>
+            </a>
+            <a href="/logs.php"
+               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'logs.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
+               Логи
             </a>
             <?php if (isPanelMasterDisplay()): ?>
             <a href="/index.php?action=operator_list"
@@ -197,6 +204,16 @@ switch ($action) {
         renderDashboard();
         break;
 
+    case 'referent_list':
+    case 'referents':
+        renderReferentList();
+        break;
+
+    case 'account_list':
+    case 'accounts':
+        renderAccountList();
+        break;
+
     case 'referent_form':
         renderReferentForm();
         break;
@@ -232,11 +249,6 @@ switch ($action) {
     case 'providers':
     case 'provider_list':
         renderProviderList();
-        break;
-
-    case 'referents':
-    case 'accounts':
-        renderDashboard();
         break;
 
     case 'provider_form':
@@ -292,12 +304,11 @@ function renderDashboard(): void
     renderHeader(__('dashboard.title'));
     ?>
     <h2 class="text-2xl font-bold mb-6"><?= h(__('dashboard.title')) ?></h2>
-	<div class="mb-6">
-		<a href="index.php?action=referent_form"
-		   class="bg-blue-600 text-white px-4 py-2 rounded">
-			<?= h(__('dashboard.create_referent')) ?>
-		</a>
-	</div>
+    <div class="flex flex-wrap gap-3 mb-6">
+        <a href="index.php?action=referent_list" class="bg-slate-700 text-white px-4 py-2 rounded">Референты →</a>
+        <a href="index.php?action=account_list" class="bg-slate-700 text-white px-4 py-2 rounded">Внешние аккаунты →</a>
+        <a href="index.php?action=referent_form" class="bg-blue-600 text-white px-4 py-2 rounded"><?= h(__('dashboard.create_referent')) ?></a>
+    </div>
     <div class="bg-white rounded shadow overflow-x-auto">
         <table class="min-w-full">
             <thead class="bg-slate-100">
@@ -339,50 +350,7 @@ function renderDashboard(): void
                         <?= (int)$row['c_active'] === 1 ? h(__('dashboard.client_on')) : h(__('dashboard.client_off')) ?><br>
                         <?= (int)$row['ea_active'] === 1 ? h(__('dashboard.account_on')) : h(__('dashboard.account_off')) ?>
                     </td>
-                    <td class="px-4 py-2">
-                        <div class="flex gap-2 flex-wrap">
-                            <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
-                               href="index.php?action=referent_form&id=<?= (int)$row['id'] ?>">
-                                Редактировать
-                            </a>
-                            <a class="bg-indigo-600 text-white px-3 py-1 rounded text-sm"
-                               href="index.php?action=referent_view&id=<?= (int)$row['id'] ?>">
-                                Почтовый клиент
-                            </a>
-                            <a class="bg-amber-500 text-white px-3 py-1 rounded text-sm"
-							   href="index.php?action=account_form&referent_id=<?= (int)$row['id'] ?><?= $row['ea_id'] ? '&account_id=' . (int)$row['ea_id'] : '' ?>">
-								<?= $row['ea_id'] ? 'Внешний аккаунт' : 'Создать аккаунт' ?>
-							</a>
-                        </div>
-                        <div class="flex gap-2 flex-wrap mt-2">
-                            <?php renderEntityToggleButton('referent', (int)$row['id'], (int)$row['r_active'], 'Реф.'); ?>
-                            <?php if (!empty($row['client_id'])): ?>
-                                <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент'); ?>
-                            <?php endif; ?>
-                            <?php if (!empty($row['ea_id'])): ?>
-                                <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.'); ?>
-                            <?php endif; ?>
-                        </div>
-                        <div class="flex gap-2 flex-wrap mt-2">
-                            <?php if (!empty($row['ea_id'])): ?>
-                                <form method="post" action="index.php?action=account_delete" class="inline"
-                                      onsubmit="return confirm('Удалить внешний аккаунт <?= h((string)$row['ea_email']) ?>?');">
-                                    <input type="hidden" name="action" value="account_delete">
-                                    <input type="hidden" name="id" value="<?= (int)$row['ea_id'] ?>">
-                                    <input type="hidden" name="referent_id" value="<?= (int)$row['id'] ?>">
-                                    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                                    <button type="submit" class="bg-red-600 text-white px-3 py-1 rounded text-sm">Удалить аккаунт</button>
-                                </form>
-                            <?php endif; ?>
-                            <form method="post" action="index.php?action=referent_delete" class="inline"
-                                  onsubmit="return confirm('Удалить референта <?= h((string)$row['username']) ?> и все связанные записи?');">
-                                <input type="hidden" name="action" value="referent_delete">
-                                <input type="hidden" name="id" value="<?= (int)$row['id'] ?>">
-                                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                                <button type="submit" class="bg-red-800 text-white px-3 py-1 rounded text-sm">Удалить референта</button>
-                            </form>
-                        </div>
-                    </td>
+                            <?php renderReferentRowActions($row, 'dashboard'); ?>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -391,6 +359,204 @@ function renderDashboard(): void
     <?php
     renderFooter();
 }
+
+function renderReferentList(): void
+{
+    $pdo = getPdo();
+    $stmt = $pdo->query(
+        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
+                c.id as client_id, c.email as client_email, c.active as c_active,
+                ea.id as ea_id, ea.email as ea_email, ea.active as ea_active
+         FROM referents r
+         LEFT JOIN clients c ON c.referent_id = r.id
+         LEFT JOIN external_accounts ea ON ea.referent_id = r.id
+         ORDER BY r.id'
+    );
+    $rows = $stmt->fetchAll();
+
+    renderHeader(__('nav.referents'));
+    ?>
+    <h2 class="text-2xl font-bold mb-2"><?= h(__('nav.referents')) ?></h2>
+    <p class="text-slate-600 mb-6">Все референты в системе. Референт — локальный почтовый ящик на iRedMail, связанный с внешним аккаунтом.</p>
+    <div class="mb-6">
+        <a href="index.php?action=referent_form" class="bg-blue-600 text-white px-4 py-2 rounded">Создать референта</a>
+    </div>
+    <?php if ($rows === []): ?>
+        <div class="bg-white rounded shadow p-8 text-center text-slate-600">
+            Референтов пока нет. <a href="index.php?action=referent_form" class="text-blue-600 underline">Создать первого</a>
+        </div>
+    <?php else: ?>
+    <div class="bg-white rounded shadow overflow-x-auto">
+        <table class="min-w-full">
+            <thead class="bg-slate-100">
+            <tr>
+                <th class="px-4 py-2 text-left">ID</th>
+                <th class="px-4 py-2 text-left">Имя</th>
+                <th class="px-4 py-2 text-left">Email (local_inbox)</th>
+                <th class="px-4 py-2 text-left">Клиент</th>
+                <th class="px-4 py-2 text-left">Статус</th>
+                <th class="px-4 py-2 text-left">Действия</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $row): ?>
+                <tr class="border-t">
+                    <td class="px-4 py-2"><?= (int)$row['id'] ?></td>
+                    <td class="px-4 py-2"><?= h((string)$row['username']) ?></td>
+                    <td class="px-4 py-2 font-mono text-sm"><?= h((string)$row['local_inbox']) ?></td>
+                    <td class="px-4 py-2"><?= h((string)($row['client_email'] ?: '—')) ?></td>
+                    <td class="px-4 py-2">
+                        <?= (int)$row['r_active'] === 1 ? 'Активен' : 'Отключён' ?>
+                    </td>
+                    <td class="px-4 py-2"><?php renderReferentRowActions($row, 'referent_list'); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif;
+    renderFooter();
+}
+
+function renderAccountList(): void
+{
+    $pdo = getPdo();
+    $stmt = $pdo->query(
+        'SELECT ea.id, ea.referent_id, ea.email, ea.username, ea.auth_type, ea.provider,
+                ea.imap_host, ea.imap_port, ea.smtp_host, ea.smtp_port, ea.active as ea_active,
+                r.username as referent_name, r.local_inbox,
+                ot.expires_at
+         FROM external_accounts ea
+         INNER JOIN referents r ON r.id = ea.referent_id
+         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
+         ORDER BY ea.id'
+    );
+    $rows = $stmt->fetchAll();
+
+    renderHeader(__('nav.accounts'));
+    ?>
+    <h2 class="text-2xl font-bold mb-2"><?= h(__('nav.accounts')) ?></h2>
+    <p class="text-slate-600 mb-6">Внешние почтовые аккаунты (IMAP/SMTP или OAuth2). Демон использует их для синхронизации с локальным ящиком референта.</p>
+    <?php if ($rows === []): ?>
+        <div class="bg-white rounded shadow p-8 text-center text-slate-600">
+            Внешних аккаунтов нет.
+            <?php
+            $refStmt = $pdo->query('SELECT id, username FROM referents ORDER BY id LIMIT 1');
+            $firstRef = $refStmt->fetch();
+            if ($firstRef): ?>
+                <a href="index.php?action=account_form&referent_id=<?= (int)$firstRef['id'] ?>" class="text-blue-600 underline">Создать для референта «<?= h((string)$firstRef['username']) ?>»</a>
+            <?php else: ?>
+                Сначала <a href="index.php?action=referent_form" class="text-blue-600 underline">создайте референта</a>.
+            <?php endif; ?>
+        </div>
+    <?php else: ?>
+    <div class="bg-white rounded shadow overflow-x-auto">
+        <table class="min-w-full">
+            <thead class="bg-slate-100">
+            <tr>
+                <th class="px-4 py-2 text-left">ID</th>
+                <th class="px-4 py-2 text-left">Email</th>
+                <th class="px-4 py-2 text-left">Референт</th>
+                <th class="px-4 py-2 text-left">IMAP</th>
+                <th class="px-4 py-2 text-left">SMTP</th>
+                <th class="px-4 py-2 text-left">Auth</th>
+                <th class="px-4 py-2 text-left">Статус</th>
+                <th class="px-4 py-2 text-left">Действия</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $row): ?>
+                <tr class="border-t">
+                    <td class="px-4 py-2"><?= (int)$row['id'] ?></td>
+                    <td class="px-4 py-2 font-mono text-sm"><?= h((string)$row['email']) ?></td>
+                    <td class="px-4 py-2">
+                        <a href="index.php?action=referent_view&id=<?= (int)$row['referent_id'] ?>" class="text-blue-600 hover:underline">
+                            <?= h((string)$row['referent_name']) ?>
+                        </a>
+                        <div class="text-xs text-slate-500"><?= h((string)$row['local_inbox']) ?></div>
+                    </td>
+                    <td class="px-4 py-2 text-sm"><?= h((string)$row['imap_host']) ?>:<?= (int)$row['imap_port'] ?></td>
+                    <td class="px-4 py-2 text-sm"><?= h((string)$row['smtp_host']) ?>:<?= (int)$row['smtp_port'] ?></td>
+                    <td class="px-4 py-2"><?= h((string)$row['auth_type']) ?></td>
+                    <td class="px-4 py-2"><?= (int)$row['ea_active'] === 1 ? 'Активен' : 'Отключён' ?></td>
+                    <td class="px-4 py-2"><?php renderAccountRowActions($row, 'account_list'); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif;
+    renderFooter();
+}
+
+/**
+ * @param array<string, mixed> $row
+ */
+function renderReferentRowActions(array $row, string $returnAction): void
+{
+    $id = (int)$row['id'];
+    ?>
+    <div class="flex gap-2 flex-wrap">
+        <a class="bg-indigo-600 text-white px-3 py-1 rounded text-sm"
+           href="index.php?action=referent_view&id=<?= $id ?>">Просмотр</a>
+        <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+           href="index.php?action=referent_form&id=<?= $id ?>">Редактировать</a>
+        <a class="bg-amber-500 text-white px-3 py-1 rounded text-sm"
+           href="index.php?action=account_form&referent_id=<?= $id ?><?= !empty($row['ea_id']) ? '&account_id=' . (int)$row['ea_id'] : '' ?>">
+            <?= !empty($row['ea_id']) ? 'Внешний аккаунт' : 'Создать аккаунт' ?>
+        </a>
+    </div>
+    <div class="flex gap-2 flex-wrap mt-2">
+        <?php renderEntityToggleButton('referent', $id, (int)$row['r_active'], 'Реф.', $returnAction); ?>
+        <?php if (!empty($row['client_id'])): ?>
+            <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент', $returnAction); ?>
+        <?php endif; ?>
+        <?php if (!empty($row['ea_id'])): ?>
+            <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.', $returnAction); ?>
+        <?php endif; ?>
+    </div>
+    <div class="flex gap-2 flex-wrap mt-2">
+        <form method="post" action="index.php?action=referent_delete" class="inline"
+              onsubmit="return confirm('Удалить референта <?= h((string)$row['username']) ?> и все связанные записи?');">
+            <input type="hidden" name="action" value="referent_delete">
+            <input type="hidden" name="id" value="<?= $id ?>">
+            <input type="hidden" name="return_action" value="<?= h($returnAction) ?>">
+            <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+            <button type="submit" class="bg-red-800 text-white px-3 py-1 rounded text-sm">Удалить</button>
+        </form>
+    </div>
+    <?php
+}
+
+/**
+ * @param array<string, mixed> $row
+ */
+function renderAccountRowActions(array $row, string $returnAction): void
+{
+    $accountId = (int)$row['id'];
+    $referentId = (int)$row['referent_id'];
+    ?>
+    <div class="flex gap-2 flex-wrap">
+        <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+           href="index.php?action=account_form&referent_id=<?= $referentId ?>&account_id=<?= $accountId ?>">Редактировать</a>
+        <a class="bg-indigo-600 text-white px-3 py-1 rounded text-sm"
+           href="index.php?action=referent_view&id=<?= $referentId ?>">Референт</a>
+    </div>
+    <div class="flex gap-2 flex-wrap mt-2">
+        <?php renderEntityToggleButton('account', $accountId, (int)$row['ea_active'], 'Аккаунт', $returnAction); ?>
+        <form method="post" action="index.php?action=account_delete" class="inline"
+              onsubmit="return confirm('Удалить внешний аккаунт <?= h((string)$row['email']) ?>?');">
+            <input type="hidden" name="action" value="account_delete">
+            <input type="hidden" name="id" value="<?= $accountId ?>">
+            <input type="hidden" name="referent_id" value="<?= $referentId ?>">
+            <input type="hidden" name="return_action" value="<?= h($returnAction) ?>">
+            <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+            <button type="submit" class="bg-red-600 text-white px-3 py-1 rounded text-sm">Удалить</button>
+        </form>
+    </div>
+    <?php
+}
+
 function renderReferentForm(): void
 {
     $pdo = getPdo();
@@ -439,6 +605,9 @@ function renderReferentForm(): void
     renderHeader(__('referent.title'));
 
     ?>
+    <div class="mb-4">
+        <a href="index.php?action=referent_list" class="text-blue-600 hover:underline">← К списку референтов</a>
+    </div>
     <h2 class="text-2xl font-bold mb-6">
         <?= !empty($referent['id']) ? h(__('referent.edit')) : h(__('referent.new')) ?>
     </h2>
@@ -695,7 +864,7 @@ function handleReferentSave(): void
         setFlash('error', exceptionUserMessage($e));
     }
 
-    redirectTo('dashboard');
+    redirectTo('referent_list');
 }
 function renderAccountForm(): void
 {
@@ -705,7 +874,7 @@ function renderAccountForm(): void
 
     if ($referentId <= 0) {
         setFlash('error', __('account.referent_id_required'));
-        redirectTo('dashboard');
+        redirectTo('account_list');
     }
 	$accountId = (int)($_GET['account_id'] ?? 0);
 
@@ -757,6 +926,10 @@ function renderAccountForm(): void
 
     renderHeader(__('account.title'));
     ?>
+    <div class="mb-4">
+        <a href="index.php?action=account_list" class="text-blue-600 hover:underline">← К списку аккаунтов</a>
+        · <a href="index.php?action=referent_view&id=<?= $referentId ?>" class="text-blue-600 hover:underline">Референт</a>
+    </div>
     <h2 class="text-2xl font-bold mb-6">
         <?= h(__('account.heading')) ?>
     </h2>
@@ -985,7 +1158,7 @@ function handleAccountSave(): void
 
     if ($referentId <= 0) {
         setFlash('error', __('account.referent_id_required'));
-        redirectTo('dashboard');
+        redirectTo('account_list');
     }
 
     $email = trim((string)($_POST['email'] ?? ''));
@@ -1135,7 +1308,7 @@ function handleAccountSave(): void
         setFlash('error', exceptionUserMessage($e));
     }
 
-    redirectTo('dashboard');
+    redirectTo('account_list');
 }
 
 function handleToggleActive(): void
@@ -1176,11 +1349,23 @@ function handleToggleActive(): void
 
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
 
+    $return = (string)($_POST['return_action'] ?? 'dashboard');
+    $allowedReturns = ['dashboard', 'referent_list', 'referents', 'account_list', 'accounts'];
+    if (!in_array($return, $allowedReturns, true)) {
+        $return = 'dashboard';
+    }
+    if ($return === 'referents') {
+        $return = 'referent_list';
+    }
+    if ($return === 'accounts') {
+        $return = 'account_list';
+    }
+
     setFlash('success', __('error.status_changed'));
-    redirectTo('dashboard');
+    redirectTo($return);
 }
 
-function renderEntityToggleButton(string $entity, int $id, int $active, string $label): void
+function renderEntityToggleButton(string $entity, int $id, int $active, string $label, string $returnAction = 'dashboard'): void
 {
     $isOn = $active === 1;
     $actionLabel = $isOn ? 'Выкл' : 'Вкл';
@@ -1190,6 +1375,7 @@ function renderEntityToggleButton(string $entity, int $id, int $active, string $
         <input type="hidden" name="action" value="toggle_active">
         <input type="hidden" name="entity" value="<?= h($entity) ?>">
         <input type="hidden" name="id" value="<?= $id ?>">
+        <input type="hidden" name="return_action" value="<?= h($returnAction) ?>">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
         <button type="submit" class="<?= $btnClass ?> text-white px-2 py-1 rounded text-sm" title="<?= h($label) ?>">
             <?= h($label) ?>: <?= h($actionLabel) ?>
@@ -1205,7 +1391,7 @@ function renderReferentView(): void
 
     if ($id <= 0) {
         setFlash('error', 'Не указан референт');
-        redirectTo('dashboard');
+        redirectTo('referent_list');
     }
 
     $stmt = $pdo->prepare(
@@ -1227,7 +1413,7 @@ function renderReferentView(): void
 
     if (!$row) {
         setFlash('error', 'Референт не найден');
-        redirectTo('dashboard');
+        redirectTo('referent_list');
     }
 
     $localMail = loadLocalMailClientSettings();
@@ -1235,7 +1421,7 @@ function renderReferentView(): void
     renderHeader('Почтовый клиент — ' . (string)$row['username']);
     ?>
     <div class="mb-4">
-        <a href="index.php?action=dashboard" class="text-blue-600 hover:underline">← К сводке</a>
+        <a href="index.php?action=referent_list" class="text-blue-600 hover:underline">← К списку референтов</a>
     </div>
 
     <h2 class="text-2xl font-bold mb-2">Настройка почтового клиента</h2>
@@ -1336,7 +1522,7 @@ function handleReferentDelete(): void
 
     if (!$row) {
         setFlash('error', 'Референт не найден');
-        redirectTo('dashboard');
+        redirectTo('referent_list');
     }
 
     $stmt = $pdo->prepare('DELETE FROM referents WHERE id = ?');
@@ -1344,7 +1530,7 @@ function handleReferentDelete(): void
 
     writeLog('Referent deleted: ID ' . $id . ' username=' . (string)$row['username']);
     setFlash('success', 'Референт удалён');
-    redirectTo('dashboard');
+    redirectTo('referent_list');
 }
 
 function handleAccountDelete(): void
@@ -1372,5 +1558,5 @@ function handleAccountDelete(): void
 
     writeLog('External account deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', 'Внешний аккаунт удалён');
-    redirectTo('dashboard');
+    redirectTo('account_list');
 }

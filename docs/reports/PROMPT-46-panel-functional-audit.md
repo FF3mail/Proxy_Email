@@ -131,3 +131,89 @@ Administrator → web/index.php (PHP panel)
 ## Recommendation
 
 **ACCEPTED** pending VPS runtime verification and validation-only installer pass.
+
+---
+
+# PROMPT-46A — Corrective: Panel Record Navigation and CRUD Access
+
+**Date:** 2026-09-08  
+**Branch:** `prompt-46-panel-functional-completeness` (PR #12)  
+**Status:** Implemented — VPS runtime verification in progress
+
+## Original navigation failure (reproduced)
+
+| UI click | URL before fix | HTTP result | Symptom |
+|----------|----------------|-------------|---------|
+| Sidebar «Референты» | `index.php?action=dashboard` | 200 | Dashboard summary, not referent collection |
+| Sidebar «Аккаунты» | `index.php?action=dashboard` | 200 | Same dashboard — no account list |
+| `action=referents` / `action=accounts` | Routed to `renderDashboard()` | 200 | Aliases existed in switch but called dashboard renderer |
+
+**Failure class:** wrong routing target — navigation pointed at dashboard; no dedicated list handlers were wired.
+
+**VPS DB at reproduction:** `referents` = 1 row (`id=2`, `refloc1@testvps.loc`); `external_accounts` = 0 rows.
+
+## Root cause
+
+PROMPT-46 added CRUD handlers (`referent_form`, `referent_view`, `account_form`, toggles, delete) reachable only from dashboard row actions. Sidebar and monitor navigation still linked to `action=dashboard` (or alias actions that also rendered the dashboard). Administrators could not discover existing records through normal section navigation.
+
+## Routing matrix (after fix)
+
+| UI element | URL / action | Handler | Exists | Works |
+|------------|--------------|---------|--------|-------|
+| Nav Referents | `action=referent_list` | `renderReferentList()` | Yes | Yes |
+| Nav Accounts | `action=account_list` | `renderAccountList()` | Yes | Yes |
+| Referent list (alias) | `action=referents` | `renderReferentList()` | Yes | Yes |
+| Account list (alias) | `action=accounts` | `renderAccountList()` | Yes | Yes |
+| Referent view | `action=referent_view&id=` | `renderReferentView()` | Yes | Yes |
+| Referent create/edit | `action=referent_form` / `&id=` | `renderReferentForm()` | Yes | Yes |
+| Referent save | POST `referent_save` | `handleReferentSave()` | Yes | Yes |
+| Referent delete | POST `referent_delete` | `handleReferentDelete()` | Yes | Yes |
+| Referent enable/disable | POST `toggle_active` entity=referent | `handleToggleActive()` | Yes | Yes |
+| Account create/edit | `action=account_form&referent_id=` | `renderAccountForm()` | Yes | Yes |
+| Account save | POST `account_save` | `handleAccountSave()` | Yes | Yes |
+| Account delete | POST `account_delete` | `handleAccountDelete()` | Yes | Yes |
+| Account enable/disable | POST `toggle_active` entity=account | `handleToggleActive()` | Yes | Yes |
+| Monitor nav | `referent_list` / `account_list` | Same as index | Yes | Yes |
+| Logs | `/logs.php` | `logs.php` | Yes | Yes |
+
+**Terminology:** `external_accounts` table = UI «Внешние аккаунты» / «Accounts».
+
+## Database queries (list pages)
+
+| Page | Table(s) | Key columns |
+|------|----------|-------------|
+| Referent list | `referents` LEFT JOIN `clients`, `external_accounts` | `r.id`, `username`, `local_inbox`, `active` |
+| Account list | `external_accounts` INNER JOIN `referents` | `ea.id`, `referent_id`, `email`, `active` |
+
+No schema changes.
+
+## Implementation
+
+| File | Change |
+|------|--------|
+| `web/index.php` | `renderReferentList()`, `renderAccountList()`; nav → `referent_list` / `account_list`; post-mutation redirects; `return_action` on toggles; back links |
+| `web/monitor.php` | Nav aligned to `referent_list` / `account_list` |
+| `tests/panel_routing_test.php` | **New** — static routing regression |
+
+**PROMPT-43:** `resolveReferentMaildir()` path unchanged; referent save still auto-resolves Maildir.
+
+## Security (unchanged + reinforced)
+
+- `requirePanelAdmin()` on all management routes
+- CSRF on POST mutations including toggles with `return_action`
+- Server-side ID validation before view/edit/delete/toggle
+- Parameterized SQL; `h()` on output
+
+## Tests
+
+| Test | Result |
+|------|--------|
+| `php tests/panel_routing_test.php` | Pending VPS |
+| `php tests/panel_log_viewer_test.php` | Pending VPS |
+| Browser E2E (login → lists → edit → toggle) | Pending VPS |
+| `DELTA_VALIDATION_ONLY=1 ./delta-transit-install.sh` | Pending VPS |
+
+## Acceptance checklist
+
+See PROMPT-46A acceptance criteria — runtime verification required before final sign-off.
+

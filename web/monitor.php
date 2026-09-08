@@ -558,9 +558,9 @@ $statusLabel = match($daemonStatus['status']) {
 <!-- Навигационное меню — интегрируется с существующей панелью управления -->
 <nav class="nav">
     <a href="/index.php"><?= h(__('nav.control_panel')) ?></a>
-    <a href="/index.php?action=referents"><?= h(__('nav.referents')) ?></a>
-    <a href="/index.php?action=accounts"><?= h(__('nav.accounts')) ?></a>
-    <a href="/index.php?action=providers"><?= h(__('nav.providers')) ?></a>
+    <a href="/index.php?action=referent_list"><?= h(__('nav.referents')) ?></a>
+    <a href="/index.php?action=account_list"><?= h(__('nav.accounts')) ?></a>
+    <a href="/index.php?action=provider_list"><?= h(__('nav.providers')) ?></a>
     <a href="/monitor.php" class="active"><?= h(__('nav.monitor')) ?></a>
     <a href="/logs.php">Логи</a>
     <span style="margin-left:auto;" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></span>
