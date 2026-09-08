@@ -16,6 +16,9 @@ initPanelI18n();
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 
+require_once __DIR__ . '/includes/log_viewer.php';
+require_once __DIR__ . '/includes/log_tail.php';
+
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
 
@@ -42,69 +45,8 @@ const DAEMON_SERVICE_NAME = 'mail-proxy';
 
 // ============================================================
 // Вспомогательные функции парсинга логов
+// tailFile() — см. includes/log_tail.php
 // ============================================================
-
-/**
- * Читает последние $lines строк файла без загрузки всего файла в память.
- * Использует побайтовый обход с конца файла — эффективно для больших логов.
- *
- * @param string $filePath  Полный путь к лог-файлу
- * @param int    $lines     Количество строк с хвоста
- * @return string[]         Массив строк (без завершающего \n)
- */
-function tailFile(string $filePath, int $lines): array
-{
-    if (!is_readable($filePath)) {
-        return [];
-    }
-
-    $fp = @fopen($filePath, 'rb');
-    if ($fp === false) {
-        return [];
-    }
-
-    $result  = [];
-    $buffer  = '';
-    $found   = 0;
-
-    // Перемещаемся в конец файла
-    fseek($fp, 0, SEEK_END);
-    $pos = ftell($fp);
-
-    // Читаем блоками по 4096 байт с конца
-    while ($pos > 0 && $found < $lines) {
-        $chunkSize = min(4096, $pos);
-        $pos      -= $chunkSize;
-        fseek($fp, $pos);
-        $chunk  = fread($fp, $chunkSize);
-        $buffer = $chunk . $buffer;
-
-        // Разбиваем накопленный буфер по переносам строк
-        $parts = explode("\n", $buffer);
-
-        // Последний (незавершённый) фрагмент оставляем в буфере
-        $buffer = array_shift($parts);
-
-        // Добавляем завершённые строки в начало результата
-        foreach (array_reverse($parts) as $line) {
-            if ($found >= $lines) {
-                break;
-            }
-            $result[] = $line;
-            $found++;
-        }
-    }
-
-    // Если в буфере остался последний фрагмент — добавляем его
-    if ($buffer !== '' && $found < $lines) {
-        $result[] = $buffer;
-    }
-
-    fclose($fp);
-
-    // Возвращаем строки в хронологическом порядке (старые → новые)
-    return array_reverse($result);
-}
 
 /**
  * Парсит одну строку лога и возвращает структурированный массив.
@@ -428,6 +370,9 @@ $criticalEvents = array_merge(
 usort($criticalEvents, fn($a, $b) => strcmp($b['ts'], $a['ts']));
 $criticalEvents = array_slice($criticalEvents, 0, MONITOR_EVENTS_PER_SECTION);
 
+// Журнал действий веб-панели (все уровни)
+$webAdminEvents = loadLogEvents($webAdminLog, levels: [], limit: MONITOR_EVENTS_PER_SECTION);
+
 // ============================================================
 // Вспомогательная функция рендеринга таблицы событий
 // ============================================================
@@ -617,6 +562,7 @@ $statusLabel = match($daemonStatus['status']) {
     <a href="/index.php?action=accounts"><?= h(__('nav.accounts')) ?></a>
     <a href="/index.php?action=providers"><?= h(__('nav.providers')) ?></a>
     <a href="/monitor.php" class="active"><?= h(__('nav.monitor')) ?></a>
+    <a href="/logs.php">Логи</a>
     <span style="margin-left:auto;" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></span>
 </nav>
 
@@ -624,6 +570,7 @@ $statusLabel = match($daemonStatus['status']) {
     <div style="display:flex; align-items:center; margin: 20px 0 4px;">
         <h1><?= h(__('monitor.heading')) ?></h1>
         <a href="/monitor.php" class="btn-refresh"><?= h(__('monitor.refresh')) ?></a>
+        <a href="/logs.php" class="btn-refresh" style="margin-left:12px;">Полный просмотр логов</a>
     </div>
     <p class="page-meta">
         <?= h(__('monitor.data_from')) ?> <?= h(LOG_DIR) ?> &nbsp;|&nbsp;
@@ -661,7 +608,13 @@ $statusLabel = match($daemonStatus['status']) {
         </div>
     </div>
 
-    <!-- Секция 2: Критические события -->
+    <!-- Секция 2: Журнал веб-панели -->
+    <div class="section">
+        <h2>Журнал веб-панели</h2>
+        <?php renderEventsTable($webAdminEvents, 'Записей веб-панели не найдено'); ?>
+    </div>
+
+    <!-- Секция 3: Критические события -->
     <div class="section">
         <h2><?= h(__('monitor.critical_events')) ?></h2>
         <?php renderEventsTable($criticalEvents, __('monitor.no_critical')); ?>

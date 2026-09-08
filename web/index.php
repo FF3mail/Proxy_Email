@@ -29,6 +29,7 @@ require_once __DIR__ . '/includes/panel_auth_ui.php';
 require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
+require_once __DIR__ . '/includes/panel_local_mail.php';
 
 use MailProxy\Cryptor;
 
@@ -44,7 +45,9 @@ $postActionsRequiringCsrf = [
     'login_submit',
     'logout',
     'referent_save',
+    'referent_delete',
     'account_save',
+    'account_delete',
     'toggle_active',
     'provider_save',
     'provider_toggle',
@@ -202,12 +205,24 @@ switch ($action) {
         handleReferentSave();
         break;
 
+    case 'referent_delete':
+        handleReferentDelete();
+        break;
+
+    case 'referent_view':
+        renderReferentView();
+        break;
+
     case 'account_form':
         renderAccountForm();
         break;
 
     case 'account_save':
         handleAccountSave();
+        break;
+
+    case 'account_delete':
+        handleAccountDelete();
         break;
 
     case 'toggle_active':
@@ -257,9 +272,12 @@ function renderDashboard(): void
 
     $stmt = $pdo->prepare(
 		'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
-				c.email as client_email, c.active as c_active,
-				ea.id as ea_id, ea.email as ea_email, ea.auth_type, ea.provider,
-				ea.imap_host, ea.imap_port, ea.smtp_host, ea.smtp_port, ea.active as ea_active,
+				c.id as client_id, c.email as client_email, c.active as c_active,
+				ea.id as ea_id, ea.email as ea_email, ea.username as ea_username,
+				ea.auth_type, ea.provider,
+				ea.imap_host, ea.imap_port, ea.imap_encryption,
+				ea.smtp_host, ea.smtp_port, ea.smtp_encryption,
+				ea.active as ea_active,
 				ot.expires_at, ot.updated_at as token_updated
 		 FROM referents r
 		 LEFT JOIN clients c ON c.referent_id = r.id
@@ -323,18 +341,45 @@ function renderDashboard(): void
                     </td>
                     <td class="px-4 py-2">
                         <div class="flex gap-2 flex-wrap">
-                            <a class="bg-amber-500 text-white px-3 py-1 rounded"
+                            <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+                               href="index.php?action=referent_form&id=<?= (int)$row['id'] ?>">
+                                Редактировать
+                            </a>
+                            <a class="bg-indigo-600 text-white px-3 py-1 rounded text-sm"
+                               href="index.php?action=referent_view&id=<?= (int)$row['id'] ?>">
+                                Почтовый клиент
+                            </a>
+                            <a class="bg-amber-500 text-white px-3 py-1 rounded text-sm"
 							   href="index.php?action=account_form&referent_id=<?= (int)$row['id'] ?><?= $row['ea_id'] ? '&account_id=' . (int)$row['ea_id'] : '' ?>">
-								<?= $row['ea_id'] ? h(__('dashboard.edit_account')) : h(__('dashboard.create_account')) ?>
+								<?= $row['ea_id'] ? 'Внешний аккаунт' : 'Создать аккаунт' ?>
 							</a>
-                            <form method="post" action="index.php?action=toggle_active" class="inline">
-                                <input type="hidden" name="action" value="toggle_active">
-                                <input type="hidden" name="entity" value="referent">
+                        </div>
+                        <div class="flex gap-2 flex-wrap mt-2">
+                            <?php renderEntityToggleButton('referent', (int)$row['id'], (int)$row['r_active'], 'Реф.'); ?>
+                            <?php if (!empty($row['client_id'])): ?>
+                                <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент'); ?>
+                            <?php endif; ?>
+                            <?php if (!empty($row['ea_id'])): ?>
+                                <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.'); ?>
+                            <?php endif; ?>
+                        </div>
+                        <div class="flex gap-2 flex-wrap mt-2">
+                            <?php if (!empty($row['ea_id'])): ?>
+                                <form method="post" action="index.php?action=account_delete" class="inline"
+                                      onsubmit="return confirm('Удалить внешний аккаунт <?= h((string)$row['ea_email']) ?>?');">
+                                    <input type="hidden" name="action" value="account_delete">
+                                    <input type="hidden" name="id" value="<?= (int)$row['ea_id'] ?>">
+                                    <input type="hidden" name="referent_id" value="<?= (int)$row['id'] ?>">
+                                    <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+                                    <button type="submit" class="bg-red-600 text-white px-3 py-1 rounded text-sm">Удалить аккаунт</button>
+                                </form>
+                            <?php endif; ?>
+                            <form method="post" action="index.php?action=referent_delete" class="inline"
+                                  onsubmit="return confirm('Удалить референта <?= h((string)$row['username']) ?> и все связанные записи?');">
+                                <input type="hidden" name="action" value="referent_delete">
                                 <input type="hidden" name="id" value="<?= (int)$row['id'] ?>">
                                 <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                                <button class="bg-slate-700 text-white px-3 py-1 rounded">
-                                    <?= h(__('common.toggle')) ?>
-                                </button>
+                                <button type="submit" class="bg-red-800 text-white px-3 py-1 rounded text-sm">Удалить референта</button>
                             </form>
                         </div>
                     </td>
@@ -716,6 +761,13 @@ function renderAccountForm(): void
         <?= h(__('account.heading')) ?>
     </h2>
 
+    <div class="bg-blue-50 border border-blue-200 rounded p-4 mb-6 text-sm text-blue-900">
+        <p class="font-medium mb-1">Как это работает</p>
+        <p>Демон периодически опрашивает внешний IMAP и доставляет новые письма в локальный ящик референта.
+        Исходящая почта из Maildir отправляется через указанный SMTP. Пароли хранятся в зашифрованном виде;
+        при редактировании оставьте поле пароля пустым, чтобы не менять сохранённый секрет.</p>
+    </div>
+
     <form method="post" action="index.php?action=account_save" class="bg-white rounded shadow p-6 space-y-4">
         <input type="hidden" name="action" value="account_save">
         <input type="hidden" name="referent_id" value="<?= $referentId ?>">
@@ -970,6 +1022,19 @@ function handleAccountSave(): void
 		$clientSecretEnc = $cryptor->encrypt($clientSecret);
 	}
 
+    if ($accountId === 0) {
+        if ($authType === 'plain' && $password === '') {
+            setFlash('error', 'Для plain-авторизации необходимо указать пароль при создании аккаунта');
+            header('Location: index.php?action=account_form&referent_id=' . $referentId);
+            exit();
+        }
+        if ($authType === 'oauth2' && ($clientId === '' || $clientSecret === '')) {
+            setFlash('error', 'Для OAuth2 необходимо указать Client ID и Client Secret при создании аккаунта');
+            header('Location: index.php?action=account_form&referent_id=' . $referentId);
+            exit();
+        }
+    }
+
     try {
         if ($accountId > 0) {
             $stmt = $pdo->prepare(
@@ -1112,5 +1177,200 @@ function handleToggleActive(): void
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
 
     setFlash('success', __('error.status_changed'));
+    redirectTo('dashboard');
+}
+
+function renderEntityToggleButton(string $entity, int $id, int $active, string $label): void
+{
+    $isOn = $active === 1;
+    $actionLabel = $isOn ? 'Выкл' : 'Вкл';
+    $btnClass = $isOn ? 'bg-slate-600' : 'bg-green-700';
+    ?>
+    <form method="post" action="index.php?action=toggle_active" class="inline">
+        <input type="hidden" name="action" value="toggle_active">
+        <input type="hidden" name="entity" value="<?= h($entity) ?>">
+        <input type="hidden" name="id" value="<?= $id ?>">
+        <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+        <button type="submit" class="<?= $btnClass ?> text-white px-2 py-1 rounded text-sm" title="<?= h($label) ?>">
+            <?= h($label) ?>: <?= h($actionLabel) ?>
+        </button>
+    </form>
+    <?php
+}
+
+function renderReferentView(): void
+{
+    $pdo = getPdo();
+    $id = (int)($_GET['id'] ?? 0);
+
+    if ($id <= 0) {
+        setFlash('error', 'Не указан референт');
+        redirectTo('dashboard');
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
+                c.id as client_id, c.email as client_email, c.active as c_active,
+                ea.id as ea_id, ea.email as ea_email, ea.username as ea_username,
+                ea.auth_type, ea.provider, ea.imap_host, ea.imap_port, ea.imap_encryption,
+                ea.smtp_host, ea.smtp_port, ea.smtp_encryption, ea.active as ea_active,
+                ot.expires_at
+         FROM referents r
+         LEFT JOIN clients c ON c.referent_id = r.id
+         LEFT JOIN external_accounts ea ON ea.referent_id = r.id
+         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
+         WHERE r.id = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+
+    if (!$row) {
+        setFlash('error', 'Референт не найден');
+        redirectTo('dashboard');
+    }
+
+    $localMail = loadLocalMailClientSettings();
+
+    renderHeader('Почтовый клиент — ' . (string)$row['username']);
+    ?>
+    <div class="mb-4">
+        <a href="index.php?action=dashboard" class="text-blue-600 hover:underline">← К сводке</a>
+    </div>
+
+    <h2 class="text-2xl font-bold mb-2">Настройка почтового клиента</h2>
+    <p class="text-slate-600 mb-6">
+        Референт: <strong><?= h((string)$row['username']) ?></strong>
+        — <?= (int)$row['r_active'] === 1 ? 'активен' : 'отключён' ?>
+    </p>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div class="bg-white rounded shadow p-6">
+            <h3 class="text-lg font-semibold mb-4">Локальный ящик (iRedMail)</h3>
+            <p class="text-sm text-slate-600 mb-4">
+                Эти параметры нужны для настройки Thunderbird, Outlook и других клиентов
+                для доступа к локальному ящику референта на сервере DELTA-транзит.
+            </p>
+            <dl class="space-y-3 text-sm">
+                <div><dt class="font-medium text-slate-500">Email / логин</dt>
+                    <dd class="font-mono"><?= h((string)$row['local_inbox']) ?></dd></div>
+                <div><dt class="font-medium text-slate-500">Пароль</dt>
+                    <dd>Задаётся в iRedMail при создании почтового ящика. Панель не хранит и не показывает пароль.</dd></div>
+                <div><dt class="font-medium text-slate-500">IMAP</dt>
+                    <dd class="font-mono"><?= h($localMail['imap_host']) ?>:<?= (int)$localMail['imap_port'] ?> (<?= h(formatMailEncryption($localMail['imap_encryption'])) ?>)</dd></div>
+                <div><dt class="font-medium text-slate-500">SMTP</dt>
+                    <dd class="font-mono"><?= h($localMail['smtp_host']) ?>:<?= (int)$localMail['smtp_port'] ?> (<?= h(formatMailEncryption($localMail['smtp_encryption'])) ?>)</dd></div>
+                <?php if (!empty($row['local_outbox'])): ?>
+                <div><dt class="font-medium text-slate-500">Maildir (системный)</dt>
+                    <dd class="font-mono text-xs break-all"><?= h((string)$row['local_outbox']) ?></dd></div>
+                <?php endif; ?>
+            </dl>
+            <p class="text-xs text-slate-500 mt-4">
+                Сервер IMAP/SMTP можно переопределить в <code>/etc/mail-proxy/panel.conf</code> секция <code>[local_mail]</code>.
+            </p>
+        </div>
+
+        <div class="bg-white rounded shadow p-6">
+            <h3 class="text-lg font-semibold mb-4">Маршрутизация входящей почты</h3>
+            <p class="text-sm text-slate-600 mb-4">
+                Демон доставляет входящие письма на локальный ящик, если в поле «Кому» указан email корреспондента.
+            </p>
+            <?php if (!empty($row['client_email'])): ?>
+            <dl class="space-y-3 text-sm">
+                <div><dt class="font-medium text-slate-500">Email корреспондента</dt>
+                    <dd class="font-mono"><?= h((string)$row['client_email']) ?></dd></div>
+                <div><dt class="font-medium text-slate-500">Статус</dt>
+                    <dd><?= (int)$row['c_active'] === 1 ? 'Активен' : 'Отключён' ?></dd></div>
+            </dl>
+            <?php else: ?>
+            <p class="text-sm text-amber-700">Email корреспондента не задан. <a href="index.php?action=referent_form&id=<?= $id ?>" class="underline">Редактировать референта</a></p>
+            <?php endif; ?>
+        </div>
+
+        <div class="bg-white rounded shadow p-6 lg:col-span-2">
+            <h3 class="text-lg font-semibold mb-4">Внешний почтовый аккаунт (исходящая/входящая синхронизация)</h3>
+            <?php if (!empty($row['ea_id'])): ?>
+            <p class="text-sm text-slate-600 mb-4">
+                Демон опрашивает внешний IMAP и отправляет исходящую почту через внешний SMTP.
+                Пароли и OAuth-токены хранятся в зашифрованном виде и не отображаются.
+            </p>
+            <dl class="grid md:grid-cols-2 gap-4 text-sm">
+                <div><dt class="font-medium text-slate-500">Email</dt><dd class="font-mono"><?= h((string)$row['ea_email']) ?></dd></div>
+                <div><dt class="font-medium text-slate-500">Логин IMAP/SMTP</dt><dd class="font-mono"><?= h((string)($row['ea_username'] ?: $row['ea_email'])) ?></dd></div>
+                <div><dt class="font-medium text-slate-500">Авторизация</dt><dd><?= h((string)$row['auth_type']) ?><?= $row['provider'] ? ' (' . h((string)$row['provider']) . ')' : '' ?></dd></div>
+                <div><dt class="font-medium text-slate-500">Статус</dt><dd><?= (int)$row['ea_active'] === 1 ? 'Активен' : 'Отключён' ?></dd></div>
+                <div><dt class="font-medium text-slate-500">IMAP</dt><dd class="font-mono"><?= h((string)$row['imap_host']) ?>:<?= (int)$row['imap_port'] ?> (<?= h(formatMailEncryption((string)$row['imap_encryption'])) ?>)</dd></div>
+                <div><dt class="font-medium text-slate-500">SMTP</dt><dd class="font-mono"><?= h((string)$row['smtp_host']) ?>:<?= (int)$row['smtp_port'] ?> (<?= h(formatMailEncryption((string)$row['smtp_encryption'])) ?>)</dd></div>
+                <?php if ($row['auth_type'] === 'oauth2' && $row['expires_at']): ?>
+                <div><dt class="font-medium text-slate-500">OAuth2 токен</dt><dd><?= h((string)$row['expires_at']) ?> (<?= strtotime((string)$row['expires_at']) > time() ? 'активен' : 'истёк' ?>)</dd></div>
+                <?php endif; ?>
+            </dl>
+            <div class="mt-4 flex gap-3">
+                <a href="index.php?action=account_form&referent_id=<?= $id ?>&account_id=<?= (int)$row['ea_id'] ?>"
+                   class="bg-amber-500 text-white px-4 py-2 rounded">Редактировать внешний аккаунт</a>
+            </div>
+            <?php else: ?>
+            <p class="text-sm text-amber-700 mb-4">Внешний аккаунт не настроен. Без него демон не сможет синхронизировать почту с удалённым сервером.</p>
+            <a href="index.php?action=account_form&referent_id=<?= $id ?>"
+               class="bg-blue-600 text-white px-4 py-2 rounded inline-block">Создать внешний аккаунт</a>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php
+    renderFooter();
+}
+
+function handleReferentDelete(): void
+{
+    $pdo = getPdo();
+    $id = (int)($_POST['id'] ?? 0);
+
+    if ($id <= 0) {
+        setFlash('error', 'Некорректный референт');
+        redirectTo('dashboard');
+    }
+
+    $stmt = $pdo->prepare('SELECT id, username FROM referents WHERE id = ?');
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+
+    if (!$row) {
+        setFlash('error', 'Референт не найден');
+        redirectTo('dashboard');
+    }
+
+    $stmt = $pdo->prepare('DELETE FROM referents WHERE id = ?');
+    $stmt->execute([$id]);
+
+    writeLog('Referent deleted: ID ' . $id . ' username=' . (string)$row['username']);
+    setFlash('success', 'Референт удалён');
+    redirectTo('dashboard');
+}
+
+function handleAccountDelete(): void
+{
+    $pdo = getPdo();
+    $id = (int)($_POST['id'] ?? 0);
+    $referentId = (int)($_POST['referent_id'] ?? 0);
+
+    if ($id <= 0 || $referentId <= 0) {
+        setFlash('error', 'Некорректный аккаунт');
+        redirectTo('dashboard');
+    }
+
+    $stmt = $pdo->prepare('SELECT id, email FROM external_accounts WHERE id = ? AND referent_id = ?');
+    $stmt->execute([$id, $referentId]);
+    $row = $stmt->fetch();
+
+    if (!$row) {
+        setFlash('error', 'Внешний аккаунт не найден');
+        redirectTo('dashboard');
+    }
+
+    $stmt = $pdo->prepare('DELETE FROM external_accounts WHERE id = ? AND referent_id = ?');
+    $stmt->execute([$id, $referentId]);
+
+    writeLog('External account deleted: ID ' . $id . ' email=' . (string)$row['email']);
+    setFlash('success', 'Внешний аккаунт удалён');
     redirectTo('dashboard');
 }
