@@ -898,6 +898,68 @@ PY
     mv "$tmp_file" "$DB_CONF"
 }
 
+# Read-only iRedMail vmail DB credentials for panel Maildir resolution (PROMPT-43).
+provision_vmail_lookup_config() {
+    local map_file="/etc/postfix/mysql/virtual_mailbox_maps.cf"
+    local out_file="${CONFIG_DIR}/vmail-lookup.conf"
+
+    if [[ ! -f "$map_file" ]]
+    then
+        log_info "iRedMail mailbox map not found; skipping vmail-lookup.conf"
+        return 0
+    fi
+
+    if [[ -f "$out_file" ]]
+    then
+        log_info "vmail-lookup.conf already present"
+        return 0
+    fi
+
+    log_info "Provisioning vmail-lookup.conf for referent Maildir resolution"
+
+    python3 - "$map_file" "$out_file" <<'PY'
+import configparser
+import sys
+
+map_file, out_file = sys.argv[1], sys.argv[2]
+parsed = {}
+
+with open(map_file, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parsed[key.strip().lower()] = value.strip()
+
+required = ("hosts", "user", "password", "dbname")
+for key in required:
+    if key not in parsed or not parsed[key]:
+        raise SystemExit(f"Missing {key} in {map_file}")
+
+host = parsed["hosts"]
+port = "3306"
+if ":" in host:
+    host, port = host.split(":", 1)
+
+cfg = configparser.ConfigParser()
+cfg["vmail"] = {
+    "db_host": host,
+    "db_port": port,
+    "db_user": parsed["user"],
+    "db_pass": parsed["password"],
+    "db_name": parsed["dbname"],
+}
+
+with open(out_file, "w", encoding="utf-8") as f:
+    cfg.write(f)
+PY
+
+    chmod 0640 "$out_file"
+    chown root:"$GROUP_CRYPTO" "$out_file"
+    log_ok "vmail-lookup.conf provisioned"
+}
+
 read_db_pass_from_conf() {
     python3 - "$DB_CONF" <<'PY'
 import configparser
@@ -1441,6 +1503,7 @@ WEB_FILES=(
     includes/panel_auth_ui.php
     includes/oauth2.php
     includes/providers_ui.php
+    includes/maildir_resolver.php
 )
 
 validate_web_distribution() {
@@ -1565,6 +1628,7 @@ phase_web() {
     validate_web_distribution
     create_web_root
     deploy_web_files
+    provision_vmail_lookup_config
     update_php_web_config
     verify_app_base_url_written
     verify_php_syntax
