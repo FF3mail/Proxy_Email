@@ -194,6 +194,8 @@ No schema changes.
 | `web/index.php` | `renderReferentList()`, `renderAccountList()`; nav → `referent_list` / `account_list`; post-mutation redirects; `return_action` on toggles; back links |
 | `web/monitor.php` | Nav aligned to `referent_list` / `account_list` |
 | `tests/panel_routing_test.php` | **New** — static routing regression |
+| `tests/panel_list_render_test.php` | **New** — authenticated list render smoke (VPS) |
+| `tests/panel_render_action.php` | Helper for render smoke |
 
 **PROMPT-43:** `resolveReferentMaildir()` path unchanged; referent save still auto-resolves Maildir.
 
@@ -208,10 +210,12 @@ No schema changes.
 
 | Test | Result |
 |------|--------|
-| `php tests/panel_routing_test.php` | Pending VPS |
-| `php tests/panel_log_viewer_test.php` | Pending VPS |
-| Browser E2E (login → lists → edit → toggle) | Pending VPS |
-| `DELTA_VALIDATION_ONLY=1 ./delta-transit-install.sh` | Pending VPS |
+| `php tests/panel_routing_test.php` | **PASS** (VPS `bd8ef51`) |
+| `php tests/panel_list_render_test.php` | Pending VPS |
+| `php tests/panel_log_viewer_test.php` | **PASS** (VPS `bd8ef51`, 8/8) |
+| Unauthenticated list routes | **302 → login** (VPS curl via `127.0.0.1`) |
+| Browser E2E (login → lists → edit → toggle) | Panel host not reachable from dev browser; VPS render smoke used |
+| `DELTA_VALIDATION_ONLY=1 ./delta-transit-install.sh` | **PASS** (VPS) |
 
 ## Acceptance checklist
 
