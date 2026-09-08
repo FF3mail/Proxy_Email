@@ -1,0 +1,101 @@
+@page {
+    size: A4;
+    margin: 2cm;
+}
+
+body, h1, h2, h3, h4, p, li, th, td {
+    font-family: AdminGuideSerif;
+}
+
+body {
+    font-size: 12pt;
+    line-height: 1.35;
+    color: #111;
+}
+
+h1 {
+    font-size: 20pt;
+    text-align: center;
+    margin: 0 0 0.4em;
+}
+
+h2 {
+    font-size: 14pt;
+    margin-top: 1.2em;
+}
+
+h3 {
+    font-size: 12pt;
+    margin-top: 0.9em;
+}
+
+h4 {
+    font-size: 12pt;
+    margin-top: 0.7em;
+}
+
+.title-block {
+    text-align: center;
+    margin-bottom: 2em;
+}
+
+.title-block p {
+    margin: 0.2em 0;
+}
+
+pre, code {
+    font-family: AdminGuideSerif;
+    font-size: 10pt;
+}
+
+pre {
+    background: #f6f6f6;
+    border: 1px solid #ddd;
+    padding: 0.6em 0.8em;
+    white-space: pre-wrap;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.6em 0 1em;
+    font-size: 11pt;
+}
+
+th, td {
+    border: 1px solid #333;
+    padding: 0.35em 0.5em;
+    vertical-align: top;
+}
+
+th {
+    background: #eee;
+}
+
+ul, ol {
+    margin: 0.4em 0 0.8em 1.2em;
+}
+
+.note {
+    border-left: 3px solid #666;
+    padding-left: 0.8em;
+    margin: 0.8em 0;
+}
+
+.warning {
+    border-left: 3px solid #a00;
+    padding-left: 0.8em;
+    margin: 0.8em 0;
+    color: #600;
+}
+
+.section-break {
+    page-break-before: always;
+}
+
+.footer-note {
+    font-size: 9pt;
+    color: #444;
+    text-align: center;
+    margin-top: 2em;
+}
