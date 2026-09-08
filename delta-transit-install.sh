@@ -2259,6 +2259,20 @@ run_certbot_for_panel_hostname() {
     return 0
 }
 
+# subjectAltName for self-signed certs: browsers validate SAN, not CN alone (since ~2017).
+# PARAM_APP_URL / extract_app_hostname() may yield a hostname or a literal IPv4; pick SAN type.
+self_signed_subject_alt_name() {
+    local name="$1"
+
+    if [[ "$name" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    then
+        echo "IP:${name}"
+        return 0
+    fi
+
+    echo "DNS:${name}"
+}
+
 generate_self_signed_certificate() {
 
     if [[ -f "$NGINX_SSL_CERT" && -f "$NGINX_SSL_KEY" ]]
@@ -2282,6 +2296,10 @@ generate_self_signed_certificate() {
         -g root \
         /etc/ssl/private
 
+    local san_ext=""
+    san_ext="$(self_signed_subject_alt_name "$NGINX_SERVER_NAME")"
+
+    # -addext requires OpenSSL >= 1.1.1 (Debian 11 / Ubuntu 20.04+ ship 1.1.1+ or 3.x).
     openssl req \
         -x509 \
         -nodes \
@@ -2289,7 +2307,8 @@ generate_self_signed_certificate() {
         -newkey rsa:4096 \
         -keyout "$NGINX_SSL_KEY" \
         -out "$NGINX_SSL_CERT" \
-        -subj "/CN=${NGINX_SERVER_NAME}"
+        -subj "/CN=${NGINX_SERVER_NAME}" \
+        -addext "subjectAltName=${san_ext}"
 
     chmod 0600 "$NGINX_SSL_KEY"
     chmod 0644 "$NGINX_SSL_CERT"
