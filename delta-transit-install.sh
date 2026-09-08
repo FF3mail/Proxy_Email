@@ -1939,6 +1939,84 @@ extract_app_hostname() {
         || fatal "Unable to extract hostname from PARAM_APP_URL"
 }
 
+# APP_BASE_URL from deployed config.php (validation-only / re-run when PARAM_APP_URL unset).
+read_app_base_url_from_config() {
+    local config_file="${WEB_ROOT}/config.php"
+
+    [[ -f "$config_file" ]] \
+        || fatal "config.php missing — cannot resolve APP_BASE_URL for validation"
+
+    python3 - "$config_file" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    content = f.read()
+
+match = re.search(
+    r"define\(\s*['\"]APP_BASE_URL['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\);",
+    content,
+)
+if not match:
+    raise SystemExit("APP_BASE_URL not found in config.php")
+
+print(match.group(1))
+PY
+}
+
+# Interactive install sets PARAM_APP_URL in Preflight; validation-only reads config.php.
+resolve_param_app_url() {
+    if [[ -n "${PARAM_APP_URL}" ]]
+    then
+        printf '%s\n' "${PARAM_APP_URL}"
+        return 0
+    fi
+    read_app_base_url_from_config
+}
+
+# DELTA_VALIDATION_ONLY=1 skips Nginx phase — hydrate hostname from existing config.
+ensure_validation_app_hostname() {
+    if [[ -n "${NGINX_SERVER_NAME}" ]]
+    then
+        return 0
+    fi
+
+    PARAM_APP_URL="$(resolve_param_app_url)"
+    extract_app_hostname
+    log_info "Resolved panel hostname for validation: ${NGINX_SERVER_NAME} (from APP URL)"
+}
+
+# DELTA_VALIDATION_ONLY=1 skips Nginx phase — read fastcgi_pass from deployed vhost.
+detect_php_fpm_socket_from_vhost() {
+    local line pass
+
+    [[ -f "$NGINX_SITE_AVAILABLE" ]] || return 1
+
+    line="$(grep -E '^\s*fastcgi_pass\s+' "$NGINX_SITE_AVAILABLE" | head -1)" || return 1
+    pass="$(printf '%s\n' "$line" | sed -E 's/^\s*fastcgi_pass\s+([^;]+);.*$/\1/' | tr -d '[:space:]')"
+    [[ -n "$pass" ]] || return 1
+
+    if [[ "$pass" =~ ^unix:(.+)$ ]]
+    then
+        PHP_FPM_SOCKET_DETECTED="${BASH_REMATCH[1]}"
+    else
+        PHP_FPM_SOCKET_DETECTED="$pass"
+    fi
+}
+
+ensure_php_fpm_socket_detected() {
+    if [[ -n "${PHP_FPM_SOCKET_DETECTED}" ]]
+    then
+        return 0
+    fi
+
+    detect_php_fpm_socket_from_vhost \
+        || fatal "Validation failed: cannot detect PHP-FPM socket from nginx vhost"
+
+    log_info "PHP-FPM endpoint resolved from nginx vhost: ${PHP_FPM_SOCKET_DETECTED}"
+}
+
 # -----------------------------------------------------------------------------
 # Проверка конфликта с iRedMail/Postfix
 # -----------------------------------------------------------------------------
@@ -2799,12 +2877,27 @@ validate_nginx_virtual_host() {
 
 validate_nginx_server_name() {
 
-    grep -q \
-        "server_name ${NGINX_SERVER_NAME};" \
-        "$NGINX_SITE_AVAILABLE" \
-        || fatal "Validation failed: server_name mismatch"
+    ensure_validation_app_hostname
 
-    log_info "server_name matches APP_URL"
+    log_info "server_name validation: expected '${NGINX_SERVER_NAME}' from APP URL"
+
+    if grep -q \
+        "server_name ${NGINX_SERVER_NAME};" \
+        "$NGINX_SITE_AVAILABLE"
+    then
+        log_info "server_name matches APP_URL"
+        return 0
+    fi
+
+    local actual=""
+    actual="$(
+        grep -E '^\s*server_name\s+' "$NGINX_SITE_AVAILABLE" \
+            | head -1 \
+            | sed -E 's/^\s*server_name\s+([^;]+);.*/\1/' \
+            | tr -d '[:space:]'
+    )"
+
+    fatal "Validation failed: server_name mismatch (expected '${NGINX_SERVER_NAME}', nginx has '${actual:-unknown}')"
 }
 
 # -----------------------------------------------------------------------------
@@ -2827,6 +2920,8 @@ validate_nginx_ssl() {
 # -----------------------------------------------------------------------------
 
 validate_php_fpm_socket() {
+
+    ensure_php_fpm_socket_detected
 
     # Проверяем, доступен ли сокет/TCP-адрес
     if [[ "$PHP_FPM_SOCKET_DETECTED" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
@@ -2870,6 +2965,8 @@ validate_upload_limit() {
 # -----------------------------------------------------------------------------
 
 validate_nginx_conflicts() {
+
+    ensure_validation_app_hostname
 
     local conflicts=""
     local scan_rc=0
