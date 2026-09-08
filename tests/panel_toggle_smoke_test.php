@@ -22,6 +22,7 @@ function assert_true(bool $cond, string $msg): void
 
 function postAction(string $action, array $fields): void
 {
+    global $webRoot;
     $script = escapeshellarg(__DIR__ . '/panel_post_action.php');
     $args = escapeshellarg($action);
     foreach ($fields as $k => $v) {
