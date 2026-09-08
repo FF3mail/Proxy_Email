@@ -44,6 +44,7 @@ $_GET = $query;
 $_GET['action'] = $action;
 $_POST = [];
 $_SERVER['REQUEST_METHOD'] = 'GET';
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
 $_SERVER['SCRIPT_NAME'] = '/index.php';
 $_SERVER['PHP_SELF'] = '/index.php';
 
