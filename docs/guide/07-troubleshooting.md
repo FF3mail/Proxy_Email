@@ -102,9 +102,11 @@ mysql mail_proxy -e "SELECT account_id, expires_at FROM oauth_tokens;"
 
 ## 7.6. Веб-панель: 403 Access Denied
 
-Панель отклоняет IP вне частных сетей.
+Панель отклоняет IP вне частных сетей **до** формы входа (первый слой allow-list).
 
 **Решение:** подключитесь из LAN/VPN или через SSH-туннель. Не отключайте проверку без понимания рисков.
+
+> Если IP уже в allow-list, но страницы кроме `login`/`login_submit` перенаправляют на вход — это нормально: нужна сессия оператора (`panel_admins`). См. [05-web-panel.md](05-web-panel.md) §5.2.
 
 Если вы **в** локальной сети, но всё равно 403:
 
@@ -119,12 +121,15 @@ mysql mail_proxy -e "SELECT account_id, expires_at FROM oauth_tokens;"
 Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 ```
 
-**Не игнорируйте** — это защита от поломки Dovecot.
+**Не игнорируйте** — установщик вызвал `fatal()` и **остановился**. Последующие фазы не выполнялись.
 
-**Варианты:**
+**Действие:**
 
-1. Оставить `root:root` и пропустить hardening (доставка iRedMail работает)
-2. После согласования с политикой: `chown vmail:vmail /var/vmail` и повторить установку
+1. `doveconf -h mail_uid mail_gid` — убедитесь, какой владелец ожидается (часто `vmail:vmail`)
+2. Если политика хоста это допускает: `chown vmail:vmail /var/vmail` (или другой пользователь Dovecot)
+3. **Полностью перезапустите** `./delta-transit-install.sh`
+
+Пропустить hardening при `root:root` **нельзя** — установщик не продолжит работу до исправления владельца.
 
 ---
 

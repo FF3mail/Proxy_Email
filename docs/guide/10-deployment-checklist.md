@@ -64,7 +64,7 @@ ls -la /etc/mail-proxy/ /var/log/mail-proxy/ /var/spool/mail-proxy/
 ## 5. MariaDB
 
 - [ ] База `mail_proxy` создана
-- [ ] Таблицы: `referents`, `clients`, `external_accounts`, `oauth_tokens`, `oauth_providers`
+- [ ] Таблицы: `referents`, `clients`, `external_accounts`, `oauth_tokens`, `oauth_providers`, `panel_admins`
 - [ ] Подключение из демона и панели работает
 
 ```sql

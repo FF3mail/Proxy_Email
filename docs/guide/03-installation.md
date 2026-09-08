@@ -79,7 +79,7 @@ chmod +x delta-transit-install.sh configure_limits.sh
 | Postfix | Базовые настройки для локальной доставки |
 | Dovecot | Проверка/настройка Maildir |
 | PHP | Лимиты upload, FPM pool |
-| Nginx | Виртуальный хост, TLS (self-signed или существующий) |
+| Nginx | Виртуальный хост; интерактивный выбор TLS: self-signed (по умолчанию), существующие файлы сертификата или certbot/Let's Encrypt (если hostname панели резолвится в публичный IPv4) |
 | Systemd | `mail-proxy.service`, logrotate |
 | Validation | Проверка сервисов и логов |
 | Audit | Права crypto.key, изоляция www-data от Maildir |
@@ -168,7 +168,24 @@ https://<hostname-панели>/index.php?action=login
 
 Войдите учётной записью **master**, созданной установщиком (см. §3.3). Без активного master форма входа покажет жёлтое предупреждение — повторно запустите `delta-transit-install.sh` интерактивно или выполните ручной seed (см. [05-web-panel.md](05-web-panel.md) §5.2).
 
-При self-signed сертификате браузер предупредит — для пилота это нормально; для production замените на Let's Encrypt или корпоративный CA.
+### TLS-сертификат панели (фаза Nginx)
+
+При **интерактивной** установке (есть TTY) в фазе Nginx установщик предлагает источник сертификата:
+
+```
+TLS certificate source:
+  1) self-signed (default, test/lab only)
+  2) existing certificate files (prompt for paths)
+  3) certbot / Let's Encrypt (<hostname> resolves to a public IP)   # только если A-запись указывает на публичный IPv4
+```
+
+- **1 — self-signed (по умолчанию):** сертификат в `/etc/ssl/certs/mail-proxy.crt` и ключ в `/etc/ssl/private/mail-proxy.key`; браузер предупредит — для пилота это нормально.
+- **2 — существующие файлы:** установщик запросит пути к `fullchain`/`cert` и `privkey`.
+- **3 — certbot / Let's Encrypt:** доступен, если hostname панели (из `APP_BASE_URL`) резолвится в **публичный** IPv4; при отсутствии `certbot` установщик может предложить установку через `apt`. Выпуск через standalone HTTP-01 (Nginx на время останавливается). При сбое — откат к запросу путей существующего сертификата или к self-signed.
+
+Без TTY (pipe, CI) установщик **не задаёт** этот вопрос и применяет self-signed или переиспользует файлы по путям по умолчанию (`SSL_MODE=self-signed` / `existing` в отчёте установки).
+
+Для production с публичным DNS предпочтительны **certbot** (вариант 3) или корпоративный CA (вариант 2).
 
 ---
 
@@ -180,8 +197,16 @@ https://<hostname-панели>/index.php?action=login
 Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 ```
 
-**Причина:** iRedMail держит `/var/vmail` как `root:root`.  
-**Действие:** либо оставьте как есть (инсталлятор не сломает доставку), либо после консультации с документацией iRedMail выполните `chown vmail:vmail /var/vmail` и перезапустите установку фазы UsersGroups.
+**Причина:** iRedMail часто держит `/var/vmail` как `root:root`, а Dovecot доставляет почту от пользователя из `doveconf mail_uid` / `mail_gid` (обычно `vmail:vmail`).  
+**Это жёсткая остановка:** установщик вызывает `fatal()` и **не продолжит** фазы UsersGroups и далее, пока владелец не совпадёт с почтовым пользователем Dovecot. Игнорировать сообщение нельзя — установка останется незавершённой.
+
+**Действие:**
+
+1. Уточните ожидаемого владельца: `doveconf -h mail_uid mail_gid`
+2. Если для вашей схемы iRedMail владелец должен быть `vmail:vmail`, исправьте **осознанно** (по документации iRedMail / политике бэкапов), например: `chown vmail:vmail /var/vmail`
+3. **Полностью перезапустите** `./delta-transit-install.sh` и дождитесь прохождения фазы UsersGroups
+
+Установщик **не** выполняет `chown` на существующем хранилище автоматически.
 
 ### Конфликт Nginx
 

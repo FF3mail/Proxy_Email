@@ -47,7 +47,7 @@ URL входа: `https://<APP_BASE_URL>/index.php?action=login`
 | **master** | Только установщик `delta-transit-install.sh` (интерактивно, один на систему) | Полный доступ + раздел «Операторы» (создание/деактивация `admin`) |
 | **admin** | Master через панель (`operator_list`) | Управление референтами, аккаунтами, OAuth; без управления операторами |
 
-**Первый вход (seed master):** при установке на чистой БД инсталлятор в Preflight запрашивает `Panel master username` и пароль (дважды, скрытый ввод, ≥ 8 символов). Хеш сохраняется в `panel_admins`; plaintext нигде не записывается.
+**Первый вход (seed master):** при установке на чистой БД инсталлятор в **Preflight** запрашивает `Panel master username` и пароль (дважды, скрытый ввод, ≥ 8 символов); хеш записывается в `panel_admins` в **фазе Database**. Plaintext нигде не сохраняется.
 
 Если master ещё не создан:
 
@@ -69,7 +69,7 @@ mysql -u root -p mail_proxy -e \
 
 ### HTTPS
 
-Панель работает по HTTPS. При установке может быть создан **self-signed** сертификат (`/etc/ssl/certs/mail-proxy.crt`). Для production замените на доверенный сертификат.
+Панель работает по HTTPS. В фазе Nginx установщик предлагает три источника TLS (см. [03-installation.md](03-installation.md) §3.6): **self-signed** по умолчанию (`/etc/ssl/certs/mail-proxy.crt`), **существующие файлы** сертификата или **certbot / Let's Encrypt** (если hostname панели резолвится в публичный IPv4). Для production используйте certbot или корпоративный CA, а не self-signed.
 
 ---
 

@@ -99,6 +99,15 @@ Environment=MAX_INBOUND_MESSAGE_BYTES=104857600
 
 Предзаполнены: Google, Yandex, Microsoft. Можно редактировать endpoints в панели (с проверкой SSRF).
 
+### panel_admins — операторы панели
+
+| Поле | Описание |
+|------|----------|
+| `username` | Логин оператора |
+| `password_hash` | `password_hash()` PHP (не Cryptor) |
+| `role` | `master` (один, seed установщиком) или `admin` |
+| `active` | `0` — вход запрещён |
+
 ---
 
 ## 4.5. Согласованные лимиты (150 МБ вложение)
