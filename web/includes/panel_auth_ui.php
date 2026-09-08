@@ -10,25 +10,34 @@ function renderLoginForm(): void
     $setupMessage = '';
     if (!$loginAllowed) {
         if (!panelAdminsTableExists()) {
-            $setupMessage = 'Таблица panel_admins отсутствует. Запустите установщик или дождитесь автоматической миграции схемы.';
+            $setupMessage = __('auth.setup_table_missing');
         } elseif (panelInactiveMasterExists()) {
-            $setupMessage = 'Учётная запись master деактивирована. Реактивируйте через SQL или установщик.';
+            $setupMessage = __('auth.setup_master_inactive');
         } else {
-            $setupMessage = 'Учётная запись master не настроена. Запустите установщик на сервере (интерактивно).';
+            $setupMessage = __('auth.setup_master_missing');
         }
     }
     ?>
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="<?= h(panelHtmlLang()) ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Вход — DELTA-транзит</title>
+    <title><?= h(__('auth.login_title')) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .lang-link { color: #64748b; font-size: 0.875rem; text-decoration: none; }
+        .lang-link:hover { color: #1e293b; }
+        .lang-active { color: #1e293b; font-size: 0.875rem; font-weight: 600; }
+        .lang-sep { color: #94a3b8; font-size: 0.875rem; }
+    </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center">
 <div class="bg-white shadow rounded p-8 w-full max-w-md">
-    <h1 class="text-2xl font-bold mb-6">DELTA-транзит — вход</h1>
+    <div class="flex justify-between items-start mb-4">
+        <h1 class="text-2xl font-bold"><?= h(__('auth.login_heading')) ?></h1>
+        <div aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></div>
+    </div>
     <?php if ($flash): ?>
         <div class="<?= $flash['type'] === 'success'
             ? 'bg-green-100 border border-green-400 text-green-700'
@@ -45,14 +54,14 @@ function renderLoginForm(): void
         <input type="hidden" name="action" value="login_submit">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
         <div>
-            <label class="block text-sm font-medium mb-1" for="username">Имя пользователя</label>
+            <label class="block text-sm font-medium mb-1" for="username"><?= h(__('auth.username')) ?></label>
             <input class="w-full border rounded px-3 py-2" type="text" id="username" name="username" required autocomplete="username">
         </div>
         <div>
-            <label class="block text-sm font-medium mb-1" for="password">Пароль</label>
+            <label class="block text-sm font-medium mb-1" for="password"><?= h(__('auth.password')) ?></label>
             <input class="w-full border rounded px-3 py-2" type="password" id="password" name="password" required autocomplete="current-password">
         </div>
-        <button type="submit" class="w-full bg-slate-800 text-white rounded py-2"<?= $loginAllowed ? '' : ' disabled' ?>>Войти</button>
+        <button type="submit" class="w-full bg-slate-800 text-white rounded py-2"<?= $loginAllowed ? '' : ' disabled' ?>><?= h(__('auth.login_button')) ?></button>
     </form>
 </div>
 </body>
@@ -72,19 +81,19 @@ function handleLoginSubmit(): void
 
     if (!panelAuthLoginAllowed()) {
         writeLog("Panel login rejected ip={$ip} reason=auth_not_ready");
-        setFlash('error', 'Вход временно недоступен. Настройте учётную запись master через установщик.');
+        setFlash('error', __('auth.login_unavailable'));
         redirectTo('login');
     }
 
     if ($username === '' || $password === '') {
         writeLog("Panel login failed for user='{$username}' ip={$ip} reason=empty");
-        setFlash('error', 'Неверные учётные данные или слишком много попыток');
+        setFlash('error', __('auth.invalid_credentials'));
         redirectTo('login');
     }
 
     if (!panelLoginThrottleAllow()) {
         writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
-        setFlash('error', 'Неверные учётные данные или слишком много попыток');
+        setFlash('error', __('auth.invalid_credentials'));
         redirectTo('login');
     }
 
@@ -98,13 +107,13 @@ function handleLoginSubmit(): void
     if (!$ok) {
         panelLoginThrottleRegisterFailure();
         writeLog("Panel login failed for user='{$username}' ip={$ip}");
-        setFlash('error', 'Неверные учётные данные или слишком много попыток');
+        setFlash('error', __('auth.invalid_credentials'));
         redirectTo('login');
     }
 
     establishPanelSession($row);
     writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");
-    setFlash('success', 'Вход выполнен');
+    setFlash('success', __('auth.login_success'));
     redirectTo('dashboard');
 }
 
@@ -114,7 +123,7 @@ function handleLogout(): void
     clearPanelSession();
     session_regenerate_id(true);
     writeLog("Panel logout for user='{$user}' ip=" . getClientIp());
-    setFlash('success', 'Вы вышли из системы');
+    setFlash('success', __('auth.logout_success'));
     redirectTo('login');
 }
 
@@ -126,19 +135,19 @@ function renderOperatorList(): void
     );
     $rows = $stmt->fetchAll();
 
-    renderHeader('Операторы панели');
+    renderHeader(__('operator.title'));
     ?>
-    <h2 class="text-xl font-semibold mb-4">Операторы панели</h2>
-    <p class="text-sm text-slate-600 mb-6">Только master может управлять операторами. Через UI создаются только role=admin.</p>
+    <h2 class="text-xl font-semibold mb-4"><?= h(__('operator.heading')) ?></h2>
+    <p class="text-sm text-slate-600 mb-6"><?= h(__('operator.hint')) ?></p>
 
     <table class="min-w-full bg-white shadow rounded mb-8">
         <thead class="bg-slate-100 text-left">
         <tr>
-            <th class="px-4 py-2">Username</th>
-            <th class="px-4 py-2">Role</th>
-            <th class="px-4 py-2">Active</th>
-            <th class="px-4 py-2">Created</th>
-            <th class="px-4 py-2">Actions</th>
+            <th class="px-4 py-2"><?= h(__('common.username')) ?></th>
+            <th class="px-4 py-2"><?= h(__('common.role')) ?></th>
+            <th class="px-4 py-2"><?= h(__('common.active')) ?></th>
+            <th class="px-4 py-2"><?= h(__('common.created')) ?></th>
+            <th class="px-4 py-2"><?= h(__('common.actions')) ?></th>
         </tr>
         </thead>
         <tbody>
@@ -146,7 +155,7 @@ function renderOperatorList(): void
             <tr class="border-t">
                 <td class="px-4 py-2"><?= h((string)$r['username']) ?></td>
                 <td class="px-4 py-2"><?= h((string)$r['role']) ?></td>
-                <td class="px-4 py-2"><?= (int)$r['active'] === 1 ? 'yes' : 'no' ?></td>
+                <td class="px-4 py-2"><?= (int)$r['active'] === 1 ? h(__('common.yes')) : h(__('common.no')) ?></td>
                 <td class="px-4 py-2"><?= h((string)$r['created_at']) ?></td>
                 <td class="px-4 py-2">
                     <?php if ((string)$r['role'] !== 'master' && (int)$r['active'] === 1): ?>
@@ -154,10 +163,10 @@ function renderOperatorList(): void
                             <input type="hidden" name="action" value="operator_deactivate">
                             <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
                             <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
-                            <button type="submit" class="text-red-700 text-sm">Deactivate</button>
+                            <button type="submit" class="text-red-700 text-sm"><?= h(__('operator.deactivate')) ?></button>
                         </form>
                     <?php else: ?>
-                        —
+                        <?= h(__('common.dash')) ?>
                     <?php endif; ?>
                 </td>
             </tr>
@@ -166,19 +175,19 @@ function renderOperatorList(): void
     </table>
 
     <div class="bg-white shadow rounded p-6 max-w-lg">
-        <h3 class="font-semibold mb-4">Добавить оператора (admin)</h3>
+        <h3 class="font-semibold mb-4"><?= h(__('operator.add_heading')) ?></h3>
         <form method="post" action="/index.php" class="space-y-3">
             <input type="hidden" name="action" value="operator_create">
             <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
             <div>
-                <label class="block text-sm mb-1" for="op_username">Username</label>
+                <label class="block text-sm mb-1" for="op_username"><?= h(__('common.username')) ?></label>
                 <input class="w-full border rounded px-3 py-2" type="text" id="op_username" name="username" required maxlength="100">
             </div>
             <div>
-                <label class="block text-sm mb-1" for="op_password">Password</label>
+                <label class="block text-sm mb-1" for="op_password"><?= h(__('common.password')) ?></label>
                 <input class="w-full border rounded px-3 py-2" type="password" id="op_password" name="password" required minlength="8">
             </div>
-            <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2">Создать</button>
+            <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2"><?= h(__('operator.create')) ?></button>
         </form>
     </div>
     <?php
@@ -187,16 +196,13 @@ function renderOperatorList(): void
 
 function handleOperatorCreate(): void
 {
-    // Application rule: UI always inserts role='admin'. Never honor a client-supplied role
-    // (including attempts to set role=master). Enforcing a single master in the DB via
-    // trigger is an accepted non-goal — see schema.sql comment.
     if (isset($_POST['role'])) {
         writeLog(
             'Panel operator_create rejected: role payload attempted by master='
             . (string)($_SESSION['admin_username_display'] ?? '')
             . ' ip=' . getClientIp()
         );
-        setFlash('error', 'Недопустимый параметр');
+        setFlash('error', __('operator.invalid_param'));
         redirectTo('operator_list');
     }
 
@@ -206,7 +212,7 @@ function handleOperatorCreate(): void
 
     if ($username === '' || strlen($username) > 100 || $password === '' || strlen($password) < 8) {
         $password = '';
-        setFlash('error', 'Некорректные username/password');
+        setFlash('error', __('operator.invalid_credentials'));
         redirectTo('operator_list');
     }
 
@@ -223,7 +229,7 @@ function handleOperatorCreate(): void
             "Panel operator_create failed by master='{$masterUser}' target='{$username}' ip="
             . getClientIp()
         );
-        setFlash('error', 'Не удалось создать оператора (возможно, имя занято)');
+        setFlash('error', __('operator.create_failed'));
         redirectTo('operator_list');
     }
 
@@ -231,7 +237,7 @@ function handleOperatorCreate(): void
         "Panel operator_create by master='{$masterUser}' target='{$username}' role=admin ip="
         . getClientIp()
     );
-    setFlash('success', 'Оператор создан');
+    setFlash('success', __('operator.created'));
     redirectTo('operator_list');
 }
 
@@ -242,13 +248,13 @@ function handleOperatorDeactivate(): void
     $masterId = (int)($_SESSION['admin_id'] ?? 0);
 
     if ($id <= 0 || $id === $masterId) {
-        setFlash('error', 'Некорректный оператор');
+        setFlash('error', __('operator.invalid'));
         redirectTo('operator_list');
     }
 
     $row = fetchPanelAdminById($id);
     if ($row === null || (string)$row['role'] === 'master') {
-        setFlash('error', 'Нельзя деактивировать эту учётную запись');
+        setFlash('error', __('operator.cannot_deactivate'));
         redirectTo('operator_list');
     }
 
@@ -261,6 +267,6 @@ function handleOperatorDeactivate(): void
         "Panel operator_deactivate by master='{$masterUser}' target='{$row['username']}' id={$id} ip="
         . getClientIp()
     );
-    setFlash('success', 'Оператор деактивирован');
+    setFlash('success', __('operator.deactivated'));
     redirectTo('operator_list');
 }

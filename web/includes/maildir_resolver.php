@@ -12,7 +12,7 @@ declare(strict_types=1);
  * www-data cannot traverse mailbox directories (mode 0700); lookup uses
  * read-only vmail DB credentials in /etc/mail-proxy/vmail-lookup.conf.
  */
-class ReferentMaildirException extends RuntimeException
+class ReferentMaildirException extends LocalizedUserException
 {
 }
 
@@ -31,7 +31,7 @@ function normalizeReferentEmail(string $email): string
         || str_contains($email, "\0")
         || !filter_var($email, FILTER_VALIDATE_EMAIL)
     ) {
-        throw new ReferentMaildirException('Указан некорректный email референта');
+        throw new ReferentMaildirException('referent.invalid_email');
     }
 
     return $email;
@@ -46,7 +46,7 @@ function splitReferentMailboxEmail(string $email): array
     $at = strrpos($email, '@');
 
     if ($at === false || $at === 0 || $at === strlen($email) - 1) {
-        throw new ReferentMaildirException('Указан некорректный email референта');
+        throw new ReferentMaildirException('referent.invalid_email');
     }
 
     return [
@@ -61,12 +61,12 @@ function splitReferentMailboxEmail(string $email): array
 function loadVmailLookupConfig(string $configFile = '/etc/mail-proxy/vmail-lookup.conf'): array
 {
     if (!is_readable($configFile)) {
-        throw new ReferentMaildirException('Не удалось определить расположение почтового хранилища');
+        throw new ReferentMaildirException('referent.storage_unavailable');
     }
 
     $content = file_get_contents($configFile);
     if ($content === false) {
-        throw new ReferentMaildirException('Не удалось определить расположение почтового хранилища');
+        throw new ReferentMaildirException('referent.storage_unavailable');
     }
 
     $vmail = parseIniSection($content, 'vmail');
@@ -77,7 +77,7 @@ function loadVmailLookupConfig(string $configFile = '/etc/mail-proxy/vmail-looku
         || !array_key_exists('db_pass', $vmail)
         || empty($vmail['db_name'])
     ) {
-        throw new ReferentMaildirException('Не удалось определить расположение почтового хранилища');
+        throw new ReferentMaildirException('referent.storage_unavailable');
     }
 
     return $vmail;
@@ -123,7 +123,7 @@ function buildMailboxPathFromRow(array $row): string
     $folder = trim((string)($row['mailboxfolder'] ?? 'Maildir'), '/');
 
     if ($base === '' || $node === '' || $maildir === '' || $folder === '') {
-        throw new ReferentMaildirException('Не удалось определить расположение почтового хранилища');
+        throw new ReferentMaildirException('referent.storage_unavailable');
     }
 
     $storageRoot = $base . '/' . $node;
@@ -138,18 +138,18 @@ function buildMailboxPathFromRow(array $row): string
 function assertResolvedMaildirPath(string $path, string $storageRoot): void
 {
     if ($path === '' || $path[0] !== '/') {
-        throw new ReferentMaildirException('Некорректный путь Maildir');
+        throw new ReferentMaildirException('referent.maildir_invalid');
     }
 
     if (str_contains($path, '..') || str_contains($path, "\0")) {
-        throw new ReferentMaildirException('Некорректный путь Maildir');
+        throw new ReferentMaildirException('referent.maildir_invalid');
     }
 
     $root = rtrim($storageRoot, '/') . '/';
     $normalized = rtrim($path, '/') . '/';
 
     if (!str_starts_with($normalized, $root)) {
-        throw new ReferentMaildirException('Некорректный путь Maildir');
+        throw new ReferentMaildirException('referent.maildir_invalid');
     }
 }
 
@@ -181,10 +181,19 @@ function resolveReferentMaildir(string $email): string
     $row = $stmt->fetch();
 
     if (!$row) {
-        throw new ReferentMaildirException(
-            'Ящик для ' . $email . ' не найден. Создайте почтовый ящик в iRedMail перед добавлением референта.'
-        );
+        throw new ReferentMaildirException('referent.mailbox_not_found', ['email' => $email]);
     }
 
     return buildMailboxPathFromRow($row);
+}
+
+/**
+ * Resolve a user-visible message from any exception (localized or plain).
+ */
+function exceptionUserMessage(Throwable $e): string
+{
+    if ($e instanceof LocalizedUserException) {
+        return $e->getUserMessage();
+    }
+    return $e->getMessage();
 }

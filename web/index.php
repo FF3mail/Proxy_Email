@@ -12,6 +12,9 @@ if ($action !== 'oauth_callback') {
 
 startPanelSession();
 
+require_once __DIR__ . '/includes/i18n.php';
+initPanelI18n();
+
 // CSRF-токен — генерируется один раз за сессию
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -89,46 +92,54 @@ function renderHeader(string $title): void
 
     ?>
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="<?= h(panelHtmlLang()) ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= h($title) ?></title>
+    <title><?= h($title) ?> — <?= h(__('app.title_suffix')) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .lang-link { color: #94a3b8; font-size: 0.75rem; text-decoration: none; }
+        .lang-link:hover { color: #fff; }
+        .lang-active { color: #fff; font-size: 0.75rem; font-weight: 600; }
+        .lang-sep { color: #64748b; font-size: 0.75rem; }
+    </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
 <div class="flex min-h-screen">
 
     <aside class="w-64 bg-slate-800 text-white">
         <div class="p-6 border-b border-slate-700">
-            <h1 class="text-xl font-bold">DELTA-транзит</h1>
+            <h1 class="text-xl font-bold"><?= h(__('app.name')) ?></h1>
             <?php if (!empty($_SESSION['admin_username_display'])): ?>
                 <p class="text-xs text-slate-300 mt-2"><?= h((string)$_SESSION['admin_username_display']) ?></p>
             <?php endif; ?>
+            <div class="mt-3" aria-label="<?= h(__('common.language')) ?>">
+                <?php renderLanguageSelector(); ?>
+            </div>
         </div>
 
         <nav class="p-4 space-y-2">
             <a href="/index.php?action=dashboard"
-               <?= in_array($action ?? '', ['dashboard', 'referents', 'accounts'], true) ? 'class="active"' : '' ?>>Референты</a>
+               <?= in_array($action ?? '', ['dashboard', 'referents', 'accounts'], true) ? 'class="active"' : '' ?>><?= h(__('nav.referents')) ?></a>
             <a href="/index.php?action=dashboard"
-               <?= ($action ?? '') === 'accounts' ? 'class="active"' : '' ?>>Аккаунты</a>
+               <?= ($action ?? '') === 'accounts' ? 'class="active"' : '' ?>><?= h(__('nav.accounts')) ?></a>
             <a href="/index.php?action=provider_list"
-               <?= in_array($action ?? '', ['provider_list', 'provider_form', 'providers'], true) ? 'class="active"' : '' ?>>Провайдеры</a>
-            <!-- Ссылка на страницу мониторинга — отдельный файл, не action в index.php -->
+               <?= in_array($action ?? '', ['provider_list', 'provider_form', 'providers'], true) ? 'class="active"' : '' ?>><?= h(__('nav.providers')) ?></a>
             <a href="/monitor.php"
                <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active"' : '' ?>>
-               Мониторинг
+               <?= h(__('nav.monitor')) ?>
             </a>
             <?php if (isPanelMasterDisplay()): ?>
             <a href="/index.php?action=operator_list"
                <?= in_array($action ?? '', ['operator_list'], true) ? 'class="active"' : '' ?>>
-               Операторы
+               <?= h(__('nav.operators')) ?>
             </a>
             <?php endif; ?>
             <form method="post" action="/index.php" class="pt-4">
                 <input type="hidden" name="action" value="logout">
                 <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                <button type="submit" class="text-left text-slate-300 hover:text-white text-sm">Выход</button>
+                <button type="submit" class="text-left text-slate-300 hover:text-white text-sm"><?= h(__('nav.logout')) ?></button>
             </form>
         </nav>
     </aside>
@@ -260,28 +271,28 @@ function renderDashboard(): void
 
     $rows = $stmt->fetchAll();
 
-    renderHeader('Dashboard');
+    renderHeader(__('dashboard.title'));
     ?>
-    <h2 class="text-2xl font-bold mb-6">Dashboard</h2>
+    <h2 class="text-2xl font-bold mb-6"><?= h(__('dashboard.title')) ?></h2>
 	<div class="mb-6">
 		<a href="index.php?action=referent_form"
 		   class="bg-blue-600 text-white px-4 py-2 rounded">
-			Создать референта
+			<?= h(__('dashboard.create_referent')) ?>
 		</a>
 	</div>
     <div class="bg-white rounded shadow overflow-x-auto">
         <table class="min-w-full">
             <thead class="bg-slate-100">
             <tr>
-                <th class="px-4 py-2">Референт</th>
-                <th class="px-4 py-2">Клиент</th>
-                <th class="px-4 py-2">Внешний ящик</th>
-                <th class="px-4 py-2">IMAP</th>
-                <th class="px-4 py-2">SMTP</th>
-                <th class="px-4 py-2">Auth</th>
-                <th class="px-4 py-2">Статус токена</th>
-                <th class="px-4 py-2">Активность</th>
-                <th class="px-4 py-2">Действия</th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_referent')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_client')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_external')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_imap')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_smtp')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_auth')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_token_status')) ?></th>
+                <th class="px-4 py-2"><?= h(__('dashboard.col_activity')) ?></th>
+                <th class="px-4 py-2"><?= h(__('common.actions')) ?></th>
             </tr>
             </thead>
             <tbody>
@@ -297,22 +308,24 @@ function renderDashboard(): void
                         <?php
                         if ($row['auth_type'] === 'oauth2' && $row['expires_at']) {
                             $expires = strtotime($row['expires_at']);
-                            echo $expires > time() ? 'Активен до ' . h($row['expires_at']) : 'Истёк';
+                            echo $expires > time()
+                                ? h(__('dashboard.token_active_until', ['date' => $row['expires_at']]))
+                                : h(__('dashboard.token_expired'));
                         } else {
-                            echo '—';
+                            echo h(__('common.dash'));
                         }
                         ?>
                     </td>
                     <td class="px-4 py-2">
-                        <?= (int)$row['r_active'] === 1 ? 'Референт: Вкл' : 'Референт: Выкл' ?><br>
-                        <?= (int)$row['c_active'] === 1 ? 'Клиент: Вкл' : 'Клиент: Выкл' ?><br>
-                        <?= (int)$row['ea_active'] === 1 ? 'Аккаунт: Вкл' : 'Аккаунт: Выкл' ?>
+                        <?= (int)$row['r_active'] === 1 ? h(__('dashboard.referent_on')) : h(__('dashboard.referent_off')) ?><br>
+                        <?= (int)$row['c_active'] === 1 ? h(__('dashboard.client_on')) : h(__('dashboard.client_off')) ?><br>
+                        <?= (int)$row['ea_active'] === 1 ? h(__('dashboard.account_on')) : h(__('dashboard.account_off')) ?>
                     </td>
                     <td class="px-4 py-2">
                         <div class="flex gap-2 flex-wrap">
                             <a class="bg-amber-500 text-white px-3 py-1 rounded"
 							   href="index.php?action=account_form&referent_id=<?= (int)$row['id'] ?><?= $row['ea_id'] ? '&account_id=' . (int)$row['ea_id'] : '' ?>">
-								<?= $row['ea_id'] ? 'Редактировать' : 'Создать аккаунт' ?>
+								<?= $row['ea_id'] ? h(__('dashboard.edit_account')) : h(__('dashboard.create_account')) ?>
 							</a>
                             <form method="post" action="index.php?action=toggle_active" class="inline">
                                 <input type="hidden" name="action" value="toggle_active">
@@ -320,7 +333,7 @@ function renderDashboard(): void
                                 <input type="hidden" name="id" value="<?= (int)$row['id'] ?>">
                                 <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
                                 <button class="bg-slate-700 text-white px-3 py-1 rounded">
-                                    Вкл/Выкл
+                                    <?= h(__('common.toggle')) ?>
                                 </button>
                             </form>
                         </div>
@@ -378,11 +391,11 @@ function renderReferentForm(): void
         }
     }
 
-    renderHeader('Референт');
+    renderHeader(__('referent.title'));
 
     ?>
     <h2 class="text-2xl font-bold mb-6">
-        <?= !empty($referent['id']) ? 'Редактирование референта' : 'Новый референт' ?>
+        <?= !empty($referent['id']) ? h(__('referent.edit')) : h(__('referent.new')) ?>
     </h2>
 
     <form method="post" action="index.php?action=referent_save" class="bg-white rounded shadow p-6 space-y-4">
@@ -391,7 +404,7 @@ function renderReferentForm(): void
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
 
         <div>
-            <label class="block mb-1 font-medium">Username</label>
+            <label class="block mb-1 font-medium"><?= h(__('referent.display_name')) ?></label>
             <input
                 type="text"
                 name="username"
@@ -399,31 +412,33 @@ function renderReferentForm(): void
                 class="w-full border rounded px-3 py-2"
                 value="<?= h((string)$referent['username']) ?>"
             >
+            <p class="text-sm text-gray-600 mt-1"><?= h(__('referent.display_name_hint')) ?></p>
         </div>
 
         <div>
-            <label class="block mb-1 font-medium">Email референта</label>
+            <label class="block mb-1 font-medium"><?= h(__('referent.email')) ?></label>
             <input
                 type="email"
                 name="local_inbox"
                 required
                 class="w-full border rounded px-3 py-2"
-                placeholder="referent@example.com"
+                placeholder="<?= h(__('referent.email_placeholder')) ?>"
                 value="<?= h((string)$referent['local_inbox']) ?>"
             >
             <p class="text-sm text-gray-600 mt-1">
-                Почтовый ящик референта на iRedMail. Путь Maildir определяется автоматически.
+                <?= h(__('referent.email_hint')) ?>
             </p>
         </div>
 
         <?php if (!empty($referent['local_outbox'])): ?>
         <div>
-            <label class="block mb-1 font-medium">Maildir (автоматически)</label>
+            <label class="block mb-1 font-medium"><?= h(__('referent.maildir_auto')) ?></label>
             <input
                 type="text"
                 readonly
                 class="w-full border rounded px-3 py-2 bg-slate-50 text-slate-700"
                 value="<?= h((string)$referent['local_outbox']) ?>"
+                aria-readonly="true"
             >
         </div>
         <?php endif; ?>
@@ -436,16 +451,16 @@ function renderReferentForm(): void
                     value="1"
                     <?= (int)$referent['active'] === 1 ? 'checked' : '' ?>
                 >
-                <span>Референт активен</span>
+                <span><?= h(__('referent.active')) ?></span>
             </label>
         </div>
 
         <hr>
 
-        <h3 class="text-lg font-semibold">Клиент</h3>
+        <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
 
         <div>
-            <label class="block mb-1 font-medium">Client Email</label>
+            <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
             <input
                 type="email"
                 name="client_email"
@@ -462,14 +477,14 @@ function renderReferentForm(): void
                     value="1"
                     <?= (int)$client['active'] === 1 ? 'checked' : '' ?>
                 >
-                <span>Клиент активен</span>
+                <span><?= h(__('referent.client_active')) ?></span>
             </label>
         </div>
 
         <button
             type="submit"
             class="bg-blue-600 text-white px-6 py-2 rounded">
-            Сохранить
+            <?= h(__('common.save')) ?>
         </button>
     </form>
     <?php
@@ -507,7 +522,7 @@ function handleReferentSave(): void
     try {
         $normalizedInbox = normalizeReferentEmail($localInbox);
     } catch (ReferentMaildirException $e) {
-        setFlash('error', $e->getMessage());
+        setFlash('error', $e->getUserMessage());
         header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
         exit();
     }
@@ -518,7 +533,7 @@ function handleReferentSave(): void
         try {
             $localOutbox = resolveReferentMaildir($normalizedInbox);
         } catch (ReferentMaildirException $e) {
-            setFlash('error', $e->getMessage());
+            setFlash('error', $e->getUserMessage());
             header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
             exit();
         }
@@ -624,7 +639,7 @@ function handleReferentSave(): void
 		}
         $pdo->commit();
 
-        setFlash('success', 'Референт сохранён');
+        setFlash('success', __('referent.saved'));
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -632,7 +647,7 @@ function handleReferentSave(): void
 
         writeLog('Referent save error: ' . $e->getMessage());
 
-        setFlash('error', $e->getMessage());
+        setFlash('error', exceptionUserMessage($e));
     }
 
     redirectTo('dashboard');
@@ -644,7 +659,7 @@ function renderAccountForm(): void
     $referentId = (int)($_GET['referent_id'] ?? 0);
 
     if ($referentId <= 0) {
-        setFlash('error', 'referent_id is required');
+        setFlash('error', __('account.referent_id_required'));
         redirectTo('dashboard');
     }
 	$accountId = (int)($_GET['account_id'] ?? 0);
@@ -679,7 +694,7 @@ function renderAccountForm(): void
 		$existing = $stmt->fetch();
 
 		if (!$existing) {
-			setFlash('error', 'Access denied');
+			setFlash('error', __('account.access_denied'));
 			redirectTo('dashboard');
 		}
 		$account = $existing;
@@ -695,10 +710,10 @@ function renderAccountForm(): void
 
     $providers = $stmt->fetchAll();
 
-    renderHeader('Внешний аккаунт');
+    renderHeader(__('account.title'));
     ?>
     <h2 class="text-2xl font-bold mb-6">
-        Внешний почтовый аккаунт
+        <?= h(__('account.heading')) ?>
     </h2>
 
     <form method="post" action="index.php?action=account_save" class="bg-white rounded shadow p-6 space-y-4">
@@ -708,7 +723,7 @@ function renderAccountForm(): void
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
 
         <div>
-            <label class="block mb-1">Email</label>
+            <label class="block mb-1"><?= h(__('account.email')) ?></label>
             <input
                 type="email"
                 name="email"
@@ -719,18 +734,19 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">Username</label>
+            <label class="block mb-1"><?= h(__('account.login')) ?></label>
             <input
                 type="text"
                 name="username"
                 value="<?= h((string)$account['username']) ?>"
                 class="w-full border rounded px-3 py-2"
             >
+            <p class="text-sm text-gray-600 mt-1"><?= h(__('account.login_hint')) ?></p>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="block mb-1">IMAP Host</label>
+                <label class="block mb-1"><?= h(__('account.imap_host')) ?></label>
                 <input
                     type="text"
                     name="imap_host"
@@ -741,7 +757,7 @@ function renderAccountForm(): void
             </div>
 
             <div>
-                <label class="block mb-1">IMAP Port</label>
+                <label class="block mb-1"><?= h(__('account.imap_port')) ?></label>
                 <input
                     type="number"
                     name="imap_port"
@@ -753,7 +769,7 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">IMAP Encryption</label>
+            <label class="block mb-1"><?= h(__('account.imap_encryption')) ?></label>
             <select name="imap_encryption" class="w-full border rounded px-3 py-2">
                 <?php foreach (['none', 'ssl', 'tls'] as $v): ?>
                     <option value="<?= $v ?>"
@@ -766,7 +782,7 @@ function renderAccountForm(): void
 
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="block mb-1">SMTP Host</label>
+                <label class="block mb-1"><?= h(__('account.smtp_host')) ?></label>
                 <input
                     type="text"
                     name="smtp_host"
@@ -777,7 +793,7 @@ function renderAccountForm(): void
             </div>
 
             <div>
-                <label class="block mb-1">SMTP Port</label>
+                <label class="block mb-1"><?= h(__('account.smtp_port')) ?></label>
                 <input
                     type="number"
                     name="smtp_port"
@@ -789,7 +805,7 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">SMTP Encryption</label>
+            <label class="block mb-1"><?= h(__('account.smtp_encryption')) ?></label>
             <select name="smtp_encryption" class="w-full border rounded px-3 py-2">
                 <?php foreach (['none', 'ssl', 'tls'] as $v): ?>
                     <option value="<?= $v ?>"
@@ -801,7 +817,7 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-2 font-medium">Тип авторизации</label>
+            <label class="block mb-2 font-medium"><?= h(__('account.auth_type')) ?></label>
 
             <label class="mr-4">
                 <input
@@ -810,7 +826,7 @@ function renderAccountForm(): void
                     value="plain"
                     <?= $account['auth_type'] === 'plain' ? 'checked' : '' ?>
                 >
-                Plain
+                <?= h(__('account.auth_plain')) ?>
             </label>
 
             <label>
@@ -820,12 +836,12 @@ function renderAccountForm(): void
                     value="oauth2"
                     <?= $account['auth_type'] === 'oauth2' ? 'checked' : '' ?>
                 >
-                OAuth2
+                <?= h(__('account.auth_oauth2')) ?>
             </label>
         </div>
 
         <div>
-            <label class="block mb-1">Password (plain auth)</label>
+            <label class="block mb-1"><?= h(__('account.password_plain')) ?></label>
             <input
                 type="password"
                 name="password"
@@ -834,9 +850,9 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">OAuth Provider</label>
+            <label class="block mb-1"><?= h(__('account.oauth_provider')) ?></label>
             <select name="provider" class="w-full border rounded px-3 py-2">
-                <option value="">-- Select --</option>
+                <option value=""><?= h(__('common.select')) ?></option>
                 <?php foreach ($providers as $provider): ?>
                     <option
                         value="<?= h($provider['code']) ?>"
@@ -848,7 +864,7 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">Client ID</label>
+            <label class="block mb-1"><?= h(__('account.client_id')) ?></label>
             <input
                 type="text"
                 name="client_id"
@@ -858,7 +874,7 @@ function renderAccountForm(): void
         </div>
 
         <div>
-            <label class="block mb-1">Client Secret</label>
+            <label class="block mb-1"><?= h(__('account.client_secret')) ?></label>
             <input
                 type="password"
                 name="client_secret"
@@ -874,7 +890,7 @@ function renderAccountForm(): void
                     value="1"
                     <?= (int)$account['active'] === 1 ? 'checked' : '' ?>
                 >
-                <span>Аккаунт активен</span>
+                <span><?= h(__('account.active')) ?></span>
             </label>
         </div>
 
@@ -882,7 +898,7 @@ function renderAccountForm(): void
 			<button
 				type="submit"
 				class="bg-blue-600 text-white px-6 py-2 rounded">
-				Сохранить
+				<?= h(__('common.save')) ?>
 			</button>
 
 			<?php if (!empty($account['id'])): ?>
@@ -890,7 +906,7 @@ function renderAccountForm(): void
 					type="submit"
 					form="oauth_initiate_form"
 					class="bg-green-600 text-white px-6 py-2 rounded">
-					Авторизовать OAuth2
+					<?= h(__('account.authorize_oauth2')) ?>
 				</button>
 			<?php endif; ?>
 		</div>
@@ -916,7 +932,7 @@ function handleAccountSave(): void
     $accountId = (int)($_POST['account_id'] ?? 0);
 
     if ($referentId <= 0) {
-        setFlash('error', 'referent_id is required');
+        setFlash('error', __('account.referent_id_required'));
         redirectTo('dashboard');
     }
 
@@ -925,7 +941,7 @@ function handleAccountSave(): void
     // Если email обязателен и он пустой, ЛИБО если он заполнен, но некорректен:
 	
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        setFlash('error', 'Указан некорректный или пустой Email-адрес');
+        setFlash('error', __('account.invalid_email'));
         redirectTo('dashboard');
     }
 
@@ -997,7 +1013,7 @@ function handleAccountSave(): void
             ]);
 
             if ($stmt->rowCount() === 0) {
-                setFlash('error', 'Access denied');
+                setFlash('error', __('account.access_denied'));
                 redirectTo('dashboard');
             }
 
@@ -1048,10 +1064,10 @@ function handleAccountSave(): void
             writeLog("External account created: ID {$accountId}");
         }
 
-        setFlash('success', 'Аккаунт сохранён');
+        setFlash('success', __('account.saved'));
     } catch (Throwable $e) {
         writeLog('External account save error: ' . $e->getMessage());
-        setFlash('error', $e->getMessage());
+        setFlash('error', exceptionUserMessage($e));
     }
 
     redirectTo('dashboard');
@@ -1065,7 +1081,7 @@ function handleToggleActive(): void
     $id = (int)($_POST['id'] ?? 0);
 
     if (!in_array($entity, ['referent', 'client', 'account', 'provider'], true) || $id <= 0) {
-        setFlash('error', 'Invalid entity or id');
+        setFlash('error', __('error.invalid_entity'));
         redirectTo('dashboard');
     }
 
@@ -1084,7 +1100,7 @@ function handleToggleActive(): void
     $row = $stmt->fetch();
 
     if (!$row) {
-        setFlash('error', 'Record not found');
+        setFlash('error', __('error.record_not_found'));
         redirectTo('dashboard');
     }
 
@@ -1095,6 +1111,6 @@ function handleToggleActive(): void
 
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
 
-    setFlash('success', 'Статус изменён');
+    setFlash('success', __('error.status_changed'));
     redirectTo('dashboard');
 }
