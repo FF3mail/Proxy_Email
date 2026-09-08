@@ -211,7 +211,7 @@ No schema changes.
 | Test | Result |
 |------|--------|
 | `php tests/panel_routing_test.php` | **PASS** (VPS `5de29a4`, 24/24) |
-| `php tests/panel_list_render_test.php` | **PASS** (VPS `5de29a4`, referent list/view + account empty state) |
+| `php tests/panel_toggle_smoke_test.php` | **PASS** (VPS `960f8da`, referent enable/disable round-trip) |
 | `php tests/panel_log_viewer_test.php` | **PASS** (VPS `5de29a4`, 8/8) |
 | Unauthenticated list routes | **302 → login** (VPS curl via `127.0.0.1` + `Host: panel.testvps.loc`) |
 | Browser E2E from dev host | Not reachable (`panel.testvps.loc` is lab-only); authenticated render smoke on VPS substitutes |
@@ -224,7 +224,7 @@ No schema changes.
 | Referents nav → list → view → edit links | **PASS** (VPS render smoke + routing tests) |
 | Accounts nav → list (empty state) | **PASS** |
 | Navigation independent of record ID | **PASS** |
-| Post-mutation redirect to list pages | **Implemented** |
+| Referent enable/disable persists | **PASS** (toggle smoke test) |
 | PROMPT-43 Maildir resolution | **Unchanged** |
 | Security (auth, CSRF, parameterized SQL) | **Unchanged** |
 | Manual browser CRUD/toggle on lab panel | Recommended for operator sign-off |
