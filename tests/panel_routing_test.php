@@ -55,8 +55,8 @@ assert_contains($index, "renderAccountList();", 'account_list dispatches to rend
 // Navigation must target collection pages, not dashboard
 assert_contains($index, 'action=referent_list', 'index nav links to referent_list');
 assert_contains($index, 'action=account_list', 'index nav links to account_list');
-assert_not_contains($index, 'action=referents"><?= h(__('nav.referents')) ?></a>', 'nav referents no longer points to referents alias only');
-assert_not_contains($index, 'action=accounts"><?= h(__('nav.accounts')) ?></a>', 'nav accounts no longer points to accounts alias only');
+assert_not_contains($index, "action=referents\"><?= h(__('nav.referents')) ?></a>", 'nav referents no longer points to referents alias only');
+assert_not_contains($index, "action=accounts\"><?= h(__('nav.accounts')) ?></a>", 'nav accounts no longer points to accounts alias only');
 
 // Monitor nav aligned with index
 assert_contains($monitor, 'action=referent_list', 'monitor nav links to referent_list');
