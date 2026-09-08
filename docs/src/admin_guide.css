@@ -17,21 +17,29 @@ h1 {
     font-size: 20pt;
     text-align: center;
     margin: 0 0 0.4em;
+    color: #2980b9;
 }
 
 h2 {
     font-size: 14pt;
     margin-top: 1.2em;
+    color: #2980b9;
+    border-bottom: 2px solid #2980b9;
+    padding-bottom: 0.15em;
 }
 
 h3 {
     font-size: 12pt;
     margin-top: 0.9em;
+    border-left: 4px solid #8dc63f;
+    padding-left: 0.5em;
 }
 
 h4 {
     font-size: 12pt;
     margin-top: 0.7em;
+    border-left: 3px solid #8dc63f;
+    padding-left: 0.5em;
 }
 
 .title-block {
@@ -49,8 +57,9 @@ pre, code {
 }
 
 pre {
-    background: #f6f6f6;
+    background: #f4f4f4;
     border: 1px solid #ddd;
+    border-left: 4px solid #5d6d7e;
     padding: 0.6em 0.8em;
     white-space: pre-wrap;
 }
