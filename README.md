@@ -42,6 +42,8 @@ Verified staging baseline: Ubuntu 24.04 LTS, PHP-FPM 8.3, MariaDB 10.11, existin
 
 | Document | Purpose |
 |----------|---------|
+| [docs/guide/README.md](docs/guide/README.md) | Operator install/ops guide (10 chapters, Markdown) |
+| [docs/DELTA_transit_admin_guide.pdf](docs/DELTA_transit_admin_guide.pdf) | Formal admin reference (PDF) |
 | [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) | Architecture, schema, security, production criteria |
 | [docs/Ckeck-list_00.md](docs/Ckeck-list_00.md) | Pilot deployment verification checklist |
 | [docs/prompts/](docs/prompts/) | Historical prompts (archival; code overrides) |
