@@ -29,6 +29,7 @@ require_once __DIR__ . '/includes/panel_auth_ui.php';
 require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
+require_once __DIR__ . '/includes/relationship_editor.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
 
 use MailProxy\Cryptor;
@@ -54,6 +55,8 @@ $postActionsRequiringCsrf = [
     'oauth_initiate',
     'operator_create',
     'operator_deactivate',
+    'relationship_save',
+    'relationship_delete',
 ];
 
 if (
@@ -228,6 +231,18 @@ switch ($action) {
 
     case 'referent_view':
         renderReferentView();
+        break;
+
+    case 'relationship_form':
+        renderRelationshipForm();
+        break;
+
+    case 'relationship_save':
+        handleRelationshipSave();
+        break;
+
+    case 'relationship_delete':
+        handleRelationshipDelete();
         break;
 
     case 'account_form':
@@ -669,9 +684,11 @@ function renderReferentForm(): void
             </label>
         </div>
 
+        <?php if (empty($referent['id'])): ?>
         <hr>
 
         <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
+        <p class="text-sm text-slate-600"><?= h(__('relationship.create_legacy_hint')) ?></p>
 
         <div>
             <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
@@ -694,6 +711,7 @@ function renderReferentForm(): void
                 <span><?= h(__('referent.client_active')) ?></span>
             </label>
         </div>
+        <?php endif; ?>
 
         <button
             type="submit"
@@ -702,6 +720,10 @@ function renderReferentForm(): void
         </button>
     </form>
     <?php
+
+    if (!empty($referent['id'])) {
+        renderRelationshipListSection((int)$referent['id'], 'form');
+    }
 
     renderFooter();
 }
@@ -1350,7 +1372,15 @@ function handleToggleActive(): void
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
 
     $return = (string)($_POST['return_action'] ?? 'dashboard');
-    $allowedReturns = ['dashboard', 'referent_list', 'referents', 'account_list', 'accounts'];
+    $allowedReturns = [
+        'dashboard',
+        'referent_list',
+        'referents',
+        'account_list',
+        'accounts',
+        'referent_form',
+        'referent_view',
+    ];
     if (!in_array($return, $allowedReturns, true)) {
         $return = 'dashboard';
     }
@@ -1360,13 +1390,26 @@ function handleToggleActive(): void
     if ($return === 'accounts') {
         $return = 'account_list';
     }
+    if ($return === 'referent_form' || $return === 'referent_view') {
+        $refId = (int)($_POST['referent_id'] ?? 0);
+        if ($refId > 0) {
+            redirectTo($return, ['id' => $refId]);
+        }
+        $return = 'referent_list';
+    }
 
     setFlash('success', __('error.status_changed'));
     redirectTo($return);
 }
 
-function renderEntityToggleButton(string $entity, int $id, int $active, string $label, string $returnAction = 'dashboard'): void
-{
+function renderEntityToggleButton(
+    string $entity,
+    int $id,
+    int $active,
+    string $label,
+    string $returnAction = 'dashboard',
+    ?int $referentId = null
+): void {
     $isOn = $active === 1;
     $actionLabel = $isOn ? 'Выкл' : 'Вкл';
     $btnClass = $isOn ? 'bg-slate-600' : 'bg-green-700';
@@ -1376,6 +1419,9 @@ function renderEntityToggleButton(string $entity, int $id, int $active, string $
         <input type="hidden" name="entity" value="<?= h($entity) ?>">
         <input type="hidden" name="id" value="<?= $id ?>">
         <input type="hidden" name="return_action" value="<?= h($returnAction) ?>">
+        <?php if ($referentId !== null && $referentId > 0): ?>
+            <input type="hidden" name="referent_id" value="<?= $referentId ?>">
+        <?php endif; ?>
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
         <button type="submit" class="<?= $btnClass ?> text-white px-2 py-1 rounded text-sm" title="<?= h($label) ?>">
             <?= h($label) ?>: <?= h($actionLabel) ?>
@@ -1459,18 +1505,11 @@ function renderReferentView(): void
         <div class="bg-white rounded shadow p-6">
             <h3 class="text-lg font-semibold mb-4">Маршрутизация входящей почты</h3>
             <p class="text-sm text-slate-600 mb-4">
-                Демон доставляет входящие письма на локальный ящик, если в поле «Кому» указан email корреспондента.
+                <?= h(__('relationship.view_routing_hint')) ?>
             </p>
-            <?php if (!empty($row['client_email'])): ?>
-            <dl class="space-y-3 text-sm">
-                <div><dt class="font-medium text-slate-500">Email корреспондента</dt>
-                    <dd class="font-mono"><?= h((string)$row['client_email']) ?></dd></div>
-                <div><dt class="font-medium text-slate-500">Статус</dt>
-                    <dd><?= (int)$row['c_active'] === 1 ? 'Активен' : 'Отключён' ?></dd></div>
-            </dl>
-            <?php else: ?>
-            <p class="text-sm text-amber-700">Email корреспондента не задан. <a href="index.php?action=referent_form&id=<?= $id ?>" class="underline">Редактировать референта</a></p>
-            <?php endif; ?>
+            <a href="index.php?action=referent_form&id=<?= $id ?>" class="text-blue-600 underline text-sm">
+                <?= h(__('relationship.manage_link')) ?>
+            </a>
         </div>
 
         <div class="bg-white rounded shadow p-6 lg:col-span-2">
@@ -1503,6 +1542,7 @@ function renderReferentView(): void
         </div>
     </div>
     <?php
+    renderRelationshipListSection($id, 'view');
     renderFooter();
 }
 
@@ -1560,3 +1600,403 @@ function handleAccountDelete(): void
     setFlash('success', 'Внешний аккаунт удалён');
     redirectTo('account_list');
 }
+
+function renderRelationshipForm(): void
+{
+    $pdo = getPdo();
+    $referentId = (int)($_GET['referent_id'] ?? 0);
+    $id = (int)($_GET['id'] ?? 0);
+
+    if ($referentId <= 0) {
+        setFlash('error', __('relationship.error.referent_required'));
+        redirectTo('referent_list');
+    }
+
+    $stmt = $pdo->prepare('SELECT id, username FROM referents WHERE id = ?');
+    $stmt->execute([$referentId]);
+    $referent = $stmt->fetch();
+    if (!$referent) {
+        setFlash('error', __('error.record_not_found'));
+        redirectTo('referent_list');
+    }
+
+    $row = [
+        'id' => '',
+        'external_client_email' => '',
+        'local_client_email' => '',
+        'local_referent_email' => '',
+        'external_account_id' => '',
+        'local_client_maildir' => '',
+        'active' => 1,
+        'email' => '',
+    ];
+
+    if ($id > 0) {
+        $stmt = $pdo->prepare(
+            'SELECT * FROM clients WHERE id = ? AND referent_id = ?'
+        );
+        $stmt->execute([$id, $referentId]);
+        $existing = $stmt->fetch();
+        if (!$existing) {
+            setFlash('error', __('error.record_not_found'));
+            redirectTo('referent_form', ['id' => $referentId]);
+        }
+        $row = $existing;
+    }
+
+    $accounts = fetchExternalAccountsForRelationshipForm(
+        $pdo,
+        $referentId,
+        $id > 0 ? $id : null
+    );
+
+    renderHeader(__('relationship.form_title'));
+    ?>
+    <div class="mb-4">
+        <a href="index.php?action=referent_form&id=<?= $referentId ?>" class="text-blue-600 hover:underline">
+            ← <?= h(__('relationship.back_to_referent')) ?>
+        </a>
+    </div>
+    <h2 class="text-2xl font-bold mb-2">
+        <?= $id > 0 ? h(__('relationship.edit')) : h(__('relationship.add')) ?>
+    </h2>
+    <p class="text-slate-600 mb-6">
+        <?= h(__('relationship.form_for_referent', ['name' => (string)$referent['username']])) ?>
+    </p>
+
+    <form method="post" action="index.php?action=relationship_save"
+          class="bg-white rounded shadow p-6 space-y-4" id="relationship-form">
+        <input type="hidden" name="action" value="relationship_save">
+        <input type="hidden" name="id" value="<?= h((string)$row['id']) ?>">
+        <input type="hidden" name="referent_id" value="<?= $referentId ?>">
+        <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+
+        <?php if (relationshipIsLegacyOnly($row) || (empty($row['id']) === false && !relationshipHasFourAddressData($row) && trim((string)$row['email']) !== '')): ?>
+            <div class="bg-slate-50 border border-slate-200 rounded p-3 text-sm text-slate-700">
+                <?= h(__('relationship.legacy_banner', ['email' => (string)$row['email']])) ?>
+            </div>
+        <?php endif; ?>
+
+        <p class="text-sm text-slate-600"><?= h(__('relationship.all_or_nothing_hint')) ?></p>
+
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.external_client_email')) ?></label>
+            <input type="email" name="external_client_email" class="w-full border rounded px-3 py-2 font-mono"
+                   value="<?= h((string)($row['external_client_email'] ?? '')) ?>">
+        </div>
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.local_client_email')) ?></label>
+            <input type="email" name="local_client_email" class="w-full border rounded px-3 py-2 font-mono"
+                   value="<?= h((string)($row['local_client_email'] ?? '')) ?>">
+            <p class="text-xs text-slate-500 mt-1"><?= h(__('relationship.mailbox_precondition_hint')) ?></p>
+        </div>
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.local_referent_email')) ?></label>
+            <input type="email" name="local_referent_email" class="w-full border rounded px-3 py-2 font-mono"
+                   value="<?= h((string)($row['local_referent_email'] ?? '')) ?>">
+        </div>
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.external_account_id')) ?></label>
+            <select name="external_account_id" class="w-full border rounded px-3 py-2">
+                <option value=""><?= h(__('common.select')) ?></option>
+                <?php foreach ($accounts as $acc):
+                    $linkedId = $acc['linked_client_id'] ?? null;
+                    $disabled = $linkedId !== null && (int)$linkedId > 0;
+                    $selected = (int)($row['external_account_id'] ?? 0) === (int)$acc['id'];
+                    $inactive = (int)$acc['active'] !== 1;
+                    $label = (string)$acc['email'];
+                    if ($inactive) {
+                        $label .= ' (' . __('common.inactive') . ')';
+                    }
+                    if ($disabled) {
+                        $linkedLabel = trim((string)($acc['linked_external_client'] ?? '')) !== ''
+                            ? (string)$acc['linked_external_client']
+                            : (string)($acc['linked_legacy_email'] ?? ('#' . (int)$linkedId));
+                        $label .= ' — ' . __('relationship.account_linked_to', [
+                            'id' => (string)(int)$linkedId,
+                            'label' => $linkedLabel,
+                        ]);
+                    }
+                    ?>
+                    <option value="<?= (int)$acc['id'] ?>"
+                        <?= $selected ? 'selected' : '' ?>
+                        <?= $disabled ? 'disabled' : '' ?>>
+                        <?= h($label) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <?php if ($accounts === []): ?>
+                <p class="text-sm text-amber-700 mt-1">
+                    <?= h(__('relationship.no_accounts')) ?>
+                    <a class="underline" href="index.php?action=account_form&referent_id=<?= $referentId ?>">
+                        <?= h(__('relationship.create_account_first')) ?>
+                    </a>
+                </p>
+            <?php endif; ?>
+        </div>
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.local_client_maildir')) ?></label>
+            <input type="text" name="local_client_maildir" class="w-full border rounded px-3 py-2 font-mono text-sm"
+                   placeholder="/var/vmail/vmail1/..."
+                   value="<?= h((string)($row['local_client_maildir'] ?? '')) ?>">
+            <p class="text-xs text-slate-500 mt-1"><?= h(__('relationship.maildir_hint')) ?></p>
+        </div>
+        <div>
+            <label class="inline-flex items-center gap-2">
+                <input type="checkbox" name="active" value="1"
+                    <?= (int)($row['active'] ?? 1) === 1 ? 'checked' : '' ?>>
+                <span><?= h(__('relationship.field.active')) ?></span>
+            </label>
+        </div>
+
+        <div class="flex gap-3">
+            <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded">
+                <?= h(__('common.save')) ?>
+            </button>
+            <a href="index.php?action=referent_form&id=<?= $referentId ?>"
+               class="bg-slate-500 text-white px-6 py-2 rounded inline-block">
+                <?= h(__('common.cancel')) ?>
+            </a>
+        </div>
+    </form>
+    <?php
+    renderFooter();
+}
+
+function handleRelationshipSave(): void
+{
+    $pdo = getPdo();
+    $id = (int)($_POST['id'] ?? 0);
+    $referentId = (int)($_POST['referent_id'] ?? 0);
+
+    if ($referentId <= 0) {
+        setFlash('error', __('relationship.error.referent_required'));
+        redirectTo('referent_list');
+    }
+
+    $stmt = $pdo->prepare('SELECT id FROM referents WHERE id = ?');
+    $stmt->execute([$referentId]);
+    if (!$stmt->fetch()) {
+        setFlash('error', __('error.record_not_found'));
+        redirectTo('referent_list');
+    }
+
+    if ($id > 0) {
+        $stmt = $pdo->prepare('SELECT id FROM clients WHERE id = ? AND referent_id = ?');
+        $stmt->execute([$id, $referentId]);
+        if (!$stmt->fetch()) {
+            setFlash('error', __('error.record_not_found'));
+            redirectTo('referent_form', ['id' => $referentId]);
+        }
+    }
+
+    $data = parseRelationshipFormPost($_POST);
+
+    if ($data['any_filled'] && !$data['all_filled']) {
+        setFlash('error', __('relationship.error.all_or_nothing'));
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    if (!$data['all_filled']) {
+        setFlash('error', __('relationship.error.all_or_nothing'));
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    // Email format
+    foreach (
+        [
+            'external_client_email' => $data['external_client_email'],
+            'local_client_email' => $data['local_client_email'],
+            'local_referent_email' => $data['local_referent_email'],
+        ] as $field => $value
+    ) {
+        if (!filter_var($value, FILTER_VALIDATE_EMAIL)) {
+            setFlash('error', __('relationship.error.invalid_email', [
+                'field' => __('relationship.field.' . $field),
+            ]));
+            redirectTo('relationship_form', array_filter([
+                'referent_id' => $referentId,
+                'id' => $id > 0 ? $id : null,
+            ]));
+        }
+    }
+
+    if ($data['local_client_email'] === $data['local_referent_email']) {
+        setFlash('error', __('relationship.error.same_local_mailboxes'));
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    // Task 3 — physical mailbox precondition
+    try {
+        if (!activePhysicalMailboxExists($data['local_client_email'])) {
+            setFlash('error', __('relationship.error.mailbox_not_provisioned', [
+                'email' => $data['local_client_email'],
+            ]));
+            redirectTo('relationship_form', array_filter([
+                'referent_id' => $referentId,
+                'id' => $id > 0 ? $id : null,
+            ]));
+        }
+        if (!activePhysicalMailboxExists($data['local_referent_email'])) {
+            setFlash('error', __('relationship.error.mailbox_not_provisioned', [
+                'email' => $data['local_referent_email'],
+            ]));
+            redirectTo('relationship_form', array_filter([
+                'referent_id' => $referentId,
+                'id' => $id > 0 ? $id : null,
+            ]));
+        }
+    } catch (ReferentMaildirException $e) {
+        setFlash('error', $e->getUserMessage());
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    } catch (Throwable $e) {
+        writeLog('Relationship mailbox check failed: ' . $e->getMessage());
+        setFlash('error', __('relationship.error.vmail_unavailable'));
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    $accountError = validateRelationshipExternalAccount(
+        $pdo,
+        $referentId,
+        (int)$data['external_account_id']
+    );
+    if ($accountError !== null) {
+        setFlash('error', $accountError);
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    $collision = findRelationshipUniqueCollision(
+        $pdo,
+        $referentId,
+        $id > 0 ? $id : null,
+        $data
+    );
+    if ($collision !== null) {
+        setFlash('error', $collision);
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    try {
+        if ($id > 0) {
+            $stmt = $pdo->prepare(
+                'UPDATE clients
+                 SET email = ?,
+                     external_client_email = ?,
+                     local_client_email = ?,
+                     local_referent_email = ?,
+                     external_account_id = ?,
+                     local_client_maildir = ?,
+                     active = ?,
+                     updated_at = NOW()
+                 WHERE id = ? AND referent_id = ?'
+            );
+            $stmt->execute([
+                $data['external_client_email'],
+                $data['external_client_email'],
+                $data['local_client_email'],
+                $data['local_referent_email'],
+                $data['external_account_id'],
+                $data['local_client_maildir'],
+                $data['active'],
+                $id,
+                $referentId,
+            ]);
+            writeLog("ClientRelationship updated: ID {$id} referent={$referentId}");
+        } else {
+            $stmt = $pdo->prepare(
+                'INSERT INTO clients (
+                    email, referent_id,
+                    external_client_email, local_client_email, local_referent_email,
+                    external_account_id, local_client_maildir, active
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $data['external_client_email'],
+                $referentId,
+                $data['external_client_email'],
+                $data['local_client_email'],
+                $data['local_referent_email'],
+                $data['external_account_id'],
+                $data['local_client_maildir'],
+                $data['active'],
+            ]);
+            $id = (int)$pdo->lastInsertId();
+            writeLog("ClientRelationship created: ID {$id} referent={$referentId}");
+        }
+        setFlash('success', __('relationship.saved'));
+    } catch (PDOException $e) {
+        writeLog('Relationship save PDO error: ' . $e->getMessage());
+        $sqlState = $e->errorInfo[0] ?? '';
+        $driverCode = (int)($e->errorInfo[1] ?? 0);
+        if ($sqlState === '23000' || $driverCode === 1062) {
+            setFlash('error', __('relationship.error.unique_db'));
+        } elseif ($sqlState === '23000' || $driverCode === 1452) {
+            setFlash('error', __('relationship.error.account_missing'));
+        } else {
+            setFlash('error', __('relationship.error.save_failed'));
+        }
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    } catch (Throwable $e) {
+        writeLog('Relationship save error: ' . $e->getMessage());
+        setFlash('error', exceptionUserMessage($e));
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    redirectTo('referent_form', ['id' => $referentId]);
+}
+
+function handleRelationshipDelete(): void
+{
+    $pdo = getPdo();
+    $id = (int)($_POST['id'] ?? 0);
+    $referentId = (int)($_POST['referent_id'] ?? 0);
+
+    if ($id <= 0 || $referentId <= 0) {
+        setFlash('error', __('error.invalid_entity'));
+        redirectTo('referent_list');
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT id, email FROM clients WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([$id, $referentId]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        setFlash('error', __('error.record_not_found'));
+        redirectTo('referent_form', ['id' => $referentId]);
+    }
+
+    $stmt = $pdo->prepare('DELETE FROM clients WHERE id = ? AND referent_id = ?');
+    $stmt->execute([$id, $referentId]);
+    writeLog('ClientRelationship deleted: ID ' . $id . ' email=' . (string)$row['email']);
+    setFlash('success', __('relationship.deleted'));
+    redirectTo('referent_form', ['id' => $referentId]);
+}
+
