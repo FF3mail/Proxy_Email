@@ -290,5 +290,74 @@ class RelationshipLookupImportSurfaceTest(unittest.TestCase):
         self.assertFalse(hasattr(rl, 'RELATIONSHIP_LOOKUP_SHADOW'))
 
 
+class CrossRelationshipShadowTest(unittest.TestCase):
+    """
+    PROMPT-62 — shadow eval when lookup key spans wrong external account.
+    Uses mocked resolve_inbound (no MySQL).
+    """
+
+    def setUp(self) -> None:
+        self.counters = ShadowCounters()
+        self.log = logging.getLogger('test-cross-relationship-shadow')
+        self.log.handlers.clear()
+        self.log.addHandler(logging.NullHandler())
+        self.log.propagate = False
+
+    def test_wrong_account_lookup_miss_agrees_with_legacy_miss(self) -> None:
+        """client A sender on account B mailbox: both legacy and lookup miss."""
+        result = evaluate_inbound_shadow(
+            resolve_inbound=lambda _aid, _sender: None,
+            account_id=2,
+            account_email='refint2@bofoma.net',
+            from_address='clientint1@frona.ru',
+            legacy_delivered=False,
+            legacy_rcpts=['refloc1@testvps.loc'],
+            counters=self.counters,
+            log=self.log,
+            stats_path=None,
+        )
+        self.assertEqual(result.marker, MARKER_AGREE)
+        self.assertIsNone(result.relationship_id)
+
+    def test_positive_match_wrong_legacy_path_diverges_lookup_only(self) -> None:
+        """External From matches relationship but To/Cc legacy path does not."""
+        dto = MagicMock()
+        dto.relationship_id = 1
+        result = evaluate_inbound_shadow(
+            resolve_inbound=lambda _aid, sender: dto if sender == 'clientint1@frona.ru' else None,
+            account_id=1,
+            account_email='refint1@frona.ru',
+            from_address='clientint1@frona.ru',
+            legacy_delivered=False,
+            legacy_rcpts=['refloc1@testvps.loc'],
+            counters=self.counters,
+            log=self.log,
+            stats_path=None,
+        )
+        self.assertEqual(result.marker, MARKER_DIVERGE_LOOKUP_ONLY)
+        self.assertEqual(result.relationship_id, 1)
+
+    def test_lookup_db_failure_does_not_change_rcpts(self) -> None:
+        resolved: List[str] = []
+        local_rcpts = final_legacy_rcpts(resolved, 'refloc1@testvps.loc')
+
+        def db_fail(*_a: Any) -> Optional[Any]:
+            raise ConnectionError('database unavailable')
+
+        evaluate_inbound_shadow(
+            resolve_inbound=db_fail,
+            account_id=1,
+            account_email='refint1@frona.ru',
+            from_address='clientint1@frona.ru',
+            legacy_delivered=False,
+            legacy_rcpts=list(local_rcpts),
+            counters=self.counters,
+            log=self.log,
+            stats_path=None,
+        )
+        self.assertEqual(local_rcpts, ['refloc1@testvps.loc'])
+        self.assertEqual(self.counters.snapshot()['errors'], 1)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
