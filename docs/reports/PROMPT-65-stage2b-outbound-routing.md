@@ -4,7 +4,7 @@
 **Branch:** `prompt-47-panel-authorization-audit`  
 **Starting baseline:** `4f6ec8f` (PROMPT-64 canonical HEAD)  
 **Freeze commit verified:** `c75a7f5bf0d5b98049a1ef664362a78dca3f7d54`  
-**Implementation commit:** *(this commit — see git log after push)*
+**Implementation commit:** `9b47703`
 
 ---
 
