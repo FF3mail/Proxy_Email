@@ -58,6 +58,8 @@ _VALID_RELATIONSHIP_WHERE = """
     AND ea.referent_id = c.referent_id
 """
 
+
+class DatabaseConnectionProvider(Protocol):
     """Minimal interface shared with mail-proxy-daemon.Database."""
 
     def get_connection(self):
