@@ -96,6 +96,56 @@ function relationshipIsLegacyOnly(array $row): bool
 }
 
 /**
+ * Prefill value for external_client_email on the relationship form (GET-only).
+ * For legacy-only rows, carry forward clients.email (PROMPT-57 Task 2).
+ * Does not write to the database.
+ */
+function relationshipExternalClientFormValue(array $row): string
+{
+    $ext = trim((string)($row['external_client_email'] ?? ''));
+    if ($ext !== '') {
+        return normalizeRelationshipEmail($ext);
+    }
+    if (relationshipIsLegacyOnly($row)) {
+        return normalizeRelationshipEmail((string)($row['email'] ?? ''));
+    }
+    return '';
+}
+
+/**
+ * Load all clients joined to referents; filter with relationshipIsLegacyOnly().
+ *
+ * @return array{legacy: list<array<string, mixed>>, total: int, legacy_count: int}
+ */
+function fetchLegacyRelationshipBacklog(PDO $pdo): array
+{
+    $stmt = $pdo->query(
+        'SELECT c.*,
+                r.username AS referent_username,
+                r.active AS referent_active,
+                ea.email AS ea_email,
+                ea.active AS ea_active,
+                ea.referent_id AS ea_referent_id
+         FROM clients c
+         INNER JOIN referents r ON r.id = c.referent_id
+         LEFT JOIN external_accounts ea ON ea.id = c.external_account_id
+         ORDER BY r.username, c.id'
+    );
+    $all = $stmt->fetchAll() ?: [];
+    $legacy = [];
+    foreach ($all as $row) {
+        if (relationshipIsLegacyOnly($row)) {
+            $legacy[] = $row;
+        }
+    }
+    return [
+        'legacy' => $legacy,
+        'total' => count($all),
+        'legacy_count' => count($legacy),
+    ];
+}
+
+/**
  * Human status label aligned with _VALID_RELATIONSHIP_WHERE field checks.
  *
  * @return array{code: string, label: string}
@@ -496,4 +546,70 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
         <?php endif; ?>
     </div>
     <?php
+}
+
+/**
+ * Cross-referent legacy backlog (PROMPT-57). Discovery only — Migrate is GET to relationship_form.
+ */
+function renderLegacyRelationshipBackfill(): void
+{
+    $pdo = getPdo();
+    $backlog = fetchLegacyRelationshipBacklog($pdo);
+    $legacy = $backlog['legacy'];
+    $legacyCount = $backlog['legacy_count'];
+    $total = $backlog['total'];
+
+    renderHeader(__('backfill.title'));
+    ?>
+    <h2 class="text-2xl font-bold mb-2"><?= h(__('backfill.title')) ?></h2>
+    <p class="text-slate-600 mb-2"><?= h(__('backfill.hint')) ?></p>
+    <p class="mb-6 text-sm font-medium" data-testid="backfill-count">
+        <?= h(__('backfill.count', [
+            'legacy' => (string)$legacyCount,
+            'total' => (string)$total,
+        ])) ?>
+    </p>
+
+    <?php if ($legacy === []): ?>
+        <div class="bg-white rounded shadow p-8 text-center text-slate-600" data-testid="backfill-empty">
+            <?= h(__('backfill.empty')) ?>
+        </div>
+    <?php else: ?>
+        <div class="bg-white rounded shadow overflow-x-auto" data-testid="backfill-table">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-100">
+                <tr>
+                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_referent')) ?></th>
+                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_legacy_email')) ?></th>
+                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_active')) ?></th>
+                    <th class="px-4 py-2 text-left"><?= h(__('common.actions')) ?></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($legacy as $row): ?>
+                    <tr class="border-t" data-legacy-client-id="<?= (int)$row['id'] ?>">
+                        <td class="px-4 py-2">
+                            <?= h((string)$row['referent_username']) ?>
+                            <div class="text-xs text-slate-500">referent_id=<?= (int)$row['referent_id'] ?></div>
+                        </td>
+                        <td class="px-4 py-2 font-mono"><?= h((string)$row['email']) ?></td>
+                        <td class="px-4 py-2">
+                            <?= (int)$row['active'] === 1
+                                ? h(__('relationship.active_yes'))
+                                : h(__('relationship.active_no')) ?>
+                        </td>
+                        <td class="px-4 py-2">
+                            <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+                               href="index.php?action=relationship_form&referent_id=<?= (int)$row['referent_id'] ?>&id=<?= (int)$row['id'] ?>&from=backfill"
+                               data-testid="backfill-migrate">
+                                <?= h(__('backfill.migrate')) ?>
+                            </a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif;
+    renderFooter();
 }

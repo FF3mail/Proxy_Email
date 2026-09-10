@@ -130,7 +130,9 @@ function renderHeader(string $title): void
             <a href="/index.php?action=dashboard"
                <?= ($action ?? '') === 'dashboard' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.dashboard')) ?></a>
             <a href="/index.php?action=referent_list"
-               <?= in_array($action ?? '', ['referent_list', 'referents', 'referent_form', 'referent_view'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.referents')) ?></a>
+               <?= in_array($action ?? '', ['referent_list', 'referents', 'referent_form', 'referent_view', 'relationship_form', 'relationship_backfill'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.referents')) ?></a>
+            <a href="/index.php?action=relationship_backfill"
+               <?= ($action ?? '') === 'relationship_backfill' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.backfill')) ?></a>
             <a href="/index.php?action=account_list"
                <?= in_array($action ?? '', ['account_list', 'accounts', 'account_form'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.accounts')) ?></a>
             <a href="/index.php?action=provider_list"
@@ -243,6 +245,10 @@ switch ($action) {
 
     case 'relationship_delete':
         handleRelationshipDelete();
+        break;
+
+    case 'relationship_backfill':
+        renderLegacyRelationshipBackfill();
         break;
 
     case 'account_form':
@@ -1650,12 +1656,22 @@ function renderRelationshipForm(): void
         $id > 0 ? $id : null
     );
 
+    // GET-only display prefill (PROMPT-57). Never written until relationship_save POST.
+    $externalClientValue = relationshipExternalClientFormValue($row);
+    $fromBackfill = (string)($_GET['from'] ?? '') === 'backfill';
+
     renderHeader(__('relationship.form_title'));
     ?>
     <div class="mb-4">
-        <a href="index.php?action=referent_form&id=<?= $referentId ?>" class="text-blue-600 hover:underline">
-            ← <?= h(__('relationship.back_to_referent')) ?>
-        </a>
+        <?php if ($fromBackfill): ?>
+            <a href="index.php?action=relationship_backfill" class="text-blue-600 hover:underline">
+                ← <?= h(__('backfill.back_to_list')) ?>
+            </a>
+        <?php else: ?>
+            <a href="index.php?action=referent_form&id=<?= $referentId ?>" class="text-blue-600 hover:underline">
+                ← <?= h(__('relationship.back_to_referent')) ?>
+            </a>
+        <?php endif; ?>
     </div>
     <h2 class="text-2xl font-bold mb-2">
         <?= $id > 0 ? h(__('relationship.edit')) : h(__('relationship.add')) ?>
@@ -1665,15 +1681,21 @@ function renderRelationshipForm(): void
     </p>
 
     <form method="post" action="index.php?action=relationship_save"
-          class="bg-white rounded shadow p-6 space-y-4" id="relationship-form">
+          class="bg-white rounded shadow p-6 space-y-4" id="relationship-form"
+          data-prefill-source="<?= relationshipIsLegacyOnly($row) ? 'legacy-email-get' : 'row' ?>">
         <input type="hidden" name="action" value="relationship_save">
         <input type="hidden" name="id" value="<?= h((string)$row['id']) ?>">
         <input type="hidden" name="referent_id" value="<?= $referentId ?>">
+        <?php if ($fromBackfill): ?>
+            <input type="hidden" name="return_to" value="backfill">
+        <?php endif; ?>
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
 
-        <?php if (relationshipIsLegacyOnly($row) || (empty($row['id']) === false && !relationshipHasFourAddressData($row) && trim((string)$row['email']) !== '')): ?>
-            <div class="bg-slate-50 border border-slate-200 rounded p-3 text-sm text-slate-700">
+        <?php if (relationshipIsLegacyOnly($row)): ?>
+            <div class="bg-slate-50 border border-slate-200 rounded p-3 text-sm text-slate-700"
+                 data-testid="legacy-migrate-banner">
                 <?= h(__('relationship.legacy_banner', ['email' => (string)$row['email']])) ?>
+                <div class="mt-1 text-xs"><?= h(__('backfill.prefill_note')) ?></div>
             </div>
         <?php endif; ?>
 
@@ -1682,7 +1704,8 @@ function renderRelationshipForm(): void
         <div>
             <label class="block mb-1 font-medium"><?= h(__('relationship.field.external_client_email')) ?></label>
             <input type="email" name="external_client_email" class="w-full border rounded px-3 py-2 font-mono"
-                   value="<?= h((string)($row['external_client_email'] ?? '')) ?>">
+                   value="<?= h($externalClientValue) ?>"
+                   data-testid="external-client-prefill">
         </div>
         <div>
             <label class="block mb-1 font-medium"><?= h(__('relationship.field.local_client_email')) ?></label>
@@ -1969,6 +1992,9 @@ function handleRelationshipSave(): void
         ]));
     }
 
+    if ((string)($_POST['return_to'] ?? '') === 'backfill') {
+        redirectTo('relationship_backfill');
+    }
     redirectTo('referent_form', ['id' => $referentId]);
 }
 

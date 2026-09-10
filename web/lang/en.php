@@ -39,6 +39,7 @@ return [
 
     // Navigation
     'nav.referents' => 'Referents',
+    'nav.backfill' => 'Legacy backlog',
     'nav.accounts' => 'Accounts',
     'nav.providers' => 'Providers',
     'nav.monitor' => 'Monitor',
@@ -46,6 +47,18 @@ return [
     'nav.logout' => 'Logout',
     'nav.dashboard' => 'Dashboard',
     'nav.control_panel' => 'Control Panel',
+
+    // PROMPT-57 — legacy relationship backfill (discovery / triage)
+    'backfill.title' => 'Legacy backlog — relationship migration',
+    'backfill.hint' => 'Clients rows that still have only a legacy email (no four-address data). Migrate one at a time via the PROMPT-56 form; nothing is auto-filled beyond carrying the known legacy address.',
+    'backfill.count' => '{legacy} of {total} relationships still on the legacy model',
+    'backfill.empty' => 'Legacy backlog is empty — every clients row has four-address data, or there are no clients rows.',
+    'backfill.migrate' => 'Migrate',
+    'backfill.back_to_list' => 'Back to backlog',
+    'backfill.prefill_note' => 'Only external_client_email is pre-filled from the legacy email (GET). Other fields are operator-entered. Nothing is written until Save.',
+    'backfill.col_referent' => 'Referent',
+    'backfill.col_legacy_email' => 'Legacy email',
+    'backfill.col_active' => 'Active',
 
     // Authentication
     'auth.login_title' => 'Login — DELTA Transit',

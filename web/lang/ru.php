@@ -40,6 +40,7 @@ return [
 
     // Navigation
     'nav.referents' => 'Референты',
+    'nav.backfill' => 'Legacy backlog',
     'nav.accounts' => 'Аккаунты',
     'nav.providers' => 'Провайдеры',
     'nav.monitor' => 'Мониторинг',
@@ -47,6 +48,18 @@ return [
     'nav.logout' => 'Выход',
     'nav.dashboard' => 'Панель управления',
     'nav.control_panel' => 'Панель управления',
+
+    // PROMPT-57 — legacy relationship backfill (discovery / triage)
+    'backfill.title' => 'Legacy backlog — миграция связей',
+    'backfill.hint' => 'Список clients-строк только с legacy email (без четырёх адресов). Миграция — по одной записи через форму PROMPT-56; автозаполнения нет.',
+    'backfill.count' => '{legacy} из {total} связей ещё на legacy-модели',
+    'backfill.empty' => 'Legacy backlog пуст — все связи имеют данные четырёх адресов или нет строк clients.',
+    'backfill.migrate' => 'Migrate',
+    'backfill.back_to_list' => 'К backlog',
+    'backfill.prefill_note' => 'Предзаполнено только external_client_email из legacy email (GET). Остальные поля вводит оператор. Без Save ничего не пишется.',
+    'backfill.col_referent' => 'Референт',
+    'backfill.col_legacy_email' => 'Legacy email',
+    'backfill.col_active' => 'Active',
 
     // Authentication
     'auth.login_title' => 'Вход — DELTA-транзит',
