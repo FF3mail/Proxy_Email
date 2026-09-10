@@ -3,6 +3,7 @@
 **Date:** 2026-09-10  
 **Branch:** `prompt-47-panel-authorization-audit`  
 **Pre-freeze parent SHA:** `8b7c1421974a422efefb1e1fe203e9c1b416b888`  
+**Freeze commit SHA:** `c75a7f5bf0d5b98049a1ef664362a78dca3f7d54`  
 **Mode:** Freeze and verification only (no new routing behaviour)
 
 ---
@@ -56,7 +57,7 @@
 
 | Item | Value |
 |------|-------|
-| **Repository SHA** | Freeze commit on `prompt-47-panel-authorization-audit` (parent `8b7c142`) |
+| **Repository SHA** | `c75a7f5bf0d5b98049a1ef664362a78dca3f7d54` (parent `8b7c142`) |
 | **Deployment model** | Direct copy to `/usr/local/bin/` (not git checkout on VPS) |
 | **VPS host** | `192.168.125.116` (`mail.testvps.loc`) |
 
