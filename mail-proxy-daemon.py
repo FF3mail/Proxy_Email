@@ -34,11 +34,16 @@ from watchdog.events import FileSystemEventHandler
 # PROMPT-58 Stage 1: RelationshipLookup import is additive/shadow-only.
 # relationship_lookup.py has no top-level side effects beyond class/function defs.
 from relationship_lookup import RelationshipLookup
+from relationship_routing import (
+    InboundProcessResult,
+    InboundRoutingMode,
+    finalize_inbound_process_result,
+    parse_inbound_routing_mode,
+    plan_inbound_delivery,
+)
 from relationship_shadow import (
     SHADOW_COUNTERS,
-    evaluate_inbound_shadow,
     extract_message_from_address,
-    final_legacy_rcpts,
     relationship_lookup_shadow_enabled,
 )
 
@@ -82,8 +87,10 @@ _DEFAULT_MAX_INBOUND = 200 * 1024 * 1024
 MAX_INBOUND_MESSAGE_BYTES = int(
     os.environ.get('MAX_INBOUND_MESSAGE_BYTES', _DEFAULT_MAX_INBOUND)
 )
-# PROMPT-58 Stage 1: shadow RelationshipLookup (default ON). No live routing flag.
+# PROMPT-58 shadow logging (default ON in shadow mode).
 RELATIONSHIP_LOOKUP_SHADOW = relationship_lookup_shadow_enabled()
+# PROMPT-63 Stage 2a: inbound routing mode (default shadow — safe).
+INBOUND_ROUTING_MODE = parse_inbound_routing_mode()
 # After this many consecutive size skips for the same message, mark it Seen.
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
@@ -718,7 +725,10 @@ class MailHandler:
                     view.release()
                     del view
 
-                    if self._deliver_to_local_smtp(temp_path, referent_data, acc):
+                    result = self._deliver_to_local_smtp(
+                        temp_path, referent_data, acc
+                    )
+                    if result.mark_imap_seen:
                         mail.store(num, '+FLAGS', '\\Seen')
                         self._clear_imap_size_skip_entry(account_id, uid, seq)
                 finally:
@@ -738,49 +748,94 @@ class MailHandler:
         mail_file: Path,
         referent_data: Dict[str, Any],
         account: Optional[Dict[str, Any]] = None,
-    ) -> bool:
+    ) -> InboundProcessResult:
         """Потоковая доставка письма из временного файла на локальный SMTP Postfix."""
         smtp = None
+        plan = None
         try:
             with open(mail_file, 'rb') as header_f:
                 msg = email.message_from_binary_file(header_f)
             resolved = self._resolve_local_recipients(msg, referent_data)
-            # Existing fallback semantics unchanged (PROMPT-58 must not alter them).
-            local_rcpts = final_legacy_rcpts(
-                resolved, referent_data['local_inbox']
+            from_addr = extract_message_from_address(msg)
+            account_id = int(account['id']) if account is not None else 0
+            account_email = str(account.get('email') or '') if account else ''
+
+            plan = plan_inbound_delivery(
+                mode=INBOUND_ROUTING_MODE,
+                resolve_inbound=self._relationship_lookup.resolve_inbound,
+                account_id=account_id,
+                account_email=account_email,
+                from_address=from_addr,
+                legacy_resolved=resolved,
+                referent_local_inbox=referent_data['local_inbox'],
+                shadow_enabled=RELATIONSHIP_LOOKUP_SHADOW,
+                shadow_counters=SHADOW_COUNTERS,
+                shadow_log=logger,
             )
 
-            # Shadow-only: From-based RelationshipLookup. Exceptions never affect delivery.
-            if RELATIONSHIP_LOOKUP_SHADOW and account is not None:
-                from_addr = extract_message_from_address(msg)
-                evaluate_inbound_shadow(
-                    resolve_inbound=self._relationship_lookup.resolve_inbound,
-                    account_id=int(account['id']),
-                    account_email=str(account.get('email') or ''),
-                    from_address=from_addr,
-                    # To/Cc client match (pre-fallback) vs lookup — see PROMPT-58 report.
-                    legacy_delivered=bool(resolved),
-                    legacy_rcpts=list(local_rcpts),
-                    counters=SHADOW_COUNTERS,
-                    log=logger,
+            if plan.mode == InboundRoutingMode.RELATIONSHIP_LIVE:
+                if plan.lookup_error:
+                    logger.error(
+                        '[RELATIONSHIP_LIVE] lookup/validation error '
+                        'account=%s sender=%s error=%s — fail closed',
+                        account_email,
+                        from_addr or '(empty)',
+                        plan.lookup_error,
+                    )
+                    return finalize_inbound_process_result(plan, False)
+                if plan.skip_reason == 'no_relationship_match':
+                    logger.info(
+                        '[RELATIONSHIP_LIVE] no match account=%s sender=%s '
+                        '— skipped (no legacy fallback)',
+                        account_email,
+                        from_addr or '(empty)',
+                    )
+                    return finalize_inbound_process_result(plan, False)
+
+            if not plan.local_rcpts:
+                logger.error(
+                    '[INBOUND_ROUTING] empty local_rcpts mode=%s account=%s',
+                    plan.mode.value,
+                    account_email,
                 )
+                return finalize_inbound_process_result(plan, False)
 
             logger.info(
-                f"Delivering incoming external mail to local SMTP: {local_rcpts}"
+                'Delivering incoming external mail to local SMTP: %s '
+                '(mode=%s relationship_id=%s target=%s maildir=%s)',
+                plan.local_rcpts,
+                plan.mode.value,
+                plan.relationship_id,
+                plan.local_target_email,
+                plan.local_client_maildir,
             )
-            # Envelope sender must be a listed local mailbox: iRedMail applies
-            # reject_unlisted_sender before permit_mynetworks on :25 injection.
-            mail_from = referent_data['local_inbox']
             smtp = smtplib.SMTP(
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
             )
             smtp.ehlo()
-            return self._stream_file_via_smtp(
-                smtp, mail_from, local_rcpts, mail_file
+            delivered = self._stream_file_via_smtp(
+                smtp, plan.mail_from, plan.local_rcpts, mail_file
+            )
+            smtp_error = None if delivered else 'smtp_delivery_failed'
+            return finalize_inbound_process_result(
+                plan, delivered, smtp_error=smtp_error
             )
         except Exception as e:
             logger.error(f"Local SMTP delivery failed: {e}")
-            return False
+            if plan is None:
+                plan = plan_inbound_delivery(
+                    mode=INBOUND_ROUTING_MODE,
+                    resolve_inbound=self._relationship_lookup.resolve_inbound,
+                    account_id=int(account['id']) if account else 0,
+                    account_email=str(account.get('email') or '') if account else '',
+                    from_address='',
+                    legacy_resolved=[],
+                    referent_local_inbox=referent_data['local_inbox'],
+                    shadow_enabled=False,
+                )
+            return finalize_inbound_process_result(
+                plan, False, smtp_error=str(e)
+            )
         finally:
             if smtp is not None:
                 try:
@@ -1772,7 +1827,8 @@ def main():
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
     logger.info(
-        "RELATIONSHIP_LOOKUP_SHADOW=%s (Stage 1 — no live routing change)",
+        "INBOUND_ROUTING_MODE=%s RELATIONSHIP_LOOKUP_SHADOW=%s",
+        INBOUND_ROUTING_MODE.value,
         'on' if RELATIONSHIP_LOOKUP_SHADOW else 'off',
     )
     logger.info("=" * 60)
