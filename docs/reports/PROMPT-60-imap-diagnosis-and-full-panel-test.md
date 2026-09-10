@@ -13,8 +13,8 @@
 | Task | Status | Conclusion |
 |------|--------|------------|
 | 1 — IMAP timeout diagnosis | **Complete** | **Cause: wrong stored `imap_encryption` (`tls` / STARTTLS on port 993).** Server expects implicit SSL (`ssl` / `IMAP4_SSL`), matching Thunderbird on 993. Not network, not Cryptor, not stale password (login not yet reached). |
-| 2 — Fix stored/config problem | **Ready, blocked** | Fix is panel `account_save`: set `imap_encryption=ssl` (and `smtp_encryption=ssl` on 465 — same misconfiguration pattern). Requires real `admin` panel password (PROMPT-59 passwords do not verify). |
-| 3 — Real HTTP panel + two relationships | **Blocked** | Same panel password blocker. `tests/prompt59_panel_cli_save.php` **not retired** until HTTP login succeeds. |
+| 2 — Fix stored/config problem | **Ready** | Panel HTTP login confirmed (see §Task 3). Fix via `account_save`: `imap_encryption=ssl`, `smtp_encryption=ssl`. Not yet applied in this follow-up. |
+| 3 — Real HTTP panel + two relationships | **Partial** | **HTTP login OK** for master `admin` (curl + cookie jar). Two relationships / negative test / CLI retirement **not done yet**. |
 | 4 — Shadow observation window | **Blocked** | Depends on Task 2 IMAP fix + inbound test mail. Shadow stats file still absent. |
 
 **Credential hygiene:** No plaintext passwords were printed in this report, committed to git, or written to VPS scripts. Diagnostic helpers live only under `.keys/` (untracked).
@@ -137,32 +137,59 @@ Prepared script (env-only, **not committed**): `.keys/prompt60_panel_fix_account
 
 No change to `mail-proxy-daemon.py`, `relationship_lookup.py`, or `relationship_shadow.py` is indicated. Enum values `ssl` vs `tls` are intentional; the wrong value was stored.
 
-### Blocker
+### Blocker (resolved for panel login)
+
+Master panel password was provided out-of-band by the operator on 2026-09-10. HTTP login verified (§Task 3). **Task 2 fix (account encryption) still pending execution** via authenticated panel session.
 
 | | |
 |---|---|
 | **Command** | `PANEL_PASS='…' bash /tmp/prompt60_panel_fix_account.sh` |
-| **Output** | Not run — `PANEL_PASS` not available in session |
-| **Expected** | `PANEL_LOGIN_OK`, DB row shows `imap_encryption=ssl`, daemon poll succeeds on next cycle |
-| **Tried (PROMPT-59)** | `StagingTest123!`, `p32amaster` → `password_verify` false; install-secrets has no master password |
-| **Guess** | Master password set at install and known only to operator |
+| **Output** | Not run in this follow-up (login only) |
+| **Expected** | DB row shows `imap_encryption=ssl`, daemon poll succeeds on next cycle |
+| **Tried (PROMPT-59)** | `StagingTest123!`, `p32amaster` → `password_verify` false |
+| **Tried (PROMPT-60 follow-up)** | Operator-provided master password → **HTTP login OK** |
 
 ---
 
 ## Task 3 — Real HTTP panel login + two-relationship scenario
 
-### Status: blocked on panel password
+### Panel HTTP login verification (2026-09-10 follow-up)
 
-Real curl login flow (same as PROMPT-59, with env password) has **not** been confirmed in this session.
+**Result: SUCCESS** — real browser-equivalent HTTP session works with master account `admin` (id=1, role=`master`, active=1, created 2026-09-08).
 
-### `tests/prompt59_panel_cli_save.php`
+Method: curl with `--resolve panel.testvps.loc:443:127.0.0.1`, cookie jar, CSRF from GET login form, POST `action=login_submit`. Password passed via **`PANEL_PASS` env var only** (not in scripts, report, or git). Helper: `.keys/prompt60_panel_login_test.sh` (untracked).
+
+| Step | HTTP | Outcome |
+|------|------|---------|
+| GET `index.php?action=login` | 200 | CSRF token present |
+| POST `login_submit` (`username=admin`) | 200 | **Authenticated** — logout link present, no red error flash |
+| GET `index.php?action=dashboard` | 200 | Authenticated (not login form) |
+| GET `index.php?action=relationship_backfill` | 200 | Authenticated; page title *Legacy backlog — миграция связей*; testids `backfill-count`, `backfill-table`, `backfill-migrate` present |
+
+Verbatim markers from login response check:
+
+```text
+RESULT=OK
+logout_link=yes
+authenticated_content=yes
+dashboard=authenticated
+backfill=authenticated
+login_has_logout=yes
+login_has_error_flash=no
+```
+
+**Conclusion:** PROMPT-59 panel login blocker is **cleared**. The earlier failure was wrong/stale test passwords, not a broken auth stack. Authenticated panel automation (Task 2 fix, two relationships, negative mailbox form) can proceed via the same curl session pattern.
+
+**Credential note:** The operator supplied the master password in chat for this test only. It is **not** recorded in this report, in committed files, or in VPS scripts.
+
+### Remaining Task 3 work (not done in this follow-up)
 
 | Item | State |
 |------|-------|
-| In git from PROMPT-59 | Yes (`tests/prompt59_panel_cli_save.php`) |
-| Hardcoded credentials | **No** — bootstraps master session from DB, no password literal |
-| On VPS | Present from PROMPT-59 deploy |
-| Retired this prompt | **No** — HTTP login must work first |
+| Fix account encryption via panel | Pending |
+| Second external account + second relationship | Pending |
+| Negative mailbox HTTP form (`nobody@testvps.loc`) | Pending |
+| Retire `tests/prompt59_panel_cli_save.php` | Pending — retire after remaining panel tasks complete |
 
 ### Current DB relationship state (read-only)
 
@@ -220,17 +247,17 @@ No `[RELATIONSHIP_SHADOW]` lines in `/var/log/mail-proxy/mail-proxy-daemon.log` 
 
 ---
 
-## Escalation — what the operator must provide to finish PROMPT-60
+## Escalation — remaining items to finish PROMPT-60
 
-1. **`PANEL_PASS`** — real `admin` (id=1) panel password for `https://panel.testvps.loc`.
+1. ~~**`PANEL_PASS`**~~ — **resolved** (HTTP login verified 2026-09-10).
 2. **`REFINT1_IMAP_PASS`** — real IMAP password for `refint1@frona.ru` (optional confirm after ssl fix; decrypt already OK).
 3. **(Task 3)** Second external mailbox credentials if a second referent account must be real (or confirm a test-only second account is acceptable).
 4. **(Task 4)** Send one test inbound message to `refint1@frona.ru` from a known `external_client_email` after IMAP connects.
 
-Once provided (env on VPS session only), run in order:
+Next steps (env on VPS session only; password not echoed):
 
 ```bash
-export PANEL_PASS='…'   # not echoed
+export PANEL_PASS='…'   # operator-provided; not stored in repo
 bash /tmp/prompt60_panel_fix_account.sh
 export REFINT1_IMAP_PASS='…'   # optional verification
 bash /tmp/prompt60_imap_login_test.sh   # after DB shows imap_encryption=ssl
