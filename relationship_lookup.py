@@ -2,8 +2,10 @@
 """
 ClientRelationship lookup layer (PROMPT-53 / PROMPT-54).
 
-Standalone module — not wired into mail-proxy-daemon.py routing yet.
+Standalone query module. PROMPT-58 Stage 1 imports it into mail-proxy-daemon.py
+for shadow-mode logging only — it does not drive live delivery yet.
 Implements PROMPT-53 §10–§13 query contracts against additive `clients` columns.
+Importing this module has no side effects beyond class/function definitions.
 """
 
 from __future__ import annotations

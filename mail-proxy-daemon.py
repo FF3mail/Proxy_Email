@@ -30,6 +30,18 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+# PROMPT-58 Stage 1: RelationshipLookup import is additive/shadow-only.
+# relationship_lookup.py has no top-level side effects beyond class/function defs.
+from relationship_lookup import RelationshipLookup
+from relationship_shadow import (
+    SHADOW_COUNTERS,
+    evaluate_inbound_shadow,
+    extract_message_from_address,
+    final_legacy_rcpts,
+    relationship_lookup_shadow_enabled,
+)
+
 # Константы конфигурации
 CRYPTO_KEY_FILE = '/etc/mail-proxy/crypto.key'
 DB_CONF_FILE = '/etc/mail-proxy/db.conf'
@@ -70,6 +82,8 @@ _DEFAULT_MAX_INBOUND = 200 * 1024 * 1024
 MAX_INBOUND_MESSAGE_BYTES = int(
     os.environ.get('MAX_INBOUND_MESSAGE_BYTES', _DEFAULT_MAX_INBOUND)
 )
+# PROMPT-58 Stage 1: shadow RelationshipLookup (default ON). No live routing flag.
+RELATIONSHIP_LOOKUP_SHADOW = relationship_lookup_shadow_enabled()
 # After this many consecutive size skips for the same message, mark it Seen.
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
@@ -290,6 +304,8 @@ class MailHandler:
         self._cryptor = cryptor
         self._imap_size_skip_tracker: Dict[tuple, int] = {}
         self._imap_size_skip_lock = threading.Lock()
+        # PROMPT-58 Stage 1 — used only for shadow logging, never for delivery.
+        self._relationship_lookup = RelationshipLookup(db)
 
     def _plain_auth_login(self, acc: Dict[str, Any]) -> str:
         """Возвращает логин для plain-аутентификации (username или email)."""
@@ -702,7 +718,7 @@ class MailHandler:
                     view.release()
                     del view
 
-                    if self._deliver_to_local_smtp(temp_path, referent_data):
+                    if self._deliver_to_local_smtp(temp_path, referent_data, acc):
                         mail.store(num, '+FLAGS', '\\Seen')
                         self._clear_imap_size_skip_entry(account_id, uid, seq)
                 finally:
@@ -718,16 +734,37 @@ class MailHandler:
         except Exception as e:
             logger.error(f"IMAP session exception for {acc['email']}: {e}")
     def _deliver_to_local_smtp(
-        self, mail_file: Path, referent_data: Dict[str, Any]
+        self,
+        mail_file: Path,
+        referent_data: Dict[str, Any],
+        account: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Потоковая доставка письма из временного файла на локальный SMTP Postfix."""
         smtp = None
         try:
             with open(mail_file, 'rb') as header_f:
                 msg = email.message_from_binary_file(header_f)
-            local_rcpts = self._resolve_local_recipients(msg, referent_data)
-            if not local_rcpts:
-                local_rcpts = [referent_data['local_inbox']]
+            resolved = self._resolve_local_recipients(msg, referent_data)
+            # Existing fallback semantics unchanged (PROMPT-58 must not alter them).
+            local_rcpts = final_legacy_rcpts(
+                resolved, referent_data['local_inbox']
+            )
+
+            # Shadow-only: From-based RelationshipLookup. Exceptions never affect delivery.
+            if RELATIONSHIP_LOOKUP_SHADOW and account is not None:
+                from_addr = extract_message_from_address(msg)
+                evaluate_inbound_shadow(
+                    resolve_inbound=self._relationship_lookup.resolve_inbound,
+                    account_id=int(account['id']),
+                    account_email=str(account.get('email') or ''),
+                    from_address=from_addr,
+                    # To/Cc client match (pre-fallback) vs lookup — see PROMPT-58 report.
+                    legacy_delivered=bool(resolved),
+                    legacy_rcpts=list(local_rcpts),
+                    counters=SHADOW_COUNTERS,
+                    log=logger,
+                )
+
             logger.info(
                 f"Delivering incoming external mail to local SMTP: {local_rcpts}"
             )
@@ -1734,6 +1771,10 @@ def remove_pid_file(path: str = PID_FILE) -> None:
 def main():
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
+    logger.info(
+        "RELATIONSHIP_LOOKUP_SHADOW=%s (Stage 1 — no live routing change)",
+        'on' if RELATIONSHIP_LOOKUP_SHADOW else 'off',
+    )
     logger.info("=" * 60)
     daemon = None
     write_pid_file()
