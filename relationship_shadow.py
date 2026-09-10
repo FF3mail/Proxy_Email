@@ -250,3 +250,112 @@ def final_legacy_rcpts(
     if not resolved:
         return [local_inbox]
     return list(resolved)
+
+
+class _ResolveOutbound(Protocol):
+    def __call__(self, local_client_email: str) -> Any:
+        ...
+
+
+def classify_outbound_shadow(
+    legacy_account_id: Optional[int],
+    relationship_account_id: Optional[int],
+) -> str:
+    """
+    Pure outbound AGREE/DIVERGE classifier.
+
+    legacy_account_id: external_accounts.id from referent LIMIT 1 selection.
+    relationship_account_id: ClientRelationship.external_account_id or None.
+    """
+    if legacy_account_id == relationship_account_id:
+        return MARKER_AGREE
+    if legacy_account_id is not None and relationship_account_id is None:
+        return MARKER_DIVERGE_LEGACY_ONLY
+    return MARKER_DIVERGE_LOOKUP_ONLY
+
+
+def evaluate_outbound_shadow(
+    *,
+    resolve_outbound: _ResolveOutbound,
+    from_address: str,
+    legacy_account_id: Optional[int],
+    referent_id: int,
+    counters: Optional[ShadowCounters] = None,
+    log: Optional[logging.Logger] = None,
+    stats_path: Optional[str] = SHADOW_STATS_FILE,
+) -> ShadowEvalResult:
+    """
+    Call RelationshipLookup.resolve_outbound in isolation.
+
+    Never raises. Never mutates delivery account. Return value is for logging only.
+    """
+    ctr = counters if counters is not None else SHADOW_COUNTERS
+    logger = log if log is not None else logging.getLogger('mail-proxy')
+    sender = (from_address or '').strip()
+    relationship_account_id: Optional[int] = None
+    relationship_id: Optional[int] = None
+
+    try:
+        dto = resolve_outbound(sender)
+        if dto is not None:
+            relationship_id = int(getattr(dto, 'relationship_id'))
+            relationship_account_id = int(getattr(dto, 'external_account_id'))
+        marker = classify_outbound_shadow(legacy_account_id, relationship_account_id)
+        ctr.record(marker)
+        logger.info(
+            '[OUTBOUND_RELATIONSHIP_SHADOW] referent_id=%s from=%s '
+            'legacy_account_id=%s lookup_account_id=%s relationship_id=%s marker=%s',
+            referent_id,
+            sender or '(empty)',
+            legacy_account_id if legacy_account_id is not None else '(none)',
+            (
+                relationship_account_id
+                if relationship_account_id is not None
+                else 'no match'
+            ),
+            relationship_id if relationship_id is not None else '(none)',
+            marker,
+        )
+        snap = ctr.snapshot()
+        logger.info(
+            '[RELATIONSHIP_SHADOW_STATS] processed=%s agree=%s '
+            'diverge_legacy_no_match=%s diverge_lookup_no_legacy=%s errors=%s',
+            snap['processed'],
+            snap['agree'],
+            snap['diverge_legacy_delivered_no_match'],
+            snap['diverge_relationship_match_legacy_no_deliver'],
+            snap['errors'],
+        )
+        if stats_path:
+            try:
+                write_shadow_stats_file(ctr, stats_path)
+            except OSError as write_err:
+                logger.warning(
+                    '[OUTBOUND_RELATIONSHIP_SHADOW] stats file write failed: %s',
+                    write_err,
+                )
+        return ShadowEvalResult(
+            marker=marker,
+            from_address=sender,
+            relationship_id=relationship_id,
+        )
+    except Exception as exc:
+        ctr.record_error()
+        logger.warning(
+            '[OUTBOUND_RELATIONSHIP_SHADOW] exception (ignored; delivery unchanged): '
+            'referent_id=%s from=%s error=%s',
+            referent_id,
+            sender or '(empty)',
+            exc,
+        )
+        if stats_path:
+            try:
+                write_shadow_stats_file(ctr, stats_path)
+            except OSError:
+                pass
+        return ShadowEvalResult(
+            marker='ERROR',
+            from_address=sender,
+            relationship_id=None,
+            error=str(exc),
+        )

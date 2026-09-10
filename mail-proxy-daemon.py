@@ -37,9 +37,13 @@ from relationship_lookup import RelationshipLookup
 from relationship_routing import (
     InboundProcessResult,
     InboundRoutingMode,
+    OutboundRoutingMode,
+    extract_outbound_identity_from_message,
     finalize_inbound_process_result,
     parse_inbound_routing_mode,
+    parse_outbound_routing_mode,
     plan_inbound_delivery,
+    plan_outbound_delivery,
 )
 from relationship_shadow import (
     SHADOW_COUNTERS,
@@ -91,6 +95,8 @@ MAX_INBOUND_MESSAGE_BYTES = int(
 RELATIONSHIP_LOOKUP_SHADOW = relationship_lookup_shadow_enabled()
 # PROMPT-63 Stage 2a: inbound routing mode (default shadow — safe).
 INBOUND_ROUTING_MODE = parse_inbound_routing_mode()
+# PROMPT-65 Stage 2b: outbound routing mode (default shadow — safe).
+OUTBOUND_ROUTING_MODE = parse_outbound_routing_mode()
 # After this many consecutive size skips for the same message, mark it Seen.
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
@@ -1315,12 +1321,19 @@ class MaildirHandler(FileSystemEventHandler):
     При появлении нового файла в Maildir/new создаёт SmtpTask
     и помещает в централизованную smtp_task_queue.
     """
-    def __init__(self, referent_data: Dict[str, Any], smtp_task_queue: queue.Queue,
-                 db: Database, daemon):
+    def __init__(
+        self,
+        referent_data: Dict[str, Any],
+        smtp_task_queue: queue.Queue,
+        db: Database,
+        daemon,
+        relationship_lookup: RelationshipLookup,
+    ):
         self.referent_data = referent_data
         self._smtp_queue = smtp_task_queue
         self._db = db
         self._daemon = daemon
+        self._relationship_lookup = relationship_lookup
     def on_created(self, event) -> None:
         if event.is_directory:
             return
@@ -1332,72 +1345,13 @@ class MaildirHandler(FileSystemEventHandler):
             f"Watchdog: new email file for referent "
             f"{self.referent_data['id']}: {file_path.name}"
         )
-        # Читаем только заголовки для определения получателей
-        try:
-            from email.parser import BytesHeaderParser
-            with open(file_path, 'rb') as f:
-                msg = BytesHeaderParser().parse(f)
-        except Exception as e:
-            logger.error(f"Failed to parse headers from {file_path.name}: {e}")
-            return
-        to_header = msg.get('To', '')
-        cc_header = msg.get('Cc', '')
-        all_rcpts = email.utils.getaddresses([to_header, cc_header])
-        recipients = [addr for _, addr in all_rcpts if addr]
-        if not recipients:
-            logger.warning(f"No recipients in {file_path.name}, skipping")
-            return
-        # Загружаем первый доступный аккаунт референта для отправки
-        account = self._load_first_account()
-        if not account:
-            logger.warning(
-                f"No active accounts for referent {self.referent_data['id']}, "
-                f"file {file_path.name} will be picked up on next scan"
-            )
-            return
-        task = SmtpTask(
+        self._daemon._enqueue_outbound_file(
             referent_data=self.referent_data,
-            account=account,
-            recipients=recipients,
-            file_path=file_path
+            file_path=file_path,
+            relationship_lookup=self._relationship_lookup,
+            smtp_queue=self._smtp_queue,
+            source='watchdog',
         )
-
-        if not self._daemon._reserve_outgoing_file(file_path):
-            return
-
-        try:
-            self._smtp_queue.put_nowait(task)
-        except queue.Full:
-            self._daemon._release_outgoing_file(file_path)
-            logger.warning(
-                f"SMTP task queue full, file {file_path.name} "
-                f"will be picked up on next scan cycle"
-            )
-    def _load_first_account(self) -> Optional[Dict[str, Any]]:
-        """Загружает первый активный внешний аккаунт референта."""
-        conn = None
-        cursor = None
-        try:
-            conn = self._db.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
-                SELECT id, email, auth_type, smtp_host, smtp_port,
-                       username, password_enc, smtp_encryption,
-                       provider, client_id, client_secret_enc
-                FROM external_accounts
-                WHERE referent_id = %s AND active = 1
-                LIMIT 1
-                """,
-                (self.referent_data['id'],)
-            )
-            return cursor.fetchone()
-        except Exception as e:
-            logger.error(f"Failed to load account for referent: {e}")
-            return None
-        finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
 # =============================================================================
 # Главный управляющий класс демона (замена)
 # =============================================================================
@@ -1518,7 +1472,8 @@ class ProxyDaemon:
             ref,
             self._smtp_task_queue,
             self._db,
-            self
+            self,
+            self._mail_handler._relationship_lookup,
         )
         self._observer.schedule(handler, path=str(maildir_new), recursive=False)
 
@@ -1541,6 +1496,142 @@ class ProxyDaemon:
             self._referent_path_registry[ref['id']] = str(maildir_new)
 
         logger.info(f"Watchdog configured for referent {ref['id']}: {maildir_new}")
+    def _load_legacy_outbound_account(
+        self, referent_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Legacy outbound account selection (referent_id LIMIT 1). Shadow/legacy only."""
+        conn = None
+        cursor = None
+        try:
+            conn = self._db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, email, auth_type, smtp_host, smtp_port,
+                       username, password_enc, smtp_encryption,
+                       provider, client_id, client_secret_enc
+                FROM external_accounts
+                WHERE referent_id = %s AND active = 1
+                LIMIT 1
+                """,
+                (int(referent_id),),
+            )
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(
+                f"Failed to load legacy outbound account for referent "
+                f"{referent_id}: {e}"
+            )
+            return None
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    def _enqueue_outbound_file(
+        self,
+        *,
+        referent_data: Dict[str, Any],
+        file_path: Path,
+        relationship_lookup: RelationshipLookup,
+        smtp_queue: queue.Queue,
+        source: str,
+    ) -> None:
+        """Parse outbound message, plan account routing, enqueue SmtpTask if allowed."""
+        try:
+            from email.parser import BytesHeaderParser
+
+            with open(file_path, 'rb') as f:
+                msg = BytesHeaderParser().parse(f)
+        except Exception as e:
+            logger.error(f"Failed to parse headers from {file_path.name}: {e}")
+            return
+
+        to_header = msg.get('To', '')
+        cc_header = msg.get('Cc', '')
+        all_rcpts = email.utils.getaddresses([to_header, cc_header])
+        recipients = [addr for _, addr in all_rcpts if addr]
+        if not recipients:
+            logger.warning(f"No recipients in {file_path.name}, skipping")
+            return
+
+        from_address = extract_outbound_identity_from_message(msg)
+        plan = plan_outbound_delivery(
+            mode=OUTBOUND_ROUTING_MODE,
+            resolve_outbound=relationship_lookup.resolve_outbound,
+            load_legacy_account=self._load_legacy_outbound_account,
+            from_address=from_address,
+            referent_id=int(referent_data['id']),
+            shadow_enabled=RELATIONSHIP_LOOKUP_SHADOW,
+            shadow_log=logger,
+        )
+
+        if plan.lookup_error:
+            logger.warning(
+                '[OUTBOUND_ROUTING] %s referent=%s file=%s identity=%s '
+                'lookup_error=%s — not enqueued (retryable)',
+                source,
+                referent_data['id'],
+                file_path.name,
+                plan.outbound_identity or '(empty)',
+                plan.lookup_error,
+            )
+            return
+
+        if plan.skip_reason == 'no_relationship_match':
+            logger.warning(
+                '[OUTBOUND_ROUTING] %s referent=%s file=%s identity=%s '
+                'no_relationship_match — not enqueued (retryable)',
+                source,
+                referent_data['id'],
+                file_path.name,
+                plan.outbound_identity or '(empty)',
+            )
+            return
+
+        if plan.account is None:
+            logger.warning(
+                '[OUTBOUND_ROUTING] %s referent=%s file=%s identity=%s '
+                'reason=%s — not enqueued (retryable)',
+                source,
+                referent_data['id'],
+                file_path.name,
+                plan.outbound_identity or '(empty)',
+                plan.skip_reason or 'no_account',
+            )
+            return
+
+        if OUTBOUND_ROUTING_MODE == OutboundRoutingMode.RELATIONSHIP_LIVE:
+            logger.info(
+                '[OUTBOUND_ROUTING] relationship_live referent=%s file=%s '
+                'identity=%s relationship_id=%s external_account_id=%s',
+                referent_data['id'],
+                file_path.name,
+                plan.outbound_identity,
+                plan.relationship_id,
+                plan.external_account_id,
+            )
+
+        task = SmtpTask(
+            referent_data=referent_data,
+            account=plan.account,
+            recipients=recipients,
+            file_path=file_path,
+        )
+
+        if not self._reserve_outgoing_file(file_path):
+            return
+
+        try:
+            smtp_queue.put_nowait(task)
+        except queue.Full:
+            self._release_outgoing_file(file_path)
+            logger.warning(
+                f"SMTP task queue full, file {file_path.name} "
+                f"will be picked up on next scan cycle"
+            )
+
     def _reserve_outgoing_file(self, file_path: Path) -> bool:
         """
         Атомарно резервирует файл для постановки в SMTP-очередь.
@@ -1574,52 +1665,21 @@ class ProxyDaemon:
             logger.info(
                 f"Found {len(files)} backlog files for referent {ref['id']}"
             )
-            # Загружаем аккаунт один раз для всего пакета файлов
-            conn = self._db.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
-                SELECT id, email, auth_type, smtp_host, smtp_port,
-                       username, password_enc, smtp_encryption,
-                       provider, client_id, client_secret_enc
-                FROM external_accounts
-                WHERE referent_id = %s AND active = 1 LIMIT 1
-                """,
-                (ref['id'],)
-            )
-            account = cursor.fetchone()
-            cursor.close()
-            conn.close()
-            if not account:
-                logger.warning(
-                    f"No active account for referent {ref['id']}, "
-                    f"backlog will not be processed"
-                )
-                return
             for f in files:
-                if not self._reserve_outgoing_file(f):
-                    continue
                 try:
-                    from email.parser import BytesHeaderParser
-                    with open(f, 'rb') as fh:
-                        msg = BytesHeaderParser().parse(fh)
-                    all_rcpts = email.utils.getaddresses([
-                        msg.get('To', ''), msg.get('Cc', '')
-                    ])
-                    recipients = [addr for _, addr in all_rcpts if addr]
-                    if recipients:
-                        task = SmtpTask(ref, account, recipients, f)
-                        self._smtp_task_queue.put_nowait(task)
-                    else:
-                        self._release_outgoing_file(f)
+                    self._enqueue_outbound_file(
+                        referent_data=ref,
+                        file_path=f,
+                        relationship_lookup=self._mail_handler._relationship_lookup,
+                        smtp_queue=self._smtp_task_queue,
+                        source='backlog',
+                    )
                 except queue.Full:
-                    self._release_outgoing_file(f)
                     logger.warning(
                         f"SMTP queue full during backlog scan, "
                         f"will retry later: {f.name}"
                     )
                 except Exception as e:
-                    self._release_outgoing_file(f)
                     logger.error(f"Error processing backlog file {f.name}: {e}")
         except Exception as e:
             logger.error(
@@ -1827,8 +1887,10 @@ def main():
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
     logger.info(
-        "INBOUND_ROUTING_MODE=%s RELATIONSHIP_LOOKUP_SHADOW=%s",
+        "INBOUND_ROUTING_MODE=%s OUTBOUND_ROUTING_MODE=%s "
+        "RELATIONSHIP_LOOKUP_SHADOW=%s",
         INBOUND_ROUTING_MODE.value,
+        OUTBOUND_ROUTING_MODE.value,
         'on' if RELATIONSHIP_LOOKUP_SHADOW else 'off',
     )
     logger.info("=" * 60)

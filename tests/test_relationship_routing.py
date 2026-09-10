@@ -18,10 +18,14 @@ sys.path.insert(0, str(ROOT))
 from relationship_lookup import ClientRelationshipDTO
 from relationship_routing import (
     InboundRoutingMode,
+    OutboundRoutingMode,
     finalize_inbound_process_result,
     parse_inbound_routing_mode,
+    parse_outbound_routing_mode,
     plan_inbound_delivery,
+    plan_outbound_delivery,
     shadow_marker_for_divergence_analysis,
+    shadow_marker_for_outbound_divergence,
     validate_relationship_for_live,
 )
 from relationship_shadow import (
@@ -72,6 +76,20 @@ class ParseModeTest(unittest.TestCase):
                 {'INBOUND_ROUTING_MODE': 'relationship_live'}
             ),
             InboundRoutingMode.RELATIONSHIP_LIVE,
+        )
+
+    def test_outbound_default_shadow(self) -> None:
+        self.assertEqual(
+            parse_outbound_routing_mode({}),
+            OutboundRoutingMode.SHADOW,
+        )
+
+    def test_outbound_relationship_live(self) -> None:
+        self.assertEqual(
+            parse_outbound_routing_mode(
+                {'OUTBOUND_ROUTING_MODE': 'relationship_live'}
+            ),
+            OutboundRoutingMode.RELATIONSHIP_LIVE,
         )
 
 
@@ -254,6 +272,118 @@ class ProcessResultTest(unittest.TestCase):
         result = finalize_inbound_process_result(plan, False)
         self.assertFalse(result.mark_imap_seen)
         self.assertFalse(result.local_delivered)
+
+
+class OutboundRoutingPlanTest(unittest.TestCase):
+    def _legacy_loader(self, account_id: int):
+        def load(_referent_id: int) -> Optional[dict]:
+            return {
+                'id': account_id,
+                'email': f'refint{account_id}@example.com',
+                'auth_type': 'plain',
+                'smtp_host': 'smtp.example.com',
+                'smtp_port': 465,
+                'smtp_encryption': 'ssl',
+            }
+
+        return load
+
+    def test_relationship_a_resolves_account_1(self) -> None:
+        dto = _dto(relationship_id=1, external_account_id=1)
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=lambda _e: dto,
+            load_legacy_account=self._legacy_loader(2),
+            from_address='clientloc1@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertEqual(plan.external_account_id, 1)
+        self.assertEqual(plan.account['id'], 1)
+
+    def test_relationship_b_resolves_account_2(self) -> None:
+        dto = _dto(
+            relationship_id=2,
+            external_account_id=2,
+            external_client='clientint2@bofoma.net',
+            local_client='clientloc2@testvps.loc',
+        )
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=lambda _e: dto,
+            load_legacy_account=self._legacy_loader(1),
+            from_address='clientloc2@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertEqual(plan.external_account_id, 2)
+        self.assertNotEqual(plan.account['id'], 1)
+
+    def test_no_relationship_no_account_live(self) -> None:
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=lambda _e: None,
+            load_legacy_account=self._legacy_loader(1),
+            from_address='unknown@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertIsNone(plan.account)
+        self.assertEqual(plan.skip_reason, 'no_relationship_match')
+
+    def test_lookup_error_fail_closed_live(self) -> None:
+        def boom(_e: str) -> Optional[ClientRelationshipDTO]:
+            raise ConnectionError('db down')
+
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=boom,
+            load_legacy_account=self._legacy_loader(1),
+            from_address='clientloc1@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertIsNone(plan.account)
+        self.assertIn('db down', plan.lookup_error or '')
+
+    def test_shadow_uses_legacy_account(self) -> None:
+        dto = _dto(relationship_id=2, external_account_id=2)
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.SHADOW,
+            resolve_outbound=lambda _e: dto,
+            load_legacy_account=self._legacy_loader(1),
+            from_address='clientloc2@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertEqual(plan.account['id'], 1)
+
+    def test_cross_relationship_impossible_in_live(self) -> None:
+        dto_b = _dto(
+            relationship_id=2,
+            external_account_id=2,
+            local_client='clientloc2@testvps.loc',
+        )
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=lambda _e: dto_b,
+            load_legacy_account=self._legacy_loader(1),
+            from_address='clientloc2@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertEqual(plan.external_account_id, 2)
+        self.assertNotEqual(plan.external_account_id, 1)
+
+    def test_outbound_divergence_marker(self) -> None:
+        self.assertEqual(
+            shadow_marker_for_outbound_divergence(1, 2),
+            MARKER_DIVERGE_LOOKUP_ONLY,
+        )
+        self.assertEqual(
+            shadow_marker_for_outbound_divergence(1, 1),
+            MARKER_AGREE,
+        )
 
 
 if __name__ == '__main__':

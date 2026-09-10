@@ -1,6 +1,6 @@
-# DELTA-transit — Якорный документ v3.4
+# DELTA-transit — Якорный документ v3.5
 
-**Статус:** Production Candidate (Stage 2a inbound routing frozen)  
+**Статус:** Production Candidate (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-10  
 **Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
 
@@ -147,6 +147,7 @@ DELTA-transit/
 | `LOG_FILE` | `/var/log/mail-proxy/mail-proxy-daemon.log` |
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
 | `INBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.1 |
+| `OUTBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.2 |
 | `RELATIONSHIP_LOOKUP_SHADOW` | default **on** в режиме `shadow` — shadow-статистика (PROMPT-58) |
 
 ### 3.1 Входящая маршрутизация (Stage 2a, PROMPT-63)
@@ -191,12 +192,51 @@ resolve_inbound(external_account_id, normalize_email(From))
 
 **Ещё не реализовано (customer spec / Stage 3+):**
 
-- Outbound routing через `RelationshipLookup.resolve_outbound()`
 - MIME attachment-only transformation / пересборка RFC822
 - IMAP DELETE/EXPUNGE для unknown sender («spam delete»)
 - Полное соответствие customer-spec inbound transformation
 
 **Shadow stats:** `/run/mail-proxy/relationship_shadow_stats.json` + лог `[RELATIONSHIP_SHADOW]`.
+
+### 3.2 Исходящая маршрутизация (Stage 2b, PROMPT-65)
+
+**Watch target (interim):** `referents.local_outbox/new` (существующий watchdog). На тестовом VPS один референт обслуживает две ClientRelationship; детерминизм обеспечивается **не** 1:1 referent→relationship, а ключом сообщения.
+
+**Контракт outbound lookup (авторитетный):**
+
+```text
+resolve_outbound(normalize_email(From))
+```
+
+| Компонент | Источник |
+|-----------|----------|
+| Outbound routing identity | RFC822 `From` → `local_client_email` |
+| Relationship lookup | `RelationshipLookup.resolve_outbound()` |
+| Selected account | `ClientRelationship.external_account_id` → `dto.account` |
+
+Не используется для выбора аккаунта: `referent_id LIMIT 1`, порядок строк в `external_accounts`, To/Cc.
+
+**Режимы `OUTBOUND_ROUTING_MODE` (независимы от inbound):**
+
+| Режим | Доставка | Shadow |
+|-------|----------|--------|
+| `shadow` (default) | Legacy `referent_id LIMIT 1` | Да (`[OUTBOUND_RELATIONSHIP_SHADOW]`) |
+| `legacy` | Legacy only | Нет |
+| `relationship_live` | `external_account_id` выбранной связи | Нет |
+
+**Безопасный default:** незаданный `OUTBOUND_ROUTING_MODE` → `shadow`.
+
+**Rollback:** тот же systemd drop-in `/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf` — добавить `Environment=OUTBOUND_ROUTING_MODE=shadow` + restart.
+
+**`relationship_live` — текущее поведение:**
+
+| Ситуация | Внешняя доставка | Legacy fallback |
+|----------|------------------|-----------------|
+| Match | Да → SMTP через `dto.account` | Нет |
+| Miss (unknown From) | Нет; файл остаётся в `new` (retry) | **Нет** |
+| Lookup error | Нет; файл остаётся в `new` (retry) | **Нет** |
+
+**Целевой watch (ещё не cutover):** `ClientRelationship.local_client_maildir/new` — см. §12.
 
 ---
 
@@ -341,16 +381,16 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
-## 12. Реестр открытых архитектурных пробелов (PROMPT-64)
+## 12. Реестр открытых архитектурных пробелов (PROMPT-65)
 
 | Группа | Открытые пункты |
 |--------|-----------------|
-| **Routing** | Outbound cutover на `resolve_outbound(local_client_email)`; полная замена legacy To/Cc inbound |
+| **Routing** | Полная замена legacy To/Cc inbound |
 | **Message Transformation** | Attachment-only inbound rebuild; новый From/To per relationship |
 | **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
-| **Outbound** | Maildir watch по `local_client_maildir` вместо `referent.local_outbox` |
+| **Outbound** | Maildir watch по `local_client_maildir` вместо `referent.local_outbox` (interim: shared outbox + From identity) |
 | **Operational Hardening** | Panel UI для shadow/routing stats; non-interactive routing mode audit |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.4*
+*Конец документа · DELTA-transit Anchor v3.5*

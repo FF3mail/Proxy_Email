@@ -11,7 +11,7 @@ import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from relationship_lookup import ClientRelationshipDTO, normalize_email
 from relationship_shadow import (
@@ -20,7 +20,9 @@ from relationship_shadow import (
     MARKER_DIVERGE_LOOKUP_ONLY,
     ShadowCounters,
     classify_inbound_shadow,
+    classify_outbound_shadow,
     evaluate_inbound_shadow,
+    evaluate_outbound_shadow,
     extract_message_from_address,
     final_legacy_rcpts,
     relationship_lookup_shadow_enabled,
@@ -222,3 +224,145 @@ def shadow_marker_for_divergence_analysis(
 ) -> str:
     """Expose PROMPT-58 classifier for reports/tests."""
     return classify_inbound_shadow(bool(legacy_resolved), relationship_id)
+
+
+class OutboundRoutingMode(str, Enum):
+    SHADOW = 'shadow'
+    LEGACY = 'legacy'
+    RELATIONSHIP_LIVE = 'relationship_live'
+
+
+def parse_outbound_routing_mode(
+    environ: Optional[dict] = None,
+) -> OutboundRoutingMode:
+    """
+    OUTBOUND_ROUTING_MODE env: shadow (default) | legacy | relationship_live.
+    Safe default after deploy: shadow.
+    """
+    env = environ if environ is not None else os.environ
+    raw = (env.get('OUTBOUND_ROUTING_MODE') or 'shadow').strip().lower()
+    if raw in ('legacy',):
+        return OutboundRoutingMode.LEGACY
+    if raw in ('relationship_live', 'live', 'relationship'):
+        return OutboundRoutingMode.RELATIONSHIP_LIVE
+    return OutboundRoutingMode.SHADOW
+
+
+class _ResolveOutbound(Protocol):
+    def __call__(self, local_client_email: str) -> Optional[ClientRelationshipDTO]:
+        ...
+
+
+class _LoadLegacyOutboundAccount(Protocol):
+    def __call__(self, referent_id: int) -> Optional[Dict[str, Any]]:
+        ...
+
+
+@dataclass(frozen=True)
+class OutboundDeliveryPlan:
+    """Resolved outbound routing decision (before SMTP enqueue)."""
+
+    mode: OutboundRoutingMode
+    account: Optional[Dict[str, Any]]
+    outbound_identity: Optional[str] = None
+    relationship_id: Optional[int] = None
+    external_account_id: Optional[int] = None
+    legacy_account_id: Optional[int] = None
+    lookup_error: Optional[str] = None
+    skip_reason: Optional[str] = None
+
+
+def extract_outbound_identity_from_message(msg: Any) -> str:
+    """
+    Outbound routing key: RFC822 From address (local_client_email).
+    Mirrors inbound use of From-only parsing.
+    """
+    return extract_message_from_address(msg)
+
+
+def account_dict_from_relationship(dto: ClientRelationshipDTO) -> Dict[str, Any]:
+    """Account payload for SmtpTask from resolved ClientRelationship."""
+    return dict(dto.account)
+
+
+def plan_outbound_delivery(
+    *,
+    mode: OutboundRoutingMode,
+    resolve_outbound: _ResolveOutbound,
+    load_legacy_account: _LoadLegacyOutboundAccount,
+    from_address: str,
+    referent_id: int,
+    shadow_enabled: bool,
+    shadow_counters: Optional[ShadowCounters] = None,
+    shadow_log: Optional[logging.Logger] = None,
+) -> OutboundDeliveryPlan:
+    """
+    Compute external SMTP account without performing delivery.
+    relationship_live: no legacy fallback on miss/error.
+    shadow: legacy account for delivery; relationship lookup observational only.
+    """
+    identity = (from_address or '').strip()
+    legacy_account = load_legacy_account(int(referent_id))
+    legacy_account_id = (
+        int(legacy_account['id']) if legacy_account and legacy_account.get('id') else None
+    )
+
+    if mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
+        try:
+            dto = resolve_outbound(identity)
+        except Exception as exc:
+            return OutboundDeliveryPlan(
+                mode=mode,
+                account=None,
+                outbound_identity=identity or None,
+                lookup_error=str(exc),
+            )
+        if dto is None:
+            return OutboundDeliveryPlan(
+                mode=mode,
+                account=None,
+                outbound_identity=identity or None,
+                skip_reason='no_relationship_match',
+            )
+        account = account_dict_from_relationship(dto)
+        return OutboundDeliveryPlan(
+            mode=mode,
+            account=account,
+            outbound_identity=identity or None,
+            relationship_id=int(dto.relationship_id),
+            external_account_id=int(dto.external_account_id),
+        )
+
+    if mode == OutboundRoutingMode.SHADOW and shadow_enabled:
+        evaluate_outbound_shadow(
+            resolve_outbound=resolve_outbound,
+            from_address=identity,
+            legacy_account_id=legacy_account_id,
+            referent_id=int(referent_id),
+            counters=shadow_counters,
+            log=shadow_log,
+        )
+
+    if legacy_account is None:
+        return OutboundDeliveryPlan(
+            mode=mode,
+            account=None,
+            outbound_identity=identity or None,
+            legacy_account_id=legacy_account_id,
+            skip_reason='no_legacy_account',
+        )
+
+    return OutboundDeliveryPlan(
+        mode=mode,
+        account=legacy_account,
+        outbound_identity=identity or None,
+        legacy_account_id=legacy_account_id,
+    )
+
+
+def shadow_marker_for_outbound_divergence(
+    legacy_account_id: Optional[int],
+    relationship_account_id: Optional[int],
+) -> str:
+    """Expose outbound shadow classifier for reports/tests."""
+    return classify_outbound_shadow(legacy_account_id, relationship_account_id)

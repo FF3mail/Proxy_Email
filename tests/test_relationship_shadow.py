@@ -28,7 +28,9 @@ from relationship_shadow import (
     MARKER_DIVERGE_LOOKUP_ONLY,
     ShadowCounters,
     classify_inbound_shadow,
+    classify_outbound_shadow,
     evaluate_inbound_shadow,
+    evaluate_outbound_shadow,
     extract_message_from_address,
     final_legacy_rcpts,
     relationship_lookup_shadow_enabled,
@@ -356,6 +358,66 @@ class CrossRelationshipShadowTest(unittest.TestCase):
             stats_path=None,
         )
         self.assertEqual(local_rcpts, ['refloc1@testvps.loc'])
+        self.assertEqual(self.counters.snapshot()['errors'], 1)
+
+
+class ClassifyOutboundShadowTest(unittest.TestCase):
+    def test_agree_same_account(self) -> None:
+        self.assertEqual(classify_outbound_shadow(1, 1), MARKER_AGREE)
+
+    def test_agree_both_none(self) -> None:
+        self.assertEqual(classify_outbound_shadow(None, None), MARKER_AGREE)
+
+    def test_diverge_legacy_only(self) -> None:
+        self.assertEqual(
+            classify_outbound_shadow(1, None), MARKER_DIVERGE_LEGACY_ONLY
+        )
+
+    def test_diverge_account_mismatch(self) -> None:
+        self.assertEqual(
+            classify_outbound_shadow(1, 2), MARKER_DIVERGE_LOOKUP_ONLY
+        )
+
+
+class EvaluateOutboundShadowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.counters = ShadowCounters()
+        self.log = logging.getLogger('test-outbound-shadow')
+        self.log.handlers.clear()
+        self.log.addHandler(logging.NullHandler())
+        self.log.propagate = False
+
+    def test_evaluate_records_agree(self) -> None:
+        class Dto:
+            relationship_id = 1
+            external_account_id = 1
+
+        result = evaluate_outbound_shadow(
+            resolve_outbound=lambda _e: Dto(),
+            from_address='clientloc1@testvps.loc',
+            legacy_account_id=1,
+            referent_id=1,
+            counters=self.counters,
+            log=self.log,
+            stats_path=None,
+        )
+        self.assertEqual(result.marker, MARKER_AGREE)
+        self.assertEqual(self.counters.snapshot()['agree'], 1)
+
+    def test_evaluate_exception_does_not_raise(self) -> None:
+        def boom(_e: str):
+            raise RuntimeError('db down')
+
+        result = evaluate_outbound_shadow(
+            resolve_outbound=boom,
+            from_address='clientloc1@testvps.loc',
+            legacy_account_id=1,
+            referent_id=1,
+            counters=self.counters,
+            log=self.log,
+            stats_path=None,
+        )
+        self.assertEqual(result.error, 'db down')
         self.assertEqual(self.counters.snapshot()['errors'], 1)
 
 
