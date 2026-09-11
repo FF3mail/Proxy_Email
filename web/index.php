@@ -141,6 +141,10 @@ function renderHeader(string $title): void
                <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
                <?= h(__('nav.monitor')) ?>
             </a>
+            <a href="/relationship-status.php"
+               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'relationship-status.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
+               <?= h(__('nav.relationship_status')) ?>
+            </a>
             <a href="/logs.php"
                <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'logs.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
                Логи
