@@ -178,6 +178,9 @@ return [
     'relationship.error.unique' => 'Value {field}={value} is already used by relationship #{id} (referent_id={referent_id})',
     'relationship.error.unique_account' => 'External account #{account_id} is already linked to relationship #{id} (referent_id={referent_id})',
     'relationship.error.unique_db' => 'Uniqueness violation (duplicate address or account). Change values and retry.',
+    'relationship.error.maildir_path_duplicate' => 'Maildir path {path} is already used by relationship #{id} (referent_id={referent_id})',
+    'relationship.error.maildir_referent_outbox_collision' => 'Maildir path {path} matches referent #{referent_id} local_outbox — use a distinct client Maildir unless this is the single accepted own-referent sharing case',
+    'relationship.error.maildir_referent_outbox_symmetric' => 'Maildir path {path} matches referent #{referent_id} local_outbox, but another relationship on this referent already claims that path',
     'relationship.error.save_failed' => 'Failed to save relationship',
 
     // External accounts

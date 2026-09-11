@@ -19,6 +19,21 @@ function normalizeRelationshipEmail(string $email): string
 }
 
 /**
+ * Canonical Maildir path for panel save + collision checks (PROMPT-70).
+ * Mirrors maildir_resolver path hygiene: trim, collapse slashes, no trailing slash.
+ */
+function normalizeRelationshipMaildirPath(string $path): string
+{
+    $path = trim($path);
+    if ($path === '') {
+        return '';
+    }
+    $path = (string)preg_replace('#/+#', '/', $path);
+
+    return rtrim($path, '/');
+}
+
+/**
  * @param array<string, mixed> $row clients row (+ optional ea_active, ea_email, ea_referent_id)
  * @return list<string> missing field keys (empty ⇒ complete for §9 relationship fields)
  */
@@ -288,7 +303,7 @@ function parseRelationshipFormPost(array $post): array
     $externalClient = normalizeRelationshipEmail((string)($post['external_client_email'] ?? ''));
     $localClient = normalizeRelationshipEmail((string)($post['local_client_email'] ?? ''));
     $localReferent = normalizeRelationshipEmail((string)($post['local_referent_email'] ?? ''));
-    $maildir = trim((string)($post['local_client_maildir'] ?? ''));
+    $maildir = normalizeRelationshipMaildirPath((string)($post['local_client_maildir'] ?? ''));
     $accountRaw = trim((string)($post['external_account_id'] ?? ''));
     $accountId = $accountRaw === '' ? null : (int)$accountRaw;
     if ($accountId !== null && $accountId <= 0) {
@@ -400,7 +415,123 @@ function findRelationshipUniqueCollision(
         ]);
     }
 
+    return findRelationshipMaildirPathCollision(
+        $pdo,
+        $referentId,
+        $excludeId,
+        (string)$data['local_client_maildir']
+    );
+}
+
+/**
+ * Pure maildir path collision evaluation (PROMPT-70).
+ *
+ * @param list<array{id: int|string, referent_id: int|string, local_client_maildir: string}> $clientRows
+ * @param list<array{id: int|string, local_outbox: string}> $referentRows
+ * @return string|null operator-facing error message
+ */
+function evaluateRelationshipMaildirPathCollision(
+    int $referentId,
+    ?int $excludeId,
+    string $maildir,
+    array $clientRows,
+    array $referentRows
+): ?string {
+    $normalized = normalizeRelationshipMaildirPath($maildir);
+    if ($normalized === '') {
+        return null;
+    }
+
+    foreach ($clientRows as $row) {
+        $rowId = (int)$row['id'];
+        if ($excludeId !== null && $rowId === $excludeId) {
+            continue;
+        }
+        if (
+            normalizeRelationshipMaildirPath((string)$row['local_client_maildir']) === $normalized
+        ) {
+            return __('relationship.error.maildir_path_duplicate', [
+                'path' => $maildir,
+                'id' => (string)$rowId,
+                'referent_id' => (string)(int)$row['referent_id'],
+            ]);
+        }
+    }
+
+    foreach ($referentRows as $ref) {
+        $refId = (int)$ref['id'];
+        $outboxNorm = normalizeRelationshipMaildirPath((string)$ref['local_outbox']);
+        if ($outboxNorm === '' || $outboxNorm !== $normalized) {
+            continue;
+        }
+
+        if ($refId !== $referentId) {
+            return __('relationship.error.maildir_referent_outbox_collision', [
+                'path' => $maildir,
+                'referent_id' => (string)$refId,
+            ]);
+        }
+
+        $otherClaimants = 0;
+        foreach ($clientRows as $row) {
+            $rowId = (int)$row['id'];
+            if ($excludeId !== null && $rowId === $excludeId) {
+                continue;
+            }
+            if ((int)$row['referent_id'] !== $referentId) {
+                continue;
+            }
+            if (
+                normalizeRelationshipMaildirPath((string)$row['local_client_maildir']) === $normalized
+            ) {
+                $otherClaimants++;
+            }
+        }
+        if ($otherClaimants > 0) {
+            return __('relationship.error.maildir_referent_outbox_symmetric', [
+                'path' => $maildir,
+                'referent_id' => (string)$referentId,
+            ]);
+        }
+    }
+
     return null;
+}
+
+/**
+ * Application-layer local_client_maildir collision checks (PROMPT-70).
+ *
+ * @return string|null operator-facing error message
+ */
+function findRelationshipMaildirPathCollision(
+    PDO $pdo,
+    int $referentId,
+    ?int $excludeId,
+    string $maildir
+): ?string {
+    $stmt = $pdo->query(
+        'SELECT id, referent_id, local_client_maildir
+         FROM clients
+         WHERE local_client_maildir IS NOT NULL
+           AND TRIM(local_client_maildir) <> \'\''
+    );
+    $clientRows = $stmt->fetchAll() ?: [];
+
+    $stmt = $pdo->query(
+        'SELECT id, local_outbox
+         FROM referents
+         WHERE local_outbox IS NOT NULL
+           AND TRIM(local_outbox) <> \'\''
+    );
+    $referentRows = $stmt->fetchAll() ?: [];
+
+    return evaluateRelationshipMaildirPathCollision(
+        $referentId,
+        $excludeId,
+        $maildir,
+        $clientRows,
+        $referentRows
+    );
 }
 
 /**
