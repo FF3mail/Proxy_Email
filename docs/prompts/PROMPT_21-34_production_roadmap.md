@@ -56,6 +56,9 @@ follow standard hygiene so that production sign-off has a real audit trail:
 5. Every PROMPT in Epic A through Epic H is blocking for the "Критерии GO"
    section of `Ckeck-list_00.md`. Epic I (git hygiene) is non-blocking but
    required before handing the repository to a second developer.
+6. Before creating any new working branch, run `git rev-parse origin/master`
+   and branch from that exact commit — not from any other local or
+   previously-fetched branch tip, even one that "should" be the same content.
 
 ---
 
