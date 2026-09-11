@@ -410,4 +410,52 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
+## 13. Decision record — per-referent mode granularity (PROMPT-71)
+
+**Status:** Accepted direction (design only; not implemented).  
+**Full analysis:** [`docs/reports/PROMPT-71-mode-granularity-decision.md`](reports/PROMPT-71-mode-granularity-decision.md)  
+**Verified against:** `origin/master` @ `b1fb42a`
+
+### Decision
+
+**Option A — single daemon process, DB-driven per-referent overrides** for
+`inbound_routing_mode` / `outbound_routing_mode` / `outbound_watch_mode`, with
+`NULL` = inherit process-global env defaults.
+
+**Overrides apply only after daemon restart** (not live inside the 60s
+`_sync_database_state()` loop). Membership changes (active referent /
+valid relationship add-remove) continue to sync live under the
+startup-resolved effective modes.
+
+**Option B (multi-instance / systemd template / referent partition) is deferred**
+until operator scale or failure-isolation requirements justify it. Unscoped
+`ImapPoller` + `_load_referents()` + `list_watch_targets()` would make naïve
+multi-instance **incorrect** (duplicate IMAP + duplicate watches), not merely
+inefficient.
+
+### Why A over B (summary)
+
+- Motivating gap is **staggered cutover policy**, not process isolation.
+- Per-message `plan_*` call sites already receive `referent_data`; routing wiring is local.
+- Watch-mode cost is real (loop inversion + filtered watch targets + heterogeneous registries) but bounded if live mode-flips are refused.
+- Option B’s partition + PID/log/stats/panel surface is a larger correctness project; scale N is **undocumented** (lab = 1 referent).
+
+### Limitations accepted
+
+- One process remains the shared failure domain.
+- Production referent-count expectation is an **open operator question**.
+
+### Reversibility
+
+Nullable overrides are additive; all-`NULL` restores global-env behaviour.
+Option B remains possible later and is not foreclosed.
+
+### PROMPT-72 (if proceeding)
+
+Implement Option A schema + startup-resolved effective modes + watch loop
+inversion. Do **not** implement live mode transitions, multi-instance units,
+or cutover execution in the same PROMPT.
+
+---
+
 *Конец документа · DELTA-transit Anchor v3.6*
