@@ -562,6 +562,7 @@ $statusLabel = match($daemonStatus['status']) {
     <a href="/index.php?action=account_list"><?= h(__('nav.accounts')) ?></a>
     <a href="/index.php?action=provider_list"><?= h(__('nav.providers')) ?></a>
     <a href="/monitor.php" class="active"><?= h(__('nav.monitor')) ?></a>
+    <a href="/relationship-status.php"><?= h(__('nav.relationship_status')) ?></a>
     <a href="/logs.php">Логи</a>
     <span style="margin-left:auto;" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></span>
 </nav>

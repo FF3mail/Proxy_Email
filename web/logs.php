@@ -56,6 +56,7 @@ $sourceLabel = match ($source) {
 <nav class="nav">
     <a href="/index.php">Панель управления</a>
     <a href="/monitor.php">Мониторинг</a>
+    <a href="/relationship-status.php">Статус связей</a>
     <a href="/logs.php" style="color:#3498db;font-weight:600;">Логи</a>
 </nav>
 <div class="container">
