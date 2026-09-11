@@ -232,6 +232,53 @@ class OutboundRoutingMode(str, Enum):
     RELATIONSHIP_LIVE = 'relationship_live'
 
 
+class OutboundWatchMode(str, Enum):
+    REFERENT_ONLY = 'referent_only'
+    DUAL = 'dual'
+    RELATIONSHIP_ONLY = 'relationship_only'
+
+
+def parse_outbound_watch_mode(
+    environ: Optional[dict] = None,
+) -> OutboundWatchMode:
+    """
+    OUTBOUND_WATCH_MODE env: referent_only (default) | dual | relationship_only.
+    Unset behaves exactly as referent_only (PROMPT-66).
+    """
+    env = environ if environ is not None else os.environ
+    raw = (env.get('OUTBOUND_WATCH_MODE') or 'referent_only').strip().lower()
+    if raw in ('dual',):
+        return OutboundWatchMode.DUAL
+    if raw in ('relationship_only', 'relationship'):
+        return OutboundWatchMode.RELATIONSHIP_ONLY
+    return OutboundWatchMode.REFERENT_ONLY
+
+
+def resolve_effective_outbound_watch_mode(
+    *,
+    watch_mode: OutboundWatchMode,
+    routing_mode: OutboundRoutingMode,
+    log: Optional[logging.Logger] = None,
+) -> OutboundWatchMode:
+    """
+    relationship_only is only valid with relationship_live routing.
+    Incompatible combo fails closed to referent_only (logged).
+    """
+    if watch_mode != OutboundWatchMode.RELATIONSHIP_ONLY:
+        return watch_mode
+    if routing_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
+        return watch_mode
+    message = (
+        'OUTBOUND_WATCH_MODE=relationship_only requires '
+        'OUTBOUND_ROUTING_MODE=relationship_live; '
+        f'got OUTBOUND_ROUTING_MODE={routing_mode.value} — '
+        'failing closed to referent_only'
+    )
+    if log is not None:
+        log.error(message)
+    return OutboundWatchMode.REFERENT_ONLY
+
+
 def parse_outbound_routing_mode(
     environ: Optional[dict] = None,
 ) -> OutboundRoutingMode:

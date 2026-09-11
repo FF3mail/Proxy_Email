@@ -148,6 +148,7 @@ DELTA-transit/
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
 | `INBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.1 |
 | `OUTBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.2 |
+| `OUTBOUND_WATCH_MODE` | `referent_only` (default) \| `dual` \| `relationship_only` — env, см. §3.2 |
 | `RELATIONSHIP_LOOKUP_SHADOW` | default **on** в режиме `shadow` — shadow-статистика (PROMPT-58) |
 
 ### 3.1 Входящая маршрутизация (Stage 2a, PROMPT-63)
@@ -198,9 +199,25 @@ resolve_inbound(external_account_id, normalize_email(From))
 
 **Shadow stats:** `/run/mail-proxy/relationship_shadow_stats.json` + лог `[RELATIONSHIP_SHADOW]`.
 
-### 3.2 Исходящая маршрутизация (Stage 2b, PROMPT-65)
+### 3.2 Исходящая маршрутизация (Stage 2b, PROMPT-65) и watch (Stage 2c, PROMPT-66)
 
-**Watch target (interim):** `referents.local_outbox/new` (существующий watchdog). На тестовом VPS один референт обслуживает две ClientRelationship; детерминизм обеспечивается **не** 1:1 referent→relationship, а ключом сообщения.
+**Watch target (по умолчанию, без изменений):** `referents.local_outbox/new` — `OUTBOUND_WATCH_MODE=referent_only` (default). На тестовом VPS один референт обслуживает две ClientRelationship; детерминизм обеспечивается **не** 1:1 referent→relationship, а ключом сообщения (`From` → `local_client_email`).
+
+**Режимы `OUTBOUND_WATCH_MODE` (независимы от `OUTBOUND_ROUTING_MODE`, PROMPT-66):**
+
+| Режим | Referent `local_outbox/new` | Relationship `local_client_maildir/new` | Назначение |
+|-------|----------------------------|----------------------------------------|------------|
+| `referent_only` (default) | Да | Нет | Текущее поведение PROMPT-65 |
+| `dual` | Да | Да (dedup по пути) | Параллельное наблюдение; `[OUTBOUND_WATCH_DUAL]` при расхождении видимости путей |
+| `relationship_only` | Нет | Да | Только с `OUTBOUND_ROUTING_MODE=relationship_live`; иначе fail-closed → `referent_only` |
+
+**Безопасный default:** незаданный `OUTBOUND_WATCH_MODE` → `referent_only`.
+
+**Rollback:** тот же systemd drop-in — `Environment=OUTBOUND_WATCH_MODE=referent_only` + restart (без миграции БД).
+
+**Путь relationship watch:** `RelationshipLookup.list_watch_targets()` → `local_client_maildir/new`. Путь **не** auto-create (в отличие от referent outbox); невалидный путь → log + skip relationship.
+
+**Dual mode:** файлы в `local_client_maildir/new` **наблюдаются и подбираются**; лог `[OUTBOUND_WATCH_DUAL]` фиксирует файлы, видимые только на одном уровне watch. Выбор SMTP-аккаунта по-прежнему определяется только `OUTBOUND_ROUTING_MODE` (shadow/legacy/relationship_live).
 
 **Контракт outbound lookup (авторитетный):**
 
@@ -236,7 +253,7 @@ resolve_outbound(normalize_email(From))
 | Miss (unknown From) | Нет; файл остаётся в `new` (retry) | **Нет** |
 | Lookup error | Нет; файл остаётся в `new` (retry) | **Нет** |
 
-**Целевой watch (ещё не cutover):** `ClientRelationship.local_client_maildir/new` — см. §12.
+**Целевой watch:** `ClientRelationship.local_client_maildir/new` — реализован в `dual` / `relationship_only` (PROMPT-66). Полный production cutover (`relationship_only` + `relationship_live`) — см. §12.
 
 ---
 
@@ -381,16 +398,16 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
-## 12. Реестр открытых архитектурных пробелов (PROMPT-65)
+## 12. Реестр открытых архитектурных пробелов (PROMPT-66)
 
 | Группа | Открытые пункты |
 |--------|-----------------|
 | **Routing** | Полная замена legacy To/Cc inbound |
 | **Message Transformation** | Attachment-only inbound rebuild; новый From/To per relationship |
 | **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
-| **Outbound** | Maildir watch по `local_client_maildir` вместо `referent.local_outbox` (interim: shared outbox + From identity) |
-| **Operational Hardening** | Panel UI для shadow/routing stats; non-interactive routing mode audit |
+| **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
+| **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.5*
+*Конец документа · DELTA-transit Anchor v3.6*
