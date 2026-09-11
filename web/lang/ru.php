@@ -179,6 +179,9 @@ return [
     'relationship.error.unique' => 'Значение {field}={value} уже используется связью #{id} (referent_id={referent_id})',
     'relationship.error.unique_account' => 'Внешний аккаунт #{account_id} уже привязан к связи #{id} (referent_id={referent_id})',
     'relationship.error.unique_db' => 'Нарушение уникальности (дубликат адреса или аккаунта). Измените значения и повторите.',
+    'relationship.error.maildir_path_duplicate' => 'Путь maildir {path} уже используется связью #{id} (referent_id={referent_id})',
+    'relationship.error.maildir_referent_outbox_collision' => 'Путь maildir {path} совпадает с local_outbox референта #{referent_id} — укажите отдельный Maildir клиента, кроме единственного допустимого случая «свой референт»',
+    'relationship.error.maildir_referent_outbox_symmetric' => 'Путь maildir {path} совпадает с local_outbox референта #{referent_id}, но другая связь этого референта уже использует этот путь',
     'relationship.error.save_failed' => 'Не удалось сохранить связь',
 
     // External accounts
