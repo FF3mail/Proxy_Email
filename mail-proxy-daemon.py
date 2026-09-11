@@ -39,14 +39,20 @@ from relationship_routing import (
     InboundRoutingMode,
     OutboundRoutingMode,
     OutboundWatchMode,
+    ReferentEffectiveModes,
     extract_outbound_identity_from_message,
     finalize_inbound_process_result,
     parse_inbound_routing_mode,
+    parse_optional_inbound_routing_mode,
+    parse_optional_outbound_routing_mode,
+    parse_optional_outbound_watch_mode,
     parse_outbound_routing_mode,
     parse_outbound_watch_mode,
     plan_inbound_delivery,
     plan_outbound_delivery,
+    referent_effective_modes_as_dict,
     resolve_effective_outbound_watch_mode,
+    resolve_referent_effective_modes,
 )
 from relationship_shadow import (
     SHADOW_COUNTERS,
@@ -108,6 +114,10 @@ OUTBOUND_WATCH_MODE = OutboundWatchMode.REFERENT_ONLY
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
 MAX_SIZE_SKIP_TRACKER_ENTRIES = 10000
+_REFERENT_ROW_COLUMNS = (
+    'id, username, local_inbox, local_outbox, '
+    'inbound_routing_mode, outbound_routing_mode, outbound_watch_mode'
+)
 GCM_PREFIX = 'gcm:'
 GCM_NONCE_LENGTH = 12
 GCM_TAG_LENGTH = 16
@@ -773,8 +783,14 @@ class MailHandler:
             account_id = int(account['id']) if account is not None else 0
             account_email = str(account.get('email') or '') if account else ''
 
+            inbound_mode = InboundRoutingMode(
+                referent_data.get(
+                    'effective_inbound_routing_mode',
+                    INBOUND_ROUTING_MODE.value,
+                )
+            )
             plan = plan_inbound_delivery(
-                mode=INBOUND_ROUTING_MODE,
+                mode=inbound_mode,
                 resolve_inbound=self._relationship_lookup.resolve_inbound,
                 account_id=account_id,
                 account_email=account_email,
@@ -836,8 +852,14 @@ class MailHandler:
         except Exception as e:
             logger.error(f"Local SMTP delivery failed: {e}")
             if plan is None:
+                inbound_mode = InboundRoutingMode(
+                    referent_data.get(
+                        'effective_inbound_routing_mode',
+                        INBOUND_ROUTING_MODE.value,
+                    )
+                )
                 plan = plan_inbound_delivery(
-                    mode=INBOUND_ROUTING_MODE,
+                    mode=inbound_mode,
                     resolve_inbound=self._relationship_lookup.resolve_inbound,
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
@@ -1228,12 +1250,18 @@ class ImapPoller(threading.Thread):
     Раз в IMAP_POLL_INTERVAL секунд создаёт задачи ImapTask
     для всех активных референтов и их аккаунтов и помещает в imap_task_queue.
     """
-    def __init__(self, imap_task_queue: queue.Queue, db: Database,
-                 stop_event: threading.Event):
+    def __init__(
+        self,
+        imap_task_queue: queue.Queue,
+        db: Database,
+        stop_event: threading.Event,
+        referent_enricher=None,
+    ):
         super().__init__(name='ImapPoller', daemon=True)
         self._queue = imap_task_queue
         self._db = db
         self._stop_event = stop_event
+        self._referent_enricher = referent_enricher
         self._skipped_tasks = 0
     def run(self) -> None:
         logger.info("ImapPoller started")
@@ -1253,6 +1281,8 @@ class ImapPoller(threading.Thread):
         referents = self._load_active_referents()
         task_count = 0
         for ref in referents:
+            if self._referent_enricher is not None:
+                ref = self._referent_enricher(ref)
             accounts = self._load_accounts_for_referent(ref['id'])
             for acc in accounts:
                 if not acc.get('imap_host'):
@@ -1281,7 +1311,7 @@ class ImapPoller(threading.Thread):
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
-                "SELECT id, username, local_inbox, local_outbox "
+                f"SELECT {_REFERENT_ROW_COLUMNS} "
                 "FROM referents WHERE active = 1"
             )
             return cursor.fetchall()
@@ -1366,7 +1396,9 @@ class MaildirHandler(FileSystemEventHandler):
                 f"{self.referent_data['id']}: {file_path.name}"
             )
             source = 'watchdog'
-        self._daemon._log_outbound_watch_dual(file_path, self.watch_source)
+        self._daemon._log_outbound_watch_dual(
+            file_path, self.watch_source, int(self.referent_data['id'])
+        )
         self._daemon._enqueue_outbound_file(
             referent_data=self.referent_data,
             file_path=file_path,
@@ -1400,9 +1432,14 @@ class ProxyDaemon:
         self._smtp_pool = SmtpWorkerPool(
             self._smtp_task_queue, self._mail_handler, self._stop_event
         )
+        # PROMPT-73: per-referent effective modes, frozen until daemon restart.
+        self._referent_effective_modes: Dict[int, ReferentEffectiveModes] = {}
         # Планировщик IMAP-опроса
         self._imap_poller = ImapPoller(
-            self._imap_task_queue, self._db, self._stop_event
+            self._imap_task_queue,
+            self._db,
+            self._stop_event,
+            referent_enricher=self._enrich_referent_row,
         )
         # Watchdog-наблюдатель за Maildir/new
         self._observer: Optional[Observer] = None
@@ -1459,33 +1496,18 @@ class ProxyDaemon:
         self._smtp_pool.start()
         # Шаг 2: Запускаем планировщик IMAP
         self._imap_poller.start()
-        # Шаг 3: Настраиваем watchdog (referent and/or relationship level)
+        # Шаг 3: watchdog per referent effective watch mode (PROMPT-73)
         self._observer = Observer()
         referents = self._load_referents()
-        relationship_targets: List[Dict[str, Any]] = []
-        if not referents and self._watch_referent_level_enabled():
+        if not referents:
             logger.warning("No active referents found in database.")
-        if self._watch_referent_level_enabled():
-            for ref in referents:
-                self._setup_watchdog_for_referent(ref)
-            for ref in referents:
-                self._scan_existing_outgoing(ref)
-        if self._watch_relationship_level_enabled():
-            relationship_targets = (
-                self._mail_handler._relationship_lookup.list_watch_targets()
-            )
-            for target in relationship_targets:
-                self._setup_watchdog_for_relationship(target)
-            for target in relationship_targets:
-                self._scan_existing_outgoing_for_relationship(target)
-        has_watches = (
-            (self._watch_referent_level_enabled() and bool(self._watched_referent_ids))
-            or (
-                self._watch_relationship_level_enabled()
-                and bool(self._watched_relationship_ids)
-            )
-        )
-        if has_watches and not self._observer_started:
+        for ref in referents:
+            self._ensure_referent_modes_cached(ref)
+            self._register_watches_for_referent(ref)
+        if (
+            (self._watched_referent_ids or self._watched_relationship_ids)
+            and not self._observer_started
+        ):
             self._observer.start()
             self._observer_started = True
             logger.info("Watchdog file system observer started")
@@ -1493,7 +1515,7 @@ class ProxyDaemon:
             f"ProxyDaemon operational: "
             f"{IMAP_WORKER_COUNT} IMAP workers, "
             f"{SMTP_WORKER_COUNT} SMTP workers, "
-            f"OUTBOUND_WATCH_MODE={OUTBOUND_WATCH_MODE.value}, "
+            f"global OUTBOUND_WATCH_MODE={OUTBOUND_WATCH_MODE.value}, "
             f"{len(self._watched_referent_ids)} referent watches, "
             f"{len(self._watch_path_relationship_ids)} relationship maildir paths"
         )
@@ -1504,6 +1526,85 @@ class ProxyDaemon:
             except Exception as e:
                 logger.error(f"Supervisor sync error: {e}")
             time.sleep(60)
+    def _ensure_referent_modes_cached(
+        self, ref: Dict[str, Any]
+    ) -> ReferentEffectiveModes:
+        """
+        Resolve and cache effective modes once per referent per daemon lifetime.
+        Restart-only: existing cache entries are never refreshed from DB.
+        """
+        ref_id = int(ref['id'])
+        cached = self._referent_effective_modes.get(ref_id)
+        if cached is not None:
+            return cached
+        modes = resolve_referent_effective_modes(
+            referent_id=ref_id,
+            inbound_override=parse_optional_inbound_routing_mode(
+                ref.get('inbound_routing_mode')
+            ),
+            outbound_override=parse_optional_outbound_routing_mode(
+                ref.get('outbound_routing_mode')
+            ),
+            watch_override=parse_optional_outbound_watch_mode(
+                ref.get('outbound_watch_mode')
+            ),
+            global_inbound=INBOUND_ROUTING_MODE,
+            global_outbound=OUTBOUND_ROUTING_MODE,
+            global_watch=OUTBOUND_WATCH_MODE,
+            log=logger,
+        )
+        self._referent_effective_modes[ref_id] = modes
+        self._log_referent_effective_modes(modes)
+        return modes
+
+    def _log_referent_effective_modes(self, modes: ReferentEffectiveModes) -> None:
+        logger.info(
+            '[REFERENT_EFFECTIVE_MODES] referent_id=%s inbound=%s outbound=%s watch=%s',
+            modes.referent_id,
+            modes.inbound_routing.value,
+            modes.outbound_routing.value,
+            modes.outbound_watch.value,
+        )
+
+    def _enrich_referent_row(self, ref: Dict[str, Any]) -> Dict[str, Any]:
+        modes = self._ensure_referent_modes_cached(ref)
+        enriched = dict(ref)
+        enriched.update(referent_effective_modes_as_dict(modes))
+        return enriched
+
+    def _referent_handler_data(self, referent_id: int) -> Dict[str, Any]:
+        modes = self._referent_effective_modes.get(int(referent_id))
+        if modes is None:
+            return {'id': int(referent_id)}
+        return {
+            'id': int(referent_id),
+            **referent_effective_modes_as_dict(modes),
+        }
+
+    def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
+        """Apply referent/relationship watches per cached effective watch mode."""
+        ref_id = int(ref['id'])
+        modes = self._ensure_referent_modes_cached(ref)
+        enriched = self._enrich_referent_row(ref)
+        if modes.outbound_watch in (
+            OutboundWatchMode.REFERENT_ONLY,
+            OutboundWatchMode.DUAL,
+        ):
+            if ref_id not in self._watched_referent_ids:
+                self._setup_watchdog_for_referent(enriched)
+                self._scan_existing_outgoing(enriched)
+        if modes.outbound_watch in (
+            OutboundWatchMode.DUAL,
+            OutboundWatchMode.RELATIONSHIP_ONLY,
+        ):
+            targets = (
+                self._mail_handler._relationship_lookup
+                .list_watch_targets_for_referent(ref_id)
+            )
+            for target in targets:
+                self._setup_watchdog_for_relationship(target)
+                self._scan_existing_outgoing_for_relationship(target)
+
     def _setup_watchdog_for_referent(self, ref: Dict[str, Any]) -> None:
         """Регистрирует watchdog-обработчик для Maildir/new референта."""
         maildir_new = Path(ref['local_outbox']) / 'new'
@@ -1537,14 +1638,20 @@ class ProxyDaemon:
 
         logger.info(f"Watchdog configured for referent {ref['id']}: {maildir_new}")
 
-    def _watch_referent_level_enabled(self) -> bool:
-        return OUTBOUND_WATCH_MODE in (
+    def _referent_allows_referent_watch(self, referent_id: int) -> bool:
+        modes = self._referent_effective_modes.get(int(referent_id))
+        if modes is None:
+            return False
+        return modes.outbound_watch in (
             OutboundWatchMode.REFERENT_ONLY,
             OutboundWatchMode.DUAL,
         )
 
-    def _watch_relationship_level_enabled(self) -> bool:
-        return OUTBOUND_WATCH_MODE in (
+    def _referent_allows_relationship_watch(self, referent_id: int) -> bool:
+        modes = self._referent_effective_modes.get(int(referent_id))
+        if modes is None:
+            return False
+        return modes.outbound_watch in (
             OutboundWatchMode.DUAL,
             OutboundWatchMode.RELATIONSHIP_ONLY,
         )
@@ -1678,7 +1785,7 @@ class ProxyDaemon:
             )
             return
 
-        referent_data = {'id': referent_id}
+        referent_data = self._referent_handler_data(referent_id)
         handler = MaildirHandler(
             referent_data,
             self._smtp_task_queue,
@@ -1701,10 +1808,11 @@ class ProxyDaemon:
         )
 
     def _log_outbound_watch_dual(
-        self, file_path: Path, watch_source: str
+        self, file_path: Path, watch_source: str, referent_id: int
     ) -> None:
         """Dual mode: log files visible on only one watch tier (observation only)."""
-        if OUTBOUND_WATCH_MODE != OutboundWatchMode.DUAL:
+        modes = self._referent_effective_modes.get(int(referent_id))
+        if modes is None or modes.outbound_watch != OutboundWatchMode.DUAL:
             return
         file_new_dir = str(file_path.parent.resolve())
         referent_new_paths = set(self._referent_path_registry.values())
@@ -1786,8 +1894,14 @@ class ProxyDaemon:
             return
 
         from_address = extract_outbound_identity_from_message(msg)
+        outbound_mode = OutboundRoutingMode(
+            referent_data.get(
+                'effective_outbound_routing_mode',
+                OUTBOUND_ROUTING_MODE.value,
+            )
+        )
         plan = plan_outbound_delivery(
-            mode=OUTBOUND_ROUTING_MODE,
+            mode=outbound_mode,
             resolve_outbound=relationship_lookup.resolve_outbound,
             load_legacy_account=self._load_legacy_outbound_account,
             from_address=from_address,
@@ -1831,7 +1945,7 @@ class ProxyDaemon:
             )
             return
 
-        if OUTBOUND_ROUTING_MODE == OutboundRoutingMode.RELATIONSHIP_LIVE:
+        if outbound_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
             logger.info(
                 '[OUTBOUND_ROUTING] relationship_live referent=%s file=%s '
                 'identity=%s relationship_id=%s external_account_id=%s',
@@ -1973,7 +2087,7 @@ class ProxyDaemon:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
-                "SELECT id, username, local_inbox, local_outbox "
+                f"SELECT {_REFERENT_ROW_COLUMNS} "
                 "FROM referents WHERE active = 1"
             )
             return cursor.fetchall()
@@ -1995,48 +2109,48 @@ class ProxyDaemon:
         - Пулы воркеров не пересоздаются — они обслуживают общие очереди задач
           и не зависят от количества референтов.
         """
-        new_ref_ids: set = set()
-        removed_ref_ids: set = set()
-        if self._watch_referent_level_enabled():
-            current_refs = self._load_referents()
-            current_ids = {r['id'] for r in current_refs}
-            current_refs_by_id = {r['id']: r for r in current_refs}
+        current_refs = self._load_referents()
+        current_ids = {int(r['id']) for r in current_refs}
+        current_refs_by_id = {int(r['id']): r for r in current_refs}
 
+        with self._watched_lock:
+            watched_referent_snapshot = set(self._watched_referent_ids)
+
+        new_ref_ids = current_ids - watched_referent_snapshot
+        for ref_id in new_ref_ids:
+            ref = current_refs_by_id[ref_id]
+            self._ensure_referent_modes_cached(ref)
+            logger.info(
+                f"Sync: new active referent detected (ID={ref_id}, "
+                f"username={ref['username']}), registering watches"
+            )
+            self._register_watches_for_referent(ref)
+
+        removed_ref_ids = watched_referent_snapshot - current_ids
+        for ref_id in removed_ref_ids:
+            logger.info(
+                f"Sync: referent ID={ref_id} is no longer active, "
+                f"removing from watchdog"
+            )
+            self._unschedule_watchdog_for_referent(ref_id)
             with self._watched_lock:
-                watched_ids_snapshot = set(self._watched_referent_ids)
+                self._watched_referent_ids.discard(ref_id)
 
-            new_ref_ids = current_ids - watched_ids_snapshot
-            for ref_id in new_ref_ids:
-                ref = current_refs_by_id[ref_id]
-                logger.info(
-                    f"Sync: new active referent detected (ID={ref_id}, "
-                    f"username={ref['username']}), adding to watchdog"
-                )
-                self._setup_watchdog_for_referent(ref)
-                self._scan_existing_outgoing(ref)
+        for ref in current_refs:
+            ref_id = int(ref['id'])
+            if not self._referent_allows_referent_watch(ref_id):
+                continue
+            if ref_id in self._watched_referent_ids:
+                self._scan_existing_outgoing(self._enrich_referent_row(ref))
 
-            removed_ref_ids = watched_ids_snapshot - current_ids
-            for ref_id in removed_ref_ids:
-                logger.info(
-                    f"Sync: referent ID={ref_id} is no longer active, "
-                    f"removing from watchdog"
-                )
-                self._unschedule_watchdog_for_referent(ref_id)
-                with self._watched_lock:
-                    self._watched_referent_ids.discard(ref_id)
+        if new_ref_ids or removed_ref_ids:
+            logger.info(
+                f"Sync complete: +{len(new_ref_ids)} referents added, "
+                f"-{len(removed_ref_ids)} referents removed, "
+                f"{len(current_ids)} total active referents"
+            )
 
-            for ref in current_refs:
-                self._scan_existing_outgoing(ref)
-
-            if new_ref_ids or removed_ref_ids:
-                logger.info(
-                    f"Sync complete: +{len(new_ref_ids)} referents added, "
-                    f"-{len(removed_ref_ids)} referents removed, "
-                    f"{len(current_ids)} total active referents"
-                )
-
-        if self._watch_relationship_level_enabled():
-            self._sync_relationship_watches()
+        self._sync_relationship_watches()
     def _unschedule_watchdog_for_referent(self, referent_id: int) -> None:
         """
         Снимает watchdog-наблюдение для деактивированного референта.
@@ -2069,8 +2183,19 @@ class ProxyDaemon:
         self._referent_path_registry.pop(referent_id, None)
 
     def _sync_relationship_watches(self) -> None:
-        """Reconcile relationship-level Maildir watches with list_watch_targets()."""
-        targets = self._mail_handler._relationship_lookup.list_watch_targets()
+        """Reconcile relationship watches for referents with relationship-level mode."""
+        targets: List[Dict[str, Any]] = []
+        for ref_id, modes in self._referent_effective_modes.items():
+            if modes.outbound_watch not in (
+                OutboundWatchMode.DUAL,
+                OutboundWatchMode.RELATIONSHIP_ONLY,
+            ):
+                continue
+            targets.extend(
+                self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                    int(ref_id)
+                )
+            )
         current_by_id = {
             int(t['relationship']['relationship_id']): t for t in targets
         }

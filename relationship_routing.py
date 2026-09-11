@@ -279,6 +279,126 @@ def resolve_effective_outbound_watch_mode(
     return OutboundWatchMode.REFERENT_ONLY
 
 
+@dataclass(frozen=True)
+class ReferentEffectiveModes:
+    """Resolved per-referent routing/watch modes (PROMPT-73)."""
+
+    referent_id: int
+    inbound_routing: InboundRoutingMode
+    outbound_routing: OutboundRoutingMode
+    outbound_watch: OutboundWatchMode
+
+
+def parse_optional_inbound_routing_mode(
+    value: Optional[str],
+) -> Optional[InboundRoutingMode]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw in ('legacy',):
+        return InboundRoutingMode.LEGACY
+    if raw in ('relationship_live', 'live', 'relationship'):
+        return InboundRoutingMode.RELATIONSHIP_LIVE
+    if raw in ('shadow',):
+        return InboundRoutingMode.SHADOW
+    return None
+
+
+def parse_optional_outbound_routing_mode(
+    value: Optional[str],
+) -> Optional[OutboundRoutingMode]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw in ('legacy',):
+        return OutboundRoutingMode.LEGACY
+    if raw in ('relationship_live', 'live', 'relationship'):
+        return OutboundRoutingMode.RELATIONSHIP_LIVE
+    if raw in ('shadow',):
+        return OutboundRoutingMode.SHADOW
+    return None
+
+
+def parse_optional_outbound_watch_mode(
+    value: Optional[str],
+) -> Optional[OutboundWatchMode]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw in ('dual',):
+        return OutboundWatchMode.DUAL
+    if raw in ('relationship_only', 'relationship'):
+        return OutboundWatchMode.RELATIONSHIP_ONLY
+    if raw in ('referent_only',):
+        return OutboundWatchMode.REFERENT_ONLY
+    return None
+
+
+def resolve_effective_inbound_routing_mode(
+    override: Optional[InboundRoutingMode],
+    global_default: InboundRoutingMode,
+) -> InboundRoutingMode:
+    return override if override is not None else global_default
+
+
+def resolve_effective_outbound_routing_mode(
+    override: Optional[OutboundRoutingMode],
+    global_default: OutboundRoutingMode,
+) -> OutboundRoutingMode:
+    return override if override is not None else global_default
+
+
+def resolve_referent_effective_modes(
+    *,
+    referent_id: int,
+    inbound_override: Optional[InboundRoutingMode],
+    outbound_override: Optional[OutboundRoutingMode],
+    watch_override: Optional[OutboundWatchMode],
+    global_inbound: InboundRoutingMode,
+    global_outbound: OutboundRoutingMode,
+    global_watch: OutboundWatchMode,
+    log: Optional[logging.Logger] = None,
+) -> ReferentEffectiveModes:
+    """
+    effective(mode_col, global) = mode_col if not NULL else global;
+    per-referent fail-closed watch rule via resolve_effective_outbound_watch_mode.
+    """
+    inbound = resolve_effective_inbound_routing_mode(
+        inbound_override, global_inbound
+    )
+    outbound = resolve_effective_outbound_routing_mode(
+        outbound_override, global_outbound
+    )
+    watch_requested = (
+        watch_override if watch_override is not None else global_watch
+    )
+    watch = resolve_effective_outbound_watch_mode(
+        watch_mode=watch_requested,
+        routing_mode=outbound,
+        log=log,
+    )
+    return ReferentEffectiveModes(
+        referent_id=int(referent_id),
+        inbound_routing=inbound,
+        outbound_routing=outbound,
+        outbound_watch=watch,
+    )
+
+
+def referent_effective_modes_as_dict(modes: ReferentEffectiveModes) -> Dict[str, str]:
+    return {
+        'effective_inbound_routing_mode': modes.inbound_routing.value,
+        'effective_outbound_routing_mode': modes.outbound_routing.value,
+        'effective_outbound_watch_mode': modes.outbound_watch.value,
+    }
+
+
 def parse_outbound_routing_mode(
     environ: Optional[dict] = None,
 ) -> OutboundRoutingMode:

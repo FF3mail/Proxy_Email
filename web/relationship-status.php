@@ -149,6 +149,34 @@ $self = basename($_SERVER['SCRIPT_NAME'] ?? 'relationship-status.php');
                     <?php if ((int)$referent['active'] !== 1): ?>
                         <span class="badge-warn">referent inactive</span>
                     <?php endif; ?>
+                    <?php if (!empty($block['pending_restart'])): ?>
+                        <span class="badge-warn"><?= h(__('observability.mode_pending_restart')) ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="meta" style="margin-bottom: 10px;">
+                    <?php
+                    $overrides = $block['mode_overrides'] ?? [];
+                    $computed = $block['computed_effective'] ?? [];
+                    $startup = $block['daemon_startup_effective'] ?? null;
+                    ?>
+                    <strong><?= h(__('observability.referent_mode_overrides')) ?>:</strong>
+                    inbound=<?= h($overrides['inbound_routing_mode'] ?? __('referent.mode.inherit_global')) ?>,
+                    outbound=<?= h($overrides['outbound_routing_mode'] ?? __('referent.mode.inherit_global')) ?>,
+                    watch=<?= h($overrides['outbound_watch_mode'] ?? __('referent.mode.inherit_global')) ?>
+                    <br>
+                    <strong><?= h(__('observability.referent_mode_computed')) ?>:</strong>
+                    inbound=<?= h((string)($computed['inbound'] ?? '—')) ?>,
+                    outbound=<?= h((string)($computed['outbound'] ?? '—')) ?>,
+                    watch=<?= h((string)($computed['watch'] ?? '—')) ?>
+                    <?php if ($startup !== null): ?>
+                        <br>
+                        <strong><?= h(__('observability.referent_mode_daemon_startup')) ?>:</strong>
+                        inbound=<?= h((string)$startup['inbound']) ?>,
+                        outbound=<?= h((string)$startup['outbound']) ?>,
+                        watch=<?= h((string)$startup['watch']) ?>
+                    <?php else: ?>
+                        <br><span class="empty"><?= h(__('observability.referent_mode_daemon_missing')) ?></span>
+                    <?php endif; ?>
                 </div>
                 <?php if ($relationships === []): ?>
                     <p class="empty"><?= h(__('observability.no_relationships')) ?></p>

@@ -18,6 +18,8 @@ from relationship_lookup import ClientRelationshipDTO
 from relationship_routing import (
     OutboundRoutingMode,
     OutboundWatchMode,
+    ReferentEffectiveModes,
+    InboundRoutingMode,
     parse_outbound_watch_mode,
     plan_outbound_delivery,
     resolve_effective_outbound_watch_mode,
@@ -142,6 +144,12 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
         daemon._referent_id_for_watch_path = (
             lambda path_str: ProxyDaemon._referent_id_for_watch_path(
                 daemon, path_str
+            )
+        )
+        daemon._referent_effective_modes = {}
+        daemon._referent_handler_data = (
+            lambda referent_id: ProxyDaemon._referent_handler_data(
+                daemon, referent_id
             )
         )
         return daemon
@@ -331,15 +339,22 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
             daemon._referent_path_registry = {1: str(ref_new)}
             daemon._watch_path_relationship_ids = {str(rel_new): {1}}
 
+            daemon._referent_effective_modes = {
+                1: ReferentEffectiveModes(
+                    referent_id=1,
+                    inbound_routing=InboundRoutingMode.SHADOW,
+                    outbound_routing=OutboundRoutingMode.SHADOW,
+                    outbound_watch=OutboundWatchMode.DUAL,
+                )
+            }
             ProxyDaemon = self.mpd.ProxyDaemon
-            with patch.object(self.mpd, 'OUTBOUND_WATCH_MODE', OutboundWatchMode.DUAL):
-                with patch.object(self.mpd.logger, 'info') as log_info:
-                    ProxyDaemon._log_outbound_watch_dual(
-                        daemon, file_path, 'relationship'
-                    )
-                    logged = ' '.join(str(c) for c in log_info.call_args[0])
-                    self.assertIn('[OUTBOUND_WATCH_DUAL]', logged)
-                    self.assertIn('not_visible_via_referent_outbox', logged)
+            with patch.object(self.mpd.logger, 'info') as log_info:
+                ProxyDaemon._log_outbound_watch_dual(
+                    daemon, file_path, 'relationship', 1
+                )
+                logged = ' '.join(str(c) for c in log_info.call_args[0])
+                self.assertIn('[OUTBOUND_WATCH_DUAL]', logged)
+                self.assertIn('not_visible_via_referent_outbox', logged)
 
 
 if __name__ == '__main__':

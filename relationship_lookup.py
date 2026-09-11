@@ -201,9 +201,12 @@ class RelationshipLookup:
             for dto in rows
         ]
 
-    def list_watch_targets(self) -> List[Dict[str, Any]]:
+    def list_watch_targets(
+        self, referent_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         """
         PROMPT-53 §10: Maildir paths to watch for outbound pickup.
+        Optional referent_id filter (PROMPT-73 per-referent watch modes).
         """
         sql = f"""
             {_RELATIONSHIP_SELECT}
@@ -211,9 +214,13 @@ class RelationshipLookup:
             JOIN external_accounts ea ON ea.id = c.external_account_id
             JOIN referents r ON r.id = c.referent_id
             WHERE {_VALID_RELATIONSHIP_WHERE}
-            ORDER BY c.id
         """
-        rows = self._fetch_all(sql)
+        params: tuple = ()
+        if referent_id is not None:
+            sql += ' AND c.referent_id = %s'
+            params = (int(referent_id),)
+        sql += ' ORDER BY c.id'
+        rows = self._fetch_all(sql, params)
         return [
             {
                 'local_client_maildir': dto.local_client_maildir,
@@ -221,6 +228,11 @@ class RelationshipLookup:
             }
             for dto in rows
         ]
+
+    def list_watch_targets_for_referent(
+        self, referent_id: int
+    ) -> List[Dict[str, Any]]:
+        return self.list_watch_targets(referent_id=int(referent_id))
 
     def _fetch_one(
         self, sql: str, params: tuple
