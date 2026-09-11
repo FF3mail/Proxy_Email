@@ -410,4 +410,17 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.6*
+## 13. Production cutover (PROMPT-68)
+
+Полный план готовности к `relationship_live` (preconditions, runbook, rollback, go/no-go checklist): **`docs/reports/PROMPT-68-cutover-readiness-plan.md`**.
+
+Ключевые выводы аудита:
+
+- Режимы `INBOUND_ROUTING_MODE`, `OUTBOUND_ROUTING_MODE`, `OUTBOUND_WATCH_MODE` — **глобальные** (env на процесс демона); per-referent cutover в коде **не реализован**.
+- Целевое состояние cutover: `relationship_live` + `relationship_live` + `relationship_only` после dual-soak и проверки preconditions.
+- Симметричная коллизия путей (два relationship + referent на одном Maildir) — **предотвращать при provisioning** (PROMPT-70), не кодировать как штатный случай.
+- Следующие шаги: PROMPT-69 (panel observability), PROMPT-70 (path uniqueness), PROMPT-71 (per-referent mode или multi-instance).
+
+---
+
+*Конец документа · DELTA-transit Anchor v3.7*
