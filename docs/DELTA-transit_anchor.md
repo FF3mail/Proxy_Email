@@ -1,7 +1,7 @@
-# DELTA-transit — Якорный документ v3.5
+# DELTA-transit — Якорный документ v3.7
 
-**Статус:** Production Candidate (Stage 2a inbound + Stage 2b outbound routing)  
-**Дата:** 2026-09-10  
+**Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
+**Дата:** 2026-09-11  
 **Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
 
 ---
@@ -410,4 +410,73 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.6*
+## 13. Decision record — per-referent mode granularity (PROMPT-71)
+
+**Status:** Accepted direction (design only; not implemented).  
+**Full analysis:** [`docs/reports/PROMPT-71-mode-granularity-decision.md`](reports/PROMPT-71-mode-granularity-decision.md)  
+**Verified against:** `origin/master` @ `b1fb42a`
+
+### Decision
+
+**Option A — single daemon process, DB-driven per-referent overrides** for
+`inbound_routing_mode` / `outbound_routing_mode` / `outbound_watch_mode`, with
+`NULL` = inherit process-global env defaults.
+
+**Overrides apply only after daemon restart** (not live inside the 60s
+`_sync_database_state()` loop). Membership changes (active referent /
+valid relationship add-remove) continue to sync live under the
+startup-resolved effective modes.
+
+**Option B (multi-instance / systemd template / referent partition) is deferred**
+until operator scale or failure-isolation requirements justify it. Unscoped
+`ImapPoller` + `_load_referents()` + `list_watch_targets()` would make naïve
+multi-instance **incorrect** (duplicate IMAP + duplicate watches), not merely
+inefficient.
+
+### Why A over B (summary)
+
+- Motivating gap is **staggered cutover policy**, not process isolation.
+- Per-message `plan_*` call sites already receive `referent_data`; routing wiring is local.
+- Watch-mode cost is real (loop inversion + filtered watch targets + heterogeneous registries) but bounded if live mode-flips are refused.
+- Option B’s partition + PID/log/stats/panel surface is a larger correctness project; scale N is **undocumented** (lab = 1 referent).
+
+### Limitations accepted
+
+- One process remains the shared failure domain.
+- Production referent-count expectation is an **open operator question**.
+
+### Reversibility
+
+Nullable overrides are additive; all-`NULL` restores global-env behaviour.
+Option B remains possible later and is not foreclosed.
+
+### PROMPT-72 (if proceeding)
+
+Implement Option A schema + startup-resolved effective modes + watch loop
+inversion. Do **not** implement live mode transitions, multi-instance units,
+or cutover execution in the same PROMPT.
+
+### Superseding note — PROMPT-72 (2026-09-11)
+
+**Full reassessment:** [`docs/reports/PROMPT-72-scale-reassessment.md`](reports/PROMPT-72-scale-reassessment.md)
+
+**What changed:**
+
+| PROMPT-71 assumption | PROMPT-72 finding |
+|---------------------|-------------------|
+| Scale N undocumented | **25 referents now, 50+ planned**; 125–250 relationships today, ~500 at growth target |
+| Option B deferred — scale unknown | **Scale clause of Option B trigger is now met** ("dozens of referents") |
+| Isolation need bundled with scale | **Isolation need remains unconfirmed** — must not be inferred from scale alone |
+
+**Revised recommendation (staged):**
+
+- **PROMPT-73 → Option A** (per-referent mode overrides, single process, restart-only). Synthetic verification shows DB/sync/collision paths comfortable at N=50; staggered cutover policy remains the immediate gap.
+- **Option B later** when operator confirms crash-isolation requirement **or** production proves IMAP poll cadence miss (~3.2 s avg poll budget at N=50 with 20 workers) or filesystem sync scan exceeds budget.
+
+**Measured at N=50 (lab VPS):** IMAP poller DB 94 ms; sync DB portion 121 ms; collision checks ~3 ms; log-tail 100% coverage at 35% shadow density (degrades to 53% at 10%). IMAP network poll latency **not measured**.
+
+**PROMPT-71 record above is preserved for audit; this note supersedes only the scale-based deferral rationale and PROMPT-72 scope pointer.**
+
+---
+
+*Конец документа · DELTA-transit Anchor v3.7*
