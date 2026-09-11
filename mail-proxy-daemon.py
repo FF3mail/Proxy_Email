@@ -1429,6 +1429,9 @@ class ProxyDaemon:
         self._watched_relationship_ids: set = set()
         self._relationship_id_to_watch_path: Dict[int, str] = {}
         self._watch_path_relationship_ids: Dict[str, set] = {}
+        # Paths where a relationship-level Observer watch was scheduled (not
+        # referent-covered collisions).
+        self._relationship_observer_paths: set = set()
 
         # Файлы, уже находящиеся в SMTP-очереди либо обрабатываемые SMTP-воркером.
         # Используется для защиты от дублей при watchdog-событиях и периодическом
@@ -1611,6 +1614,29 @@ class ProxyDaemon:
             self._observer_started = True
             logger.info("Watchdog file system observer started (lazy)")
 
+    def _referent_id_for_watch_path(self, path_str: str) -> Optional[int]:
+        """Return referent_id if path_str is a registered referent outbox/new."""
+        for ref_id, reg_path in self._referent_path_registry.items():
+            if reg_path == path_str:
+                return int(ref_id)
+        return None
+
+    def _register_relationship_watch_coverage(
+        self,
+        relationship_id: int,
+        path_str: str,
+        *,
+        observer_scheduled: bool,
+    ) -> None:
+        with self._watched_lock:
+            self._watched_relationship_ids.add(relationship_id)
+            self._relationship_id_to_watch_path[relationship_id] = path_str
+            self._watch_path_relationship_ids.setdefault(path_str, set()).add(
+                relationship_id
+            )
+            if observer_scheduled:
+                self._relationship_observer_paths.add(path_str)
+
     def _setup_watchdog_for_relationship(self, target: Dict[str, Any]) -> None:
         """Register watchdog on local_client_maildir/new (deduped by path)."""
         rel = target['relationship']
@@ -1637,6 +1663,21 @@ class ProxyDaemon:
                 )
                 return
 
+        referent_id_for_path = self._referent_id_for_watch_path(path_str)
+        if referent_id_for_path is not None:
+            logger.warning(
+                'OUTBOUND_WATCH: relationship %s local_client_maildir/new equals '
+                'referent %s local_outbox/new (%s) — not registering duplicate '
+                'Observer watch; covered by referent-level handler',
+                relationship_id,
+                referent_id_for_path,
+                path_str,
+            )
+            self._register_relationship_watch_coverage(
+                relationship_id, path_str, observer_scheduled=False
+            )
+            return
+
         referent_data = {'id': referent_id}
         handler = MaildirHandler(
             referent_data,
@@ -1649,13 +1690,9 @@ class ProxyDaemon:
         )
         self._observer.schedule(handler, path=path_str, recursive=False)
         self._ensure_observer_started()
-
-        with self._watched_lock:
-            self._watched_relationship_ids.add(relationship_id)
-            self._relationship_id_to_watch_path[relationship_id] = path_str
-            self._watch_path_relationship_ids.setdefault(path_str, set()).add(
-                relationship_id
-            )
+        self._register_relationship_watch_coverage(
+            relationship_id, path_str, observer_scheduled=True
+        )
 
         logger.info(
             'Watchdog configured for relationship %s: %s',
@@ -2110,12 +2147,17 @@ class ProxyDaemon:
                     return
                 self._watch_path_relationship_ids.pop(path_str, None)
 
-        if not self._observer or not path_str:
+        if (
+            not self._observer
+            or not path_str
+            or path_str not in self._relationship_observer_paths
+        ):
             return
         try:
             for emitter in list(self._observer.emitters):
                 if str(emitter.watch.path) == path_str:
                     self._observer.unschedule(emitter.watch)
+                    self._relationship_observer_paths.discard(path_str)
                     logger.info(
                         'Watchdog unscheduled for relationship path %s '
                         '(relationship %s removed)',

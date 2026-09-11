@@ -72,22 +72,32 @@ Coverage highlights:
 
 ### 3.2 VPS live tests (192.168.125.116)
 
-**Status:** SSH from the development workspace failed (`Permission denied (publickey,password)`). Harness ready at `.keys/prompt66_vps_deploy_test.sh`.
+**Status (PROMPT-67):** EXECUTED on lab VPS `192.168.125.116` via `tests/prompt67_vps_verify.sh`. Full log excerpts in `docs/reports/PROMPT-67-outbound-watch-vps-evidence.md`.
 
-**Run on VPS (as root, after `git pull` / copy to `/root/Proxy_Email`):**
+**2a — dual mode (captured 2026-09-11 06:40:08 UTC):**
 
-```bash
-chmod +x /root/Proxy_Email/.keys/prompt66_vps_deploy_test.sh
-/root/Proxy_Email/.keys/prompt66_vps_deploy_test.sh
+```text
+2026-09-11 06:40:08 [INFO] (Thread-1) Watchdog: new email file for relationship 1 (referent 1): PROMPT67-1789108797-DUAL.eml
+2026-09-11 06:40:08 [INFO] (Thread-1) [OUTBOUND_WATCH_DUAL] relationship_watch path=/var/vmail/vmail1/testvps.loc/c/l/i/clientloc1-2026.09.01.10.50.00/Maildir/new file=PROMPT67-1789108797-DUAL.eml not_visible_via_referent_outbox
+2026-09-11 06:40:08 [INFO] (Thread-1) [OUTBOUND_RELATIONSHIP_SHADOW] referent_id=1 from=clientloc1@testvps.loc legacy_account_id=1 lookup_account_id=1 relationship_id=1 marker=AGREE
+2026-09-11 06:40:08 [INFO] (SmtpWorker-0) Email PROMPT67-1789108797-DUAL.eml sent via external SMTP (238 bytes)
 ```
 
-**Expected evidence (per test section):**
+**2b — relationship_only + shadow fail-closed (2026-09-11 06:43:06 UTC):**
 
-| # | Test | Commands / checks | Expected |
-|---|------|-------------------|----------|
-| 1 | Dual pickup | `OUTBOUND_WATCH_MODE=dual`, inject into `clientloc1` Maildir `new/` | Log: `watchdog_relationship`, `[OUTBOUND_WATCH_DUAL] ... not_visible_via_referent_outbox`, SMTP follows shadow (legacy account) |
-| 2 | Negative | `relationship_only` + `shadow` | Log: `failing closed to referent_only`; effective `OUTBOUND_WATCH_MODE=referent_only` |
-| 3 | Rollback | `referent_only` + inject into refloc1 outbox | Pre-PROMPT-66 referent-only pickup; no relationship watches in startup line |
+```text
+2026-09-11 06:43:06 [ERROR] (MainThread) OUTBOUND_WATCH_MODE=relationship_only requires OUTBOUND_ROUTING_MODE=relationship_live; got OUTBOUND_ROUTING_MODE=shadow — failing closed to referent_only
+2026-09-11 06:43:06 [INFO] (MainThread) INBOUND_ROUTING_MODE=shadow OUTBOUND_ROUTING_MODE=shadow OUTBOUND_WATCH_MODE=referent_only (requested=relationship_only) RELATIONSHIP_LOOKUP_SHADOW=on
+2026-09-11 06:43:06 [INFO] (MainThread) ProxyDaemon operational: ... OUTBOUND_WATCH_MODE=referent_only, 1 referent watches, 0 relationship maildir paths
+```
+
+**2c — rollback referent_only (2026-09-11 07:01:07–07:01:12 UTC):**
+
+```text
+2026-09-11 07:01:07 [INFO] (MainThread) ProxyDaemon operational: ... OUTBOUND_WATCH_MODE=referent_only, 1 referent watches, 0 relationship maildir paths
+2026-09-11 07:01:11 [INFO] (Thread-1) Watchdog: new email file for referent 1: PROMPT67-ROLLBACK-TEST.eml
+2026-09-11 07:01:12 [INFO] (SmtpWorker-0) Email PROMPT67-ROLLBACK-TEST.eml sent via external SMTP (138 bytes)
+```
 
 **Rollback (single drop-in):**
 
@@ -116,6 +126,7 @@ systemctl daemon-reload && systemctl restart mail-proxy
 ## 5. Acceptance
 
 ```text
-PROMPT-66: IMPLEMENTED (code + unit tests + anchor doc)
-VPS live evidence: PENDING — run prompt66_vps_deploy_test.sh on 192.168.125.116
+PROMPT-66: ACCEPTED (code + unit tests + anchor doc + VPS live evidence via PROMPT-67)
 ```
+
+VPS evidence closure: PROMPT-67 §2 (2026-09-11).
