@@ -12,14 +12,23 @@ CREATE TABLE IF NOT EXISTS referents (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 2. Таблица clients
+-- 2. Таблица clients (ClientRelationship entity; PROMPT-53/54 additive columns)
 CREATE TABLE IF NOT EXISTS clients (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     referent_id INT UNSIGNED NOT NULL,
+    external_client_email VARCHAR(255) NULL,
+    local_client_email VARCHAR(255) NULL,
+    local_referent_email VARCHAR(255) NULL,
+    external_account_id INT UNSIGNED NULL,
+    local_client_maildir VARCHAR(512) NULL,
     active TINYINT(1) DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_clients_external_client (external_client_email),
+    UNIQUE KEY uq_clients_local_client (local_client_email),
+    UNIQUE KEY uq_clients_local_referent (local_referent_email),
+    UNIQUE KEY uq_clients_external_account (external_account_id),
     FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -45,6 +54,12 @@ CREATE TABLE IF NOT EXISTS external_accounts (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2b. ClientRelationship → external_accounts (PROMPT-53 §19, ON DELETE RESTRICT)
+ALTER TABLE clients
+    ADD CONSTRAINT fk_clients_external_account
+    FOREIGN KEY (external_account_id) REFERENCES external_accounts(id)
+    ON DELETE RESTRICT;
 
 -- 4. Таблица oauth_tokens
 CREATE TABLE IF NOT EXISTS oauth_tokens (

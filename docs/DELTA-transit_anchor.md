@@ -1,7 +1,7 @@
-# DELTA-transit — Якорный документ v3.3
+# DELTA-transit — Якорный документ v3.5
 
-**Статус:** Production Candidate  
-**Дата:** 2026-09-01  
+**Статус:** Production Candidate (Stage 2a inbound + Stage 2b outbound routing)  
+**Дата:** 2026-09-10  
 **Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
 
 ---
@@ -65,6 +65,9 @@ DELTA-transit/
 │       ├── oauth2.php
 │       └── providers_ui.php
 ├── mail-proxy-daemon.py
+├── relationship_lookup.py           # ClientRelationship lookup (PROMPT-53/54)
+├── relationship_shadow.py           # Stage 1 shadow-mode helpers (PROMPT-58)
+├── relationship_routing.py          # Stage 2a inbound routing modes (PROMPT-63)
 ├── mail-proxy.service
 ├── mail-proxy-setup.sh              # быстрая установка демона (без полного инсталлятора)
 ├── delta-transit-install.sh         # полный инсталлятор v3.1.0
@@ -88,7 +91,7 @@ DELTA-transit/
 | Таблица | Назначение |
 |---------|------------|
 | `referents` | Референты: `local_inbox`, `local_outbox` |
-| `clients` | Клиентские email → `referent_id` |
+| `clients` | ClientRelationship: legacy `email` + additive columns (`external_client_email`, `local_client_email`, `local_referent_email`, `external_account_id`, `local_client_maildir`) |
 | `external_accounts` | Внешние ящики: IMAP/SMTP, OAuth2 |
 | `oauth_tokens` | Токены OAuth2, **UNIQUE(`account_id`)** |
 | `oauth_providers` | Google, Yandex, Microsoft (идемпотентный seed) |
@@ -143,6 +146,114 @@ DELTA-transit/
 | `MAX_SIZE_SKIP_TRACKER_ENTRIES` | `10000` — cap on process-local skip tracker |
 | `LOG_FILE` | `/var/log/mail-proxy/mail-proxy-daemon.log` |
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
+| `INBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.1 |
+| `OUTBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.2 |
+| `OUTBOUND_WATCH_MODE` | `referent_only` (default) \| `dual` \| `relationship_only` — env, см. §3.2 |
+| `RELATIONSHIP_LOOKUP_SHADOW` | default **on** в режиме `shadow` — shadow-статистика (PROMPT-58) |
+
+### 3.1 Входящая маршрутизация (Stage 2a, PROMPT-63)
+
+**Реализовано:**
+
+| Компонент | Модуль | Назначение |
+|-----------|--------|------------|
+| `RelationshipLookup` | `relationship_lookup.py` | Запросы ClientRelationship (inbound/outbound API) |
+| Shadow mode | `relationship_shadow.py` | Наблюдение AGREE/DIVERGE без изменения доставки |
+| Stage 2a routing | `relationship_routing.py` | Режимы `shadow` / `legacy` / `relationship_live` |
+| Панель CRUD | `web/includes/relationship_editor.php` | Редактор связей + legacy backfill |
+| Миграция | `migrations/002_client_relationship_columns.sql` | Additive columns на `clients` |
+
+**Контракт inbound lookup (авторитетный):**
+
+```text
+resolve_inbound(external_account_id, normalize_email(From))
+```
+
+Не используется: To/Cc, Subject, envelope recipient.
+
+**Режимы `INBOUND_ROUTING_MODE`:**
+
+| Режим | Доставка | Shadow |
+|-------|----------|--------|
+| `shadow` (default) | Legacy To/Cc + fallback `referent.local_inbox` | Да |
+| `legacy` | Legacy only | Нет |
+| `relationship_live` | `local_referent_email` выбранной связи | Нет |
+
+**Безопасный default:** незаданный `INBOUND_ROUTING_MODE` → `shadow`.
+
+**Rollback:** systemd drop-in `/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf` + `systemctl daemon-reload && systemctl restart mail-proxy`.
+
+**`relationship_live` — текущее поведение:**
+
+| Ситуация | Локальная доставка | IMAP `\Seen` | Legacy fallback |
+|----------|-------------------|--------------|-----------------|
+| Match | Да → `local_referent_email`, оригинальный RFC822 | При успехе SMTP | Нет |
+| Miss (unknown sender) | Нет | Да (interim skip) | **Нет** |
+| Lookup/validation error | Нет | Нет (retry) | **Нет** |
+
+**Ещё не реализовано (customer spec / Stage 3+):**
+
+- MIME attachment-only transformation / пересборка RFC822
+- IMAP DELETE/EXPUNGE для unknown sender («spam delete»)
+- Полное соответствие customer-spec inbound transformation
+
+**Shadow stats:** `/run/mail-proxy/relationship_shadow_stats.json` + лог `[RELATIONSHIP_SHADOW]`.
+
+### 3.2 Исходящая маршрутизация (Stage 2b, PROMPT-65) и watch (Stage 2c, PROMPT-66)
+
+**Watch target (по умолчанию, без изменений):** `referents.local_outbox/new` — `OUTBOUND_WATCH_MODE=referent_only` (default). На тестовом VPS один референт обслуживает две ClientRelationship; детерминизм обеспечивается **не** 1:1 referent→relationship, а ключом сообщения (`From` → `local_client_email`).
+
+**Режимы `OUTBOUND_WATCH_MODE` (независимы от `OUTBOUND_ROUTING_MODE`, PROMPT-66):**
+
+| Режим | Referent `local_outbox/new` | Relationship `local_client_maildir/new` | Назначение |
+|-------|----------------------------|----------------------------------------|------------|
+| `referent_only` (default) | Да | Нет | Текущее поведение PROMPT-65 |
+| `dual` | Да | Да (dedup по пути) | Параллельное наблюдение; `[OUTBOUND_WATCH_DUAL]` при расхождении видимости путей |
+| `relationship_only` | Нет | Да | Только с `OUTBOUND_ROUTING_MODE=relationship_live`; иначе fail-closed → `referent_only` |
+
+**Безопасный default:** незаданный `OUTBOUND_WATCH_MODE` → `referent_only`.
+
+**Rollback:** тот же systemd drop-in — `Environment=OUTBOUND_WATCH_MODE=referent_only` + restart (без миграции БД).
+
+**Путь relationship watch:** `RelationshipLookup.list_watch_targets()` → `local_client_maildir/new`. Путь **не** auto-create (в отличие от referent outbox); невалидный путь → log + skip relationship.
+
+**Dual mode:** файлы в `local_client_maildir/new` **наблюдаются и подбираются**; лог `[OUTBOUND_WATCH_DUAL]` фиксирует файлы, видимые только на одном уровне watch. Выбор SMTP-аккаунта по-прежнему определяется только `OUTBOUND_ROUTING_MODE` (shadow/legacy/relationship_live).
+
+**Контракт outbound lookup (авторитетный):**
+
+```text
+resolve_outbound(normalize_email(From))
+```
+
+| Компонент | Источник |
+|-----------|----------|
+| Outbound routing identity | RFC822 `From` → `local_client_email` |
+| Relationship lookup | `RelationshipLookup.resolve_outbound()` |
+| Selected account | `ClientRelationship.external_account_id` → `dto.account` |
+
+Не используется для выбора аккаунта: `referent_id LIMIT 1`, порядок строк в `external_accounts`, To/Cc.
+
+**Режимы `OUTBOUND_ROUTING_MODE` (независимы от inbound):**
+
+| Режим | Доставка | Shadow |
+|-------|----------|--------|
+| `shadow` (default) | Legacy `referent_id LIMIT 1` | Да (`[OUTBOUND_RELATIONSHIP_SHADOW]`) |
+| `legacy` | Legacy only | Нет |
+| `relationship_live` | `external_account_id` выбранной связи | Нет |
+
+**Безопасный default:** незаданный `OUTBOUND_ROUTING_MODE` → `shadow`.
+
+**Rollback:** тот же systemd drop-in `/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf` — добавить `Environment=OUTBOUND_ROUTING_MODE=shadow` + restart.
+
+**`relationship_live` — текущее поведение:**
+
+| Ситуация | Внешняя доставка | Legacy fallback |
+|----------|------------------|-----------------|
+| Match | Да → SMTP через `dto.account` | Нет |
+| Miss (unknown From) | Нет; файл остаётся в `new` (retry) | **Нет** |
+| Lookup error | Нет; файл остаётся в `new` (retry) | **Нет** |
+
+**Целевой watch:** `ClientRelationship.local_client_maildir/new` — реализован в `dual` / `relationship_only` (PROMPT-66). Полный production cutover (`relationship_only` + `relationship_live`) — см. §12.
 
 ---
 
@@ -287,4 +398,16 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.3*
+## 12. Реестр открытых архитектурных пробелов (PROMPT-66)
+
+| Группа | Открытые пункты |
+|--------|-----------------|
+| **Routing** | Полная замена legacy To/Cc inbound |
+| **Message Transformation** | Attachment-only inbound rebuild; новый From/To per relationship |
+| **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
+| **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
+| **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit |
+
+---
+
+*Конец документа · DELTA-transit Anchor v3.6*

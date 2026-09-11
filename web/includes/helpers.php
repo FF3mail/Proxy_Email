@@ -101,15 +101,28 @@ function checkLocalNetworkAccess(): void
 
     http_response_code(403);
 
+    if (!function_exists('__')) {
+        require_once __DIR__ . '/i18n.php';
+    }
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        initPanelI18n();
+    } else {
+        setPanelLang(detectBrowserLang());
+    }
+
+    $lang = panelHtmlLang();
+    $title = h(__('auth.access_denied_title'));
+    $heading = h(__('auth.access_denied'));
+
     echo <<<HTML
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{$lang}">
 <head>
 <meta charset="UTF-8">
-<title>403 Access Denied</title>
+<title>{$title}</title>
 </head>
 <body>
-<h1>403 Access Denied</h1>
+<h1>{$heading}</h1>
 </body>
 </html>
 HTML;
@@ -335,7 +348,7 @@ function requireValidCsrfToken(): void
         writeLog('CSRF token mismatch for action ' . ($_POST['action'] ?? $_GET['action'] ?? 'unknown'));
         $_SESSION['flash'] = [
             'type' => 'error',
-            'message' => 'Ошибка безопасности: недействительный токен CSRF',
+            'message' => __('error.csrf'),
         ];
         header('Location: /index.php');
         exit();
@@ -358,20 +371,24 @@ function csrfField(): string
  */
 function assertSafeOAuthEndpoint(string $url, string $fieldName = 'endpoint'): void
 {
+    if (!class_exists('LocalizedUserException', false)) {
+        require_once __DIR__ . '/i18n.php';
+    }
+
     if (!filter_var($url, FILTER_VALIDATE_URL)) {
-        throw new RuntimeException("Некорректный URL ($fieldName)");
+        throw new LocalizedUserException('error.oauth_invalid_url', ['field' => $fieldName]);
     }
 
     $parsed = parse_url($url);
 
     if (!isset($parsed['scheme']) || strtolower($parsed['scheme']) !== 'https') {
-        throw new RuntimeException("URL ($fieldName) должен использовать схему HTTPS");
+        throw new LocalizedUserException('error.oauth_https_required', ['field' => $fieldName]);
     }
 
     $host = strtolower($parsed['host'] ?? '');
 
     if ($host === '') {
-        throw new RuntimeException("URL ($fieldName) не содержит hostname");
+        throw new LocalizedUserException('error.oauth_no_hostname', ['field' => $fieldName]);
     }
 
     $blockedHosts = [
@@ -382,7 +399,7 @@ function assertSafeOAuthEndpoint(string $url, string $fieldName = 'endpoint'): v
     ];
 
     if (in_array($host, $blockedHosts, true) || str_contains($host, 'metadata')) {
-        throw new RuntimeException("Запрещённый hostname в $fieldName: $host");
+        throw new LocalizedUserException('error.oauth_blocked_host', ['field' => $fieldName, 'host' => $host]);
     }
 
     $ips = [];
@@ -392,7 +409,7 @@ function assertSafeOAuthEndpoint(string $url, string $fieldName = 'endpoint'): v
     } else {
         $records = @dns_get_record($host, DNS_A + DNS_AAAA);
         if ($records === false || $records === []) {
-            throw new RuntimeException("Не удалось разрешить hostname $fieldName: $host");
+            throw new LocalizedUserException('error.oauth_dns_failed', ['field' => $fieldName, 'host' => $host]);
         }
         foreach ($records as $record) {
             if (isset($record['ip'])) {
@@ -406,9 +423,11 @@ function assertSafeOAuthEndpoint(string $url, string $fieldName = 'endpoint'): v
 
     foreach ($ips as $ip) {
         if (isBlockedOAuthIp($ip)) {
-            throw new RuntimeException(
-                "Запрещённый IP-адрес для $fieldName ($host → $ip): частные, loopback и metadata-сети недопустимы"
-            );
+            throw new LocalizedUserException('error.oauth_blocked_ip', [
+                'field' => $fieldName,
+                'host' => $host,
+                'ip' => $ip,
+            ]);
         }
     }
 }

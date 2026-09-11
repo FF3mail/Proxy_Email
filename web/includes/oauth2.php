@@ -16,31 +16,31 @@ function initiateOAuth2(int $accountId): never
 
     if (!$ea) {
         \writeLog("OAuth2 INIT ERROR: account $accountId not found");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Аккаунт не найден'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.account_not_found')];
         header('Location: /index.php'); exit();
     }
 
     if ((int)$ea['active'] !== 1) {
         \writeLog("OAuth2 INIT ERROR: account $accountId is inactive");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Аккаунт не активен'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.account_inactive')];
         header('Location: /index.php'); exit();
     }
 
     if ($ea['auth_type'] !== 'oauth2') {
         \writeLog("OAuth2 INIT ERROR: account $accountId is not oauth2 type");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Аккаунт не поддерживает OAuth2'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.not_oauth2')];
         header('Location: /index.php'); exit();
     }
 
     if (empty($ea['client_id'])) {
         \writeLog("OAuth2 INIT ERROR: client_id is empty for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'client_id пустой для аккаунта'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.client_id_empty')];
         header('Location: /index.php'); exit();
     }
 
     if (empty($ea['client_secret_enc'])) {
         \writeLog("OAuth2 INIT ERROR: client_secret_enc is empty for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'client_secret пустой для аккаунта'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.client_secret_empty')];
         header('Location: /index.php'); exit();
     }
 
@@ -50,13 +50,13 @@ function initiateOAuth2(int $accountId): never
 
     if (!$provider) {
         \writeLog("OAuth2 INIT ERROR: OAuth2 provider '{$ea['provider']}' not found in DB");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер не найден'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.provider_not_found')];
         header('Location: /index.php'); exit();
     }
 
     if ((int)$provider['active'] !== 1) {
         \writeLog("OAuth2 INIT ERROR: OAuth2 provider '{$provider['code']}' is disabled");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер отключён'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.provider_disabled')];
         header('Location: /index.php'); exit();
     }
 
@@ -64,7 +64,7 @@ function initiateOAuth2(int $accountId): never
         \assertSafeOAuthEndpoint($provider['auth_endpoint'], 'auth_endpoint');
     } catch (RuntimeException $e) {
         \writeLog("OAuth2 INIT ERROR: unsafe auth_endpoint for provider {$provider['code']}: " . $e->getMessage());
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Небезопасный auth_endpoint провайдера'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.unsafe_auth_endpoint')];
         header('Location: /index.php'); exit();
     }
 
@@ -73,7 +73,7 @@ function initiateOAuth2(int $accountId): never
         $cryptor->decrypt($ea['client_secret_enc']);
     } catch (RuntimeException $e) {
         \writeLog("OAuth2 INIT ERROR: cannot decrypt client_secret for account $accountId: " . $e->getMessage());
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Ошибка расшифровки секрета. Проверьте crypto.key.'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.decrypt_error')];
         header('Location: /index.php'); exit();
     }
 
@@ -122,13 +122,13 @@ function handleOAuth2Callback(): never
 
     if ($code === '' || $state === '') {
         \writeLog("OAuth2 CALLBACK ERROR: missing code or state parameter");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Неверный запрос: отсутствуют параметры'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.missing_params')];
         header('Location: /index.php'); exit();
     }
 
     if (!preg_match('/^[A-Za-z0-9\-._~\/+%]+=*$/', $code)) {
         \writeLog('OAuth2 CALLBACK ERROR: authorization code has invalid format');
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Неверный формат authorization code'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.invalid_code_format')];
         header('Location: /index.php'); exit();
     }
 
@@ -136,7 +136,7 @@ function handleOAuth2Callback(): never
     if ($savedState === '' || !hash_equals($savedState, $state)) {
         \writeLog('OAuth2 CALLBACK ERROR: state mismatch');
         unset($_SESSION['oauth_state'], $_SESSION['oauth_account_id']);
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Ошибка безопасности: state не совпадает'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.state_mismatch')];
         header('Location: /index.php'); exit();
     }
     unset($_SESSION['oauth_state']);
@@ -145,7 +145,7 @@ function handleOAuth2Callback(): never
     unset($_SESSION['oauth_account_id']);
     if ($accountId === 0) {
         \writeLog("OAuth2 CALLBACK ERROR: oauth_account_id missing from session");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Сессия устарела. Начните авторизацию заново.'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.session_expired')];
         header('Location: /index.php'); exit();
     }
 
@@ -156,7 +156,7 @@ function handleOAuth2Callback(): never
     $ea = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$ea) {
         \writeLog("OAuth2 CALLBACK ERROR: account $accountId not found or inactive");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Аккаунт не найден или не активен'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.account_not_found_or_inactive')];
         header('Location: /index.php'); exit();
     }
 
@@ -165,12 +165,12 @@ function handleOAuth2Callback(): never
     $provider = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$provider) {
         \writeLog("OAuth2 CALLBACK ERROR: provider '{$ea['provider']}' not found in DB for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер не найден'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.provider_not_found')];
         header('Location: /index.php'); exit();
     }
     if ((int)$provider['active'] !== 1) {
         \writeLog("OAuth2 CALLBACK ERROR: provider '{$provider['code']}' is disabled for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер отключён'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.provider_disabled')];
         header('Location: /index.php'); exit();
     }
 
@@ -178,7 +178,7 @@ function handleOAuth2Callback(): never
         \assertSafeOAuthEndpoint($provider['token_endpoint'], 'token_endpoint');
     } catch (RuntimeException $e) {
         \writeLog("OAuth2 CALLBACK ERROR: unsafe token_endpoint for provider {$provider['code']}: " . $e->getMessage());
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Небезопасный token_endpoint провайдера'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.unsafe_token_endpoint')];
         header('Location: /index.php'); exit();
     }
 
@@ -187,7 +187,7 @@ function handleOAuth2Callback(): never
         $clientSecret = $cryptor->decrypt($ea['client_secret_enc']);
     } catch (RuntimeException $e) {
         \writeLog("OAuth2 CALLBACK ERROR: cannot decrypt client_secret for account $accountId: " . $e->getMessage());
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Ошибка расшифровки секрета. Проверьте crypto.key.'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.decrypt_error')];
         header('Location: /index.php'); exit();
     }
 
@@ -221,27 +221,27 @@ function handleOAuth2Callback(): never
 
     if ($curlErr !== '') {
         \writeLog("OAuth2 CALLBACK ERROR: cURL error for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Ошибка запроса к провайдеру: '.\h($curlErr)];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.curl_error', ['error' => $curlErr])];
         header('Location: /index.php'); exit();
     }
 
     if ($curlResponse === false) {
         \writeLog("OAuth2 CALLBACK ERROR: cURL returned false, HTTP=$httpCode for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Нет ответа от провайдера'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.no_response')];
         header('Location: /index.php'); exit();
     }
 
     $tokenData = json_decode($curlResponse, true);
     if (!is_array($tokenData)) {
         \writeLog("OAuth2 CALLBACK ERROR: invalid JSON from provider. HTTP=$httpCode for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Неверный ответ от провайдера'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.invalid_json')];
         header('Location: /index.php'); exit();
     }
 
     if (isset($tokenData['error'])) {
         $errCode = (string)($tokenData['error'] ?? 'unknown');
         \writeLog("OAuth2 CALLBACK ERROR: provider returned error '$errCode' HTTP=$httpCode for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер отклонил запрос: '.\h($errCode)];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.provider_rejected', ['code' => $errCode])];
         header('Location: /index.php'); exit();
     }
 
@@ -253,7 +253,7 @@ function handleOAuth2Callback(): never
 
     if ($accessToken === '') {
         \writeLog("OAuth2 CALLBACK ERROR: access_token missing in provider response for account $accountId");
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер не вернул access_token'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('oauth.no_access_token')];
         header('Location: /index.php'); exit();
     }
 
@@ -284,6 +284,6 @@ function handleOAuth2Callback(): never
     ]);
 
     \writeLog("OAuth2 SUCCESS: Account ID {$accountId}, provider {$provider['code']}, tokens updated, expires_at={$expiresAt}");
-    $_SESSION['flash'] = ['type'=>'success','message'=>"OAuth2 авторизация успешна. Токен активен до $expiresAt"];
+    $_SESSION['flash'] = ['type'=>'success','message'=>__('oauth.success', ['expires' => $expiresAt])];
     header('Location: /index.php'); exit();
 }

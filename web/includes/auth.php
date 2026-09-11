@@ -88,8 +88,17 @@ function requireMasterAdmin(): void
             . ' ip=' . getClientIp()
         );
         http_response_code(403);
-        echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>403 Forbidden</title></head>'
-            . '<body><h1>403 Forbidden</h1><p>Master privileges required.</p></body></html>';
+        if (!function_exists('__')) {
+            require_once __DIR__ . '/i18n.php';
+            initPanelI18n();
+        }
+        $lang = panelHtmlLang();
+        $title = h(__('auth.forbidden_title'));
+        $heading = h(__('auth.forbidden'));
+        $message = h(__('auth.master_required'));
+        echo '<!DOCTYPE html><html lang="' . $lang . '"><head><meta charset="UTF-8"><title>'
+            . $title . '</title></head>'
+            . '<body><h1>' . $heading . '</h1><p>' . $message . '</p></body></html>';
         exit();
     }
 }

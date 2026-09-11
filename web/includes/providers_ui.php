@@ -16,26 +16,26 @@ function renderProviderList(): void
 
     $providers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    renderHeader('OAuth2 провайдеры');
+    renderHeader(__('provider.title'));
 
     echo '<div class="max-w-7xl mx-auto p-6">';
     echo '<div class="flex justify-between items-center mb-6">';
-    echo '<h1 class="text-2xl font-bold">OAuth2 провайдеры</h1>';
-    echo '<a href="?action=provider_form" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Добавить провайдер</a>';
+    echo '<h1 class="text-2xl font-bold">' . h(__('provider.title')) . '</h1>';
+    echo '<a href="?action=provider_form" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">' . h(__('provider.add')) . '</a>';
     echo '</div>';
 
     echo '<div class="overflow-x-auto bg-white shadow rounded">';
     echo '<table class="min-w-full border-collapse">';
     echo '<thead class="bg-gray-100">';
     echo '<tr>';
-    echo '<th class="border p-2 text-left">ID</th>';
-    echo '<th class="border p-2 text-left">Код</th>';
-    echo '<th class="border p-2 text-left">Название</th>';
-    echo '<th class="border p-2 text-left">Auth endpoint</th>';
-    echo '<th class="border p-2 text-left">Token endpoint</th>';
-    echo '<th class="border p-2 text-left">Скоупы</th>';
-    echo '<th class="border p-2 text-left">Статус</th>';
-    echo '<th class="border p-2 text-left">Действия</th>';
+    echo '<th class="border p-2 text-left">' . h(__('common.id')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('provider.code')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('provider.name')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('provider.auth_endpoint')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('provider.token_endpoint')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('provider.scopes')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('common.status')) . '</th>';
+    echo '<th class="border p-2 text-left">' . h(__('common.actions')) . '</th>';
     echo '</tr>';
     echo '</thead>';
     echo '<tbody>';
@@ -51,9 +51,9 @@ function renderProviderList(): void
         echo '<td class="border p-2">';
 
         if ((int)$provider['active'] === 1) {
-            echo '<span class="px-2 py-1 rounded bg-green-100 text-green-800 text-sm">Активен</span>';
+            echo '<span class="px-2 py-1 rounded bg-green-100 text-green-800 text-sm">' . h(__('common.active')) . '</span>';
         } else {
-            echo '<span class="px-2 py-1 rounded bg-gray-100 text-gray-700 text-sm">Отключён</span>';
+            echo '<span class="px-2 py-1 rounded bg-gray-100 text-gray-700 text-sm">' . h(__('common.disabled')) . '</span>';
         }
 
         echo '</td>';
@@ -62,16 +62,16 @@ function renderProviderList(): void
         echo '<div class="flex gap-2">';
 
         echo '<a href="?action=provider_form&id=' . (int)$provider['id'] . '" 
-                 class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">
-                 Редактировать
-              </a>';
+                 class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">'
+                 . h(__('common.edit')) .
+              '</a>';
 
         echo '<form method="post" action="?action=provider_toggle" class="inline">';
         echo '<input type="hidden" name="action" value="provider_toggle">';
         echo '<input type="hidden" name="id" value="' . (int)$provider['id'] . '">';
         echo '<input type="hidden" name="csrf_token" value="' . csrfField() . '">';
         echo '<button type="submit" class="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700">';
-        echo ((int)$provider['active'] === 1 ? 'Выкл' : 'Вкл');
+        echo ((int)$provider['active'] === 1 ? h(__('common.off')) : h(__('common.on')));
         echo '</button>';
         echo '</form>';
 
@@ -119,7 +119,7 @@ function renderProviderForm(?int $id = null): void
         if (!$row) {
             $_SESSION['flash'] = [
                 'type' => 'error',
-                'message' => 'Провайдер не найден'
+                'message' => __('provider.not_found'),
             ];
 
             header('Location: /index.php?action=provider_list');
@@ -129,12 +129,11 @@ function renderProviderForm(?int $id = null): void
         $provider = $row;
     }
 
-    renderHeader($id !== null ? 'Редактирование провайдера' : 'Создание провайдера');
+    $formTitle = $id !== null ? __('provider.edit_title') : __('provider.create_title');
+    renderHeader($formTitle);
 
     echo '<div class="max-w-4xl mx-auto p-6">';
-    echo '<h1 class="text-2xl font-bold mb-6">'
-        . ($id !== null ? 'Редактирование провайдера' : 'Создание провайдера')
-        . '</h1>';
+    echo '<h1 class="text-2xl font-bold mb-6">' . h($formTitle) . '</h1>';
 
     echo '<form method="post" action="?action=provider_save" class="bg-white shadow rounded p-6 space-y-4">';
     echo '<input type="hidden" name="action" value="provider_save">';
@@ -144,7 +143,7 @@ function renderProviderForm(?int $id = null): void
     }
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">Код</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.code')) . '</label>';
     echo '<input type="text"
                  name="code"
                  pattern="[a-z0-9_]+"
@@ -154,7 +153,7 @@ function renderProviderForm(?int $id = null): void
     echo '</div>';
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">Название</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.name')) . '</label>';
     echo '<input type="text"
                  name="name"
                  value="' . h((string)$provider['name']) . '"
@@ -162,7 +161,7 @@ function renderProviderForm(?int $id = null): void
     echo '</div>';
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">Auth endpoint</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.auth_endpoint')) . '</label>';
     echo '<input type="url"
                  name="auth_endpoint"
                  value="' . h((string)$provider['auth_endpoint']) . '"
@@ -170,7 +169,7 @@ function renderProviderForm(?int $id = null): void
     echo '</div>';
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">Token endpoint</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.token_endpoint')) . '</label>';
     echo '<input type="url"
                  name="token_endpoint"
                  value="' . h((string)$provider['token_endpoint']) . '"
@@ -178,7 +177,7 @@ function renderProviderForm(?int $id = null): void
     echo '</div>';
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">Скоупы</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.scopes')) . '</label>';
     echo '<textarea name="scopes" rows="3"
                      class="w-full border rounded px-3 py-2">'
          . h((string)$provider['scopes']) .
@@ -186,7 +185,7 @@ function renderProviderForm(?int $id = null): void
     echo '</div>';
 
     echo '<div>';
-    echo '<label class="block font-medium mb-1">extra_params_json</label>';
+    echo '<label class="block font-medium mb-1">' . h(__('provider.extra_params')) . '</label>';
     echo '<textarea name="extra_params_json"
                      rows="6"
                      placeholder=\'{"access_type":"offline"}\'
@@ -195,8 +194,7 @@ function renderProviderForm(?int $id = null): void
          '</textarea>';
 
     echo '<p class="text-sm text-gray-600 mt-2">';
-    echo 'Запрещённые ключи (будут удалены автоматически): ';
-    echo 'redirect_uri, client_id, response_type, scope, state';
+    echo h(__('provider.extra_params_hint'));
     echo '</p>';
     echo '</div>';
 
@@ -205,7 +203,7 @@ function renderProviderForm(?int $id = null): void
     echo '<input type="checkbox" name="active" value="1" '
          . ((int)$provider['active'] === 1 ? 'checked' : '')
          . ' class="mr-2">';
-    echo '<span>Активен</span>';
+    echo '<span>' . h(__('provider.active')) . '</span>';
     echo '</label>';
     echo '</div>';
 
@@ -213,7 +211,7 @@ function renderProviderForm(?int $id = null): void
 
     echo '<button type="submit"
                   class="bg-green-600 text-white px-5 py-2 rounded hover:bg-green-700">';
-    echo 'Сохранить провайдер';
+    echo h(__('provider.save'));
     echo '</button>';
     echo '</form>';
     echo '</div>';
@@ -238,14 +236,14 @@ function handleProviderSave(): void
 
     if ($id === null) {
         if (!preg_match('/^[a-z0-9_]+$/', $code)) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>'Код провайдера: только a-z, 0-9, _'];
+            $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.code_invalid')];
             header('Location: /index.php?action=provider_form'); exit();
         }
 
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM oauth_providers WHERE code = :code');
         $stmt->execute([':code' => $code]);
         if ($stmt->fetchColumn() > 0) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>"Провайдер с кодом '$code' уже существует"];
+            $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.code_exists', ['code' => $code])];
             header('Location: /index.php?action=provider_form'); exit();
         }
     } else {
@@ -253,39 +251,39 @@ function handleProviderSave(): void
         $stmt->execute([':id' => $id]);
         $existingCode = $stmt->fetchColumn();
         if ($existingCode === false) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер не найден'];
+            $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.not_found')];
             header('Location: /index.php?action=provider_list'); exit();
         }
         $code = $existingCode;
     }
 
     if ($name === '') {
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Название не может быть пустым'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.name_required')];
         header('Location: /index.php?action=provider_form' . ($id ? "&id=$id" : '')); exit();
     }
 
     foreach (['auth_endpoint' => $authEndpoint, 'token_endpoint' => $tokenEndpoint] as $field => $url) {
         try {
             \assertSafeOAuthEndpoint($url, $field);
-        } catch (\RuntimeException $e) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>$e->getMessage()];
+        } catch (\Throwable $e) {
+            $_SESSION['flash'] = ['type'=>'error','message'=>exceptionUserMessage($e)];
             header('Location: /index.php?action=provider_form' . ($id ? "&id=$id" : '')); exit();
         }
     }
 
     if ($scopes === '') {
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Скоупы не могут быть пустыми'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.scopes_required')];
         header('Location: /index.php?action=provider_form' . ($id ? "&id=$id" : '')); exit();
     }
 
     if ($extraParamsJson !== '') {
         $decodedExtra = json_decode($extraParamsJson, true);
         if ($decodedExtra === null) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>'extra_params_json: невалидный JSON'];
+            $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.extra_json_invalid')];
             header('Location: /index.php?action=provider_form' . ($id ? "&id=$id" : '')); exit();
         }
         if (!is_array($decodedExtra)) {
-            $_SESSION['flash'] = ['type'=>'error','message'=>'extra_params_json: ожидается объект JSON'];
+            $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.extra_json_object')];
             header('Location: /index.php?action=provider_form' . ($id ? "&id=$id" : '')); exit();
         }
         $forbidden = ['redirect_uri','client_id','response_type','scope','state'];
@@ -344,7 +342,7 @@ function handleProviderSave(): void
         \writeLog("Provider UPDATED: id=$id, code=$code, name=$name");
     }
 
-    $_SESSION['flash'] = ['type'=>'success', 'message'=>'Провайдер сохранён'];
+    $_SESSION['flash'] = ['type'=>'success', 'message'=>__('provider.saved')];
     header('Location: /index.php?action=provider_list'); exit();
 }
 
@@ -352,7 +350,7 @@ function handleProviderToggle(): void
 {
     $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
     if ($id === 0) {
-        $_SESSION['flash'] = ['type'=>'error', 'message'=>'Не указан ID провайдера'];
+        $_SESSION['flash'] = ['type'=>'error', 'message'=>__('provider.id_required')];
         header('Location: /index.php?action=provider_list'); exit();
     }
 
@@ -361,7 +359,7 @@ function handleProviderToggle(): void
     $stmt->execute([':id' => $id]);
     $current = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$current) {
-        $_SESSION['flash'] = ['type'=>'error','message'=>'Провайдер не найден'];
+        $_SESSION['flash'] = ['type'=>'error','message'=>__('provider.not_found')];
         header('Location: /index.php?action=provider_list'); exit();
     }
 
@@ -373,7 +371,7 @@ function handleProviderToggle(): void
 
     $_SESSION['flash'] = [
         'type'=>'success',
-        'message'=>'Провайдер ' . ($newActive ? 'включён' : 'отключён')
+        'message'=> $newActive ? __('provider.enabled') : __('provider.disabled'),
     ];
     header('Location: /index.php?action=provider_list'); exit();
 }

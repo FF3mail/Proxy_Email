@@ -7,11 +7,17 @@ checkLocalNetworkAccess();
 
 startPanelSession();
 
+require_once __DIR__ . '/includes/i18n.php';
+initPanelI18n();
+
 // ============================================================
 // Подключение общих зависимостей панели управления
 // ============================================================
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
+
+require_once __DIR__ . '/includes/log_viewer.php';
+require_once __DIR__ . '/includes/log_tail.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
@@ -39,69 +45,8 @@ const DAEMON_SERVICE_NAME = 'mail-proxy';
 
 // ============================================================
 // Вспомогательные функции парсинга логов
+// tailFile() — см. includes/log_tail.php
 // ============================================================
-
-/**
- * Читает последние $lines строк файла без загрузки всего файла в память.
- * Использует побайтовый обход с конца файла — эффективно для больших логов.
- *
- * @param string $filePath  Полный путь к лог-файлу
- * @param int    $lines     Количество строк с хвоста
- * @return string[]         Массив строк (без завершающего \n)
- */
-function tailFile(string $filePath, int $lines): array
-{
-    if (!is_readable($filePath)) {
-        return [];
-    }
-
-    $fp = @fopen($filePath, 'rb');
-    if ($fp === false) {
-        return [];
-    }
-
-    $result  = [];
-    $buffer  = '';
-    $found   = 0;
-
-    // Перемещаемся в конец файла
-    fseek($fp, 0, SEEK_END);
-    $pos = ftell($fp);
-
-    // Читаем блоками по 4096 байт с конца
-    while ($pos > 0 && $found < $lines) {
-        $chunkSize = min(4096, $pos);
-        $pos      -= $chunkSize;
-        fseek($fp, $pos);
-        $chunk  = fread($fp, $chunkSize);
-        $buffer = $chunk . $buffer;
-
-        // Разбиваем накопленный буфер по переносам строк
-        $parts = explode("\n", $buffer);
-
-        // Последний (незавершённый) фрагмент оставляем в буфере
-        $buffer = array_shift($parts);
-
-        // Добавляем завершённые строки в начало результата
-        foreach (array_reverse($parts) as $line) {
-            if ($found >= $lines) {
-                break;
-            }
-            $result[] = $line;
-            $found++;
-        }
-    }
-
-    // Если в буфере остался последний фрагмент — добавляем его
-    if ($buffer !== '' && $found < $lines) {
-        $result[] = $buffer;
-    }
-
-    fclose($fp);
-
-    // Возвращаем строки в хронологическом порядке (старые → новые)
-    return array_reverse($result);
-}
 
 /**
  * Парсит одну строку лога и возвращает структурированный массив.
@@ -378,9 +323,9 @@ function formatUptime(int $seconds): string
     $minutes = intdiv($seconds % 3600, 60);
 
     $parts = [];
-    if ($days > 0)    $parts[] = "{$days}д";
-    if ($hours > 0)   $parts[] = "{$hours}ч";
-    $parts[] = "{$minutes}м";
+    if ($days > 0)    $parts[] = __('monitor.uptime_days', ['n' => (string)$days]);
+    if ($hours > 0)   $parts[] = __('monitor.uptime_hours', ['n' => (string)$hours]);
+    $parts[] = __('monitor.uptime_minutes', ['n' => (string)$minutes]);
 
     return implode(' ', $parts);
 }
@@ -425,6 +370,9 @@ $criticalEvents = array_merge(
 usort($criticalEvents, fn($a, $b) => strcmp($b['ts'], $a['ts']));
 $criticalEvents = array_slice($criticalEvents, 0, MONITOR_EVENTS_PER_SECTION);
 
+// Журнал действий веб-панели (все уровни)
+$webAdminEvents = loadLogEvents($webAdminLog, levels: [], limit: MONITOR_EVENTS_PER_SECTION);
+
 // ============================================================
 // Вспомогательная функция рендеринга таблицы событий
 // ============================================================
@@ -436,15 +384,17 @@ $criticalEvents = array_slice($criticalEvents, 0, MONITOR_EVENTS_PER_SECTION);
  * @param array[] $events  Массив распарсенных событий
  * @param string  $empty   Текст при пустом списке
  */
-function renderEventsTable(array $events, string $empty = 'Событий не найдено'): void
+function renderEventsTable(array $events, ?string $empty = null): void
 {
+    $emptyText = $empty ?? __('monitor.no_events');
+
     if (empty($events)) {
-        echo '<p class="no-events">' . h($empty) . '</p>';
+        echo '<p class="no-events">' . h($emptyText) . '</p>';
         return;
     }
 
     echo '<table class="events-table">';
-    echo '<thead><tr><th>Время</th><th>Уровень</th><th>Сообщение</th></tr></thead>';
+    echo '<thead><tr><th>' . h(__('monitor.col_time')) . '</th><th>' . h(__('monitor.col_level')) . '</th><th>' . h(__('monitor.col_message')) . '</th></tr></thead>';
     echo '<tbody>';
 
     foreach ($events as $ev) {
@@ -474,19 +424,19 @@ function renderEventsTable(array $events, string $empty = 'Событий не �
 // ============================================================
 
 $statusLabel = match($daemonStatus['status']) {
-    'active'     => '<span class="badge badge-ok">● Работает</span>',
-    'inactive'   => '<span class="badge badge-warn">○ Остановлен</span>',
-    'failed'     => '<span class="badge badge-err">✗ Ошибка</span>',
-    'activating' => '<span class="badge badge-warn">⟳ Запускается</span>',
-    default      => '<span class="badge badge-unknown">? Неизвестно</span>',
+    'active'     => '<span class="badge badge-ok">' . h(__('monitor.status_running')) . '</span>',
+    'inactive'   => '<span class="badge badge-warn">' . h(__('monitor.status_stopped')) . '</span>',
+    'failed'     => '<span class="badge badge-err">' . h(__('monitor.status_error')) . '</span>',
+    'activating' => '<span class="badge badge-warn">' . h(__('monitor.status_starting')) . '</span>',
+    default      => '<span class="badge badge-unknown">' . h(__('monitor.status_unknown')) . '</span>',
 };
 ?>
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="<?= h(panelHtmlLang()) ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mail-Proxy — Мониторинг</title>
+<title><?= h(__('monitor.title')) ?></title>
 <style>
     /* Базовые стили — согласованы с существующим интерфейсом панели управления */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -596,82 +546,96 @@ $statusLabel = match($daemonStatus['status']) {
         margin-left: auto;
     }
     .btn-refresh:hover { background: #2980b9; }
+
+    .lang-link { color: #bdc3c7; font-size: 13px; text-decoration: none; margin-left: 12px; }
+    .lang-link:hover { color: #3498db; }
+    .lang-active { color: #3498db; font-size: 13px; font-weight: 600; margin-left: 12px; }
+    .lang-sep { color: #7f8c8d; font-size: 13px; }
 </style>
 </head>
 <body>
 
 <!-- Навигационное меню — интегрируется с существующей панелью управления -->
 <nav class="nav">
-    <a href="/index.php">Панель управления</a>
-    <a href="/index.php?action=referents">Референты</a>
-    <a href="/index.php?action=accounts">Аккаунты</a>
-    <a href="/index.php?action=providers">Провайдеры</a>
-    <a href="/monitor.php" class="active">Мониторинг</a>
+    <a href="/index.php"><?= h(__('nav.control_panel')) ?></a>
+    <a href="/index.php?action=referent_list"><?= h(__('nav.referents')) ?></a>
+    <a href="/index.php?action=account_list"><?= h(__('nav.accounts')) ?></a>
+    <a href="/index.php?action=provider_list"><?= h(__('nav.providers')) ?></a>
+    <a href="/monitor.php" class="active"><?= h(__('nav.monitor')) ?></a>
+    <a href="/logs.php">Логи</a>
+    <span style="margin-left:auto;" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></span>
 </nav>
 
 <div class="container">
     <div style="display:flex; align-items:center; margin: 20px 0 4px;">
-        <h1>Мониторинг системы</h1>
-        <a href="/monitor.php" class="btn-refresh">↻ Обновить</a>
+        <h1><?= h(__('monitor.heading')) ?></h1>
+        <a href="/monitor.php" class="btn-refresh"><?= h(__('monitor.refresh')) ?></a>
+        <a href="/logs.php" class="btn-refresh" style="margin-left:12px;">Полный просмотр логов</a>
     </div>
     <p class="page-meta">
-        Данные из: <?= h(LOG_DIR) ?> &nbsp;|&nbsp;
-        Обновлено: <?= h(date('Y-m-d H:i:s')) ?>
+        <?= h(__('monitor.data_from')) ?> <?= h(LOG_DIR) ?> &nbsp;|&nbsp;
+        <?= h(__('monitor.updated_at')) ?> <?= h(date('Y-m-d H:i:s')) ?>
     </p>
 
     <!-- Секция 1: Статус демона -->
     <div class="status-card">
         <div>
-            <div class="label">Служба</div>
+            <div class="label"><?= h(__('monitor.service')) ?></div>
             <div class="value"><?= $statusLabel ?></div>
         </div>
         <?php if ($daemonStatus['uptime'] !== ''): ?>
         <div>
-            <div class="label">Uptime</div>
+            <div class="label"><?= h(__('monitor.uptime')) ?></div>
             <div class="value"><?= h($daemonStatus['uptime']) ?></div>
         </div>
         <?php endif; ?>
         <?php if ($daemonStatus['pid'] !== null): ?>
         <div>
-            <div class="label">PID</div>
+            <div class="label"><?= h(__('monitor.pid')) ?></div>
             <div class="value"><?= (int)$daemonStatus['pid'] ?></div>
         </div>
         <?php endif; ?>
         <div>
-            <div class="label">Лог демона</div>
+            <div class="label"><?= h(__('monitor.daemon_log')) ?></div>
             <div class="value" style="font-size:13px; font-weight:400;">
                 <?= h($daemonLog) ?>
                 <?php if (!is_readable($daemonLog)): ?>
-                    <span style="color:#e74c3c"> (недоступен)</span>
+                    <span style="color:#e74c3c"> <?= h(__('monitor.log_unavailable')) ?></span>
                 <?php else: ?>
-                    <span style="color:#27ae60"> (доступен)</span>
+                    <span style="color:#27ae60"> <?= h(__('monitor.log_available')) ?></span>
                 <?php endif; ?>
             </div>
         </div>
     </div>
 
-    <!-- Секция 2: Критические события -->
+    <!-- Секция 2: Журнал веб-панели -->
     <div class="section">
-        <h2>Критические события (ERROR + CRITICAL, оба лога)</h2>
-        <?php renderEventsTable($criticalEvents, 'Критических событий не обнаружено'); ?>
+        <h2>Журнал веб-панели</h2>
+        <?php renderEventsTable($webAdminEvents, 'Записей веб-панели не найдено'); ?>
+    </div>
+
+    <!-- Секция 3: Критические события -->
+    <div class="section">
+        <h2><?= h(__('monitor.critical_events')) ?></h2>
+        <?php renderEventsTable($criticalEvents, __('monitor.no_critical')); ?>
     </div>
 
     <!-- Секция 3: Ошибки OAuth2 -->
     <div class="section">
-        <h2>Ошибки OAuth2</h2>
-        <?php renderEventsTable($oauthErrors, 'Ошибок OAuth2 не обнаружено'); ?>
+        <h2><?= h(__('monitor.oauth_errors')) ?></h2>
+        <?php renderEventsTable($oauthErrors, __('monitor.no_oauth_errors')); ?>
     </div>
 
     <!-- Секция 4: Ошибки SMTP -->
     <div class="section">
-        <h2>Ошибки SMTP</h2>
-        <?php renderEventsTable($smtpErrors, 'Ошибок SMTP не обнаружено'); ?>
+        <h2><?= h(__('monitor.smtp_errors')) ?></h2>
+        <?php renderEventsTable($smtpErrors, __('monitor.no_smtp_errors')); ?>
     </div>
 
     <!-- Секция 5: Ошибки IMAP -->
     <div class="section">
-        <h2>Ошибки IMAP</h2>
-        <?php renderEventsTable($imapErrors, 'Ошибок IMAP не обнаружено'); ?>
+        <h2><?= h(__('monitor.imap_errors')) ?></h2>
+        <?php renderEventsTable($imapErrors, __('monitor.no_imap_errors')); ?>
     </div>
 
 </div><!-- /container -->
