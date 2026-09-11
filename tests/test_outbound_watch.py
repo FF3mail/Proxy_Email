@@ -14,10 +14,12 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from relationship_lookup import ClientRelationshipDTO
 from relationship_routing import (
     OutboundRoutingMode,
     OutboundWatchMode,
     parse_outbound_watch_mode,
+    plan_outbound_delivery,
     resolve_effective_outbound_watch_mode,
 )
 
@@ -125,7 +127,23 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
         daemon._watched_relationship_ids = set()
         daemon._relationship_id_to_watch_path = {}
         daemon._watch_path_relationship_ids = {}
+        daemon._relationship_observer_paths = set()
         daemon._referent_path_registry = {}
+        daemon._register_relationship_watch_coverage = (
+            lambda relationship_id, path_str, observer_scheduled=False: (
+                ProxyDaemon._register_relationship_watch_coverage(
+                    daemon,
+                    relationship_id,
+                    path_str,
+                    observer_scheduled=observer_scheduled,
+                )
+            )
+        )
+        daemon._referent_id_for_watch_path = (
+            lambda path_str: ProxyDaemon._referent_id_for_watch_path(
+                daemon, path_str
+            )
+        )
         return daemon
 
     def test_validate_skips_missing_maildir(self) -> None:
@@ -215,6 +233,7 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
             daemon._watched_relationship_ids = {1}
             daemon._relationship_id_to_watch_path = {1: shared_path}
             daemon._watch_path_relationship_ids = {shared_path: {1}}
+            daemon._relationship_observer_paths = {shared_path}
             emitter = MagicMock()
             emitter.watch.path = shared_path
             daemon._observer.emitters = [emitter]
@@ -225,6 +244,80 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
             self.assertEqual(daemon._watched_relationship_ids, set())
             self.assertNotIn(shared_path, daemon._watch_path_relationship_ids)
             daemon._observer.unschedule.assert_called_once()
+
+    def test_collision_skips_observer_when_path_equals_referent_outbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shared_new = Path(tmp) / 'shared' / 'Maildir' / 'new'
+            shared_new.mkdir(parents=True)
+            shared_path = str(shared_new)
+
+            daemon = self._make_daemon_stub()
+            daemon._referent_path_registry = {1: shared_path}
+            ProxyDaemon = self.mpd.ProxyDaemon
+
+            target = {
+                'local_client_maildir': str(shared_new.parent),
+                'relationship': {
+                    'relationship_id': 7,
+                    'referent_id': 1,
+                },
+            }
+
+            with patch.object(self.mpd, 'OUTBOUND_WATCH_MODE', OutboundWatchMode.DUAL):
+                with patch.object(self.mpd.logger, 'warning') as log_warning:
+                    ProxyDaemon._setup_watchdog_for_relationship(daemon, target)
+
+            daemon._observer.schedule.assert_not_called()
+            self.assertIn(7, daemon._watched_relationship_ids)
+            self.assertEqual(daemon._relationship_id_to_watch_path[7], shared_path)
+            self.assertNotIn(shared_path, daemon._relationship_observer_paths)
+            warn_args = log_warning.call_args[0]
+            self.assertIn('OUTBOUND_WATCH', warn_args[0])
+            self.assertEqual(warn_args[1], 7)
+            self.assertEqual(warn_args[2], 1)
+
+    def test_collision_unschedule_preserves_referent_observer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shared_path = str(Path(tmp) / 'Maildir' / 'new')
+            daemon = self._make_daemon_stub()
+            daemon._watched_relationship_ids = {7}
+            daemon._relationship_id_to_watch_path = {7: shared_path}
+            daemon._watch_path_relationship_ids = {shared_path: {7}}
+            emitter = MagicMock()
+            emitter.watch.path = shared_path
+            daemon._observer.emitters = [emitter]
+
+            ProxyDaemon = self.mpd.ProxyDaemon
+            ProxyDaemon._unschedule_watchdog_for_relationship(daemon, 7)
+
+            daemon._observer.unschedule.assert_not_called()
+            self.assertEqual(daemon._watched_relationship_ids, set())
+
+    def test_collision_relationship_live_routing_via_referent_enqueue(self) -> None:
+        """Referent-level pickup path still resolves relationship account in live mode."""
+        dto = ClientRelationshipDTO(
+            relationship_id=1,
+            referent_id=1,
+            external_client_email='clientint1@frona.ru',
+            local_client_email='clientloc1@testvps.loc',
+            local_referent_email='refloc1@testvps.loc',
+            external_account_id=1,
+            external_referent_email='refint1@frona.ru',
+            local_client_maildir='/var/vmail/clientloc1/Maildir',
+            account={'id': 1, 'email': 'refint1@frona.ru'},
+            referent={'id': 1, 'local_inbox': 'refloc1@testvps.loc'},
+        )
+        plan = plan_outbound_delivery(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            resolve_outbound=lambda _e: dto,
+            load_legacy_account=lambda _r: {'id': 99},
+            from_address='clientloc1@testvps.loc',
+            referent_id=1,
+            shadow_enabled=False,
+        )
+        self.assertEqual(plan.external_account_id, 1)
+        self.assertEqual(plan.account['id'], 1)
+        self.assertNotEqual(plan.account['id'], 99)
 
     def test_dual_log_relationship_only_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
