@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS referents (
     username VARCHAR(100) NOT NULL,
     local_inbox VARCHAR(255) UNIQUE NOT NULL,
     local_outbox VARCHAR(255) UNIQUE NOT NULL,
+    inbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
+    outbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
+    outbound_watch_mode ENUM('referent_only','dual','relationship_only') NULL DEFAULT NULL,
     active TINYINT(1) DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

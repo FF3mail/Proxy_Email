@@ -30,6 +30,7 @@ require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
 require_once __DIR__ . '/includes/relationship_editor.php';
+require_once __DIR__ . '/includes/referent_modes.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
 
 use MailProxy\Cryptor;
@@ -694,6 +695,36 @@ function renderReferentForm(): void
             </label>
         </div>
 
+        <?php if (!empty($referent['id'])): ?>
+        <hr>
+        <h3 class="text-lg font-semibold"><?= h(__('referent.mode_section')) ?></h3>
+        <p class="text-sm text-slate-600"><?= h(__('referent.mode_section_hint')) ?></p>
+        <?php
+        $modeFields = [
+            'inbound_routing_mode' => REFERENT_ROUTING_MODE_VALUES,
+            'outbound_routing_mode' => REFERENT_ROUTING_MODE_VALUES,
+            'outbound_watch_mode' => REFERENT_WATCH_MODE_VALUES,
+        ];
+        foreach ($modeFields as $field => $choices):
+            $current = (string)($referent[$field] ?? '');
+        ?>
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('referent.field.' . $field)) ?></label>
+            <select name="<?= h($field) ?>" class="w-full border rounded px-3 py-2 font-mono">
+                <option value=""><?= h(__('referent.mode.inherit_global')) ?></option>
+                <?php foreach ($choices as $choice): ?>
+                    <option value="<?= h($choice) ?>" <?= $current === $choice ? 'selected' : '' ?>>
+                        <?= h(referentModeLabel(
+                            str_contains($field, 'watch') ? 'watch' : 'routing',
+                            $choice
+                        )) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <?php endforeach; ?>
+        <?php endif; ?>
+
         <?php if (empty($referent['id'])): ?>
         <hr>
 
@@ -790,12 +821,31 @@ function handleReferentSave(): void
     try {
         $pdo->beginTransaction();
 
+        $inboundMode = parseReferentInboundRoutingOverride(
+            isset($_POST['inbound_routing_mode'])
+                ? (string)$_POST['inbound_routing_mode']
+                : null
+        );
+        $outboundMode = parseReferentOutboundRoutingOverride(
+            isset($_POST['outbound_routing_mode'])
+                ? (string)$_POST['outbound_routing_mode']
+                : null
+        );
+        $watchMode = parseReferentOutboundWatchOverride(
+            isset($_POST['outbound_watch_mode'])
+                ? (string)$_POST['outbound_watch_mode']
+                : null
+        );
+
         if ($id > 0) {
             $stmt = $pdo->prepare(
                 'UPDATE referents
                  SET username = ?,
                      local_inbox = ?,
                      local_outbox = ?,
+                     inbound_routing_mode = ?,
+                     outbound_routing_mode = ?,
+                     outbound_watch_mode = ?,
                      active = ?,
                      updated_at = NOW()
                  WHERE id = ?'
@@ -805,6 +855,9 @@ function handleReferentSave(): void
                 $username,
                 $localInbox,
                 $localOutbox,
+                $inboundMode,
+                $outboundMode,
+                $watchMode,
                 $active,
                 $id,
             ]);

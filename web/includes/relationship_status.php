@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/log_viewer.php';
 require_once __DIR__ . '/relationship_editor.php';
+require_once __DIR__ . '/referent_modes.php';
 
 /** Same path as relationship_shadow.SHADOW_STATS_FILE — deliberate scoped read (PROMPT-69). */
 const PANEL_SHADOW_STATS_FILE = '/run/mail-proxy/relationship_shadow_stats.json';
@@ -301,9 +302,14 @@ function buildRelationshipStatusPageData(PDO $pdo, int $logTailLines): array
     $log = readRelationshipStatusLogTail($logTailLines);
     $observability = parseRelationshipObservabilityFromLog($log['lines']);
     $shadowStats = readRelationshipShadowStats();
+    $startupGlobals = parseDaemonGlobalModesFromLogLine(
+        $observability['startup_modes_line'] ?? null
+    );
+    $startupEffectiveByReferent = parseReferentEffectiveModesFromLog($log['lines']);
 
     $stmt = $pdo->query(
-        'SELECT id, username, local_inbox, local_outbox, active
+        'SELECT id, username, local_inbox, local_outbox, active,
+                inbound_routing_mode, outbound_routing_mode, outbound_watch_mode
          FROM referents
          ORDER BY username, id'
     );
@@ -311,6 +317,21 @@ function buildRelationshipStatusPageData(PDO $pdo, int $logTailLines): array
 
     $pageReferents = [];
     foreach ($referentRows as $referent) {
+        $refId = (int)$referent['id'];
+        $computedEffective = computeReferentEffectiveModesFromGlobals(
+            normalizeReferentModeOverride($referent['inbound_routing_mode'] ?? null),
+            normalizeReferentModeOverride($referent['outbound_routing_mode'] ?? null),
+            normalizeReferentModeOverride($referent['outbound_watch_mode'] ?? null),
+            (string)($startupGlobals['inbound'] ?? 'shadow'),
+            (string)($startupGlobals['outbound'] ?? 'shadow'),
+            (string)($startupGlobals['watch'] ?? 'referent_only'),
+        );
+        $daemonStartupEffective = $startupEffectiveByReferent[$refId] ?? null;
+        $pendingRestart = $daemonStartupEffective !== null && (
+            $daemonStartupEffective['inbound'] !== $computedEffective['inbound']
+            || $daemonStartupEffective['outbound'] !== $computedEffective['outbound']
+            || $daemonStartupEffective['watch'] !== $computedEffective['watch']
+        );
         $relationshipRows = fetchRelationshipsForReferent($pdo, (int)$referent['id']);
         $rels = [];
         foreach ($relationshipRows as $row) {
@@ -350,6 +371,20 @@ function buildRelationshipStatusPageData(PDO $pdo, int $logTailLines): array
         $pageReferents[] = [
             'referent' => $referent,
             'relationships' => $rels,
+            'mode_overrides' => [
+                'inbound_routing_mode' => normalizeReferentModeOverride(
+                    $referent['inbound_routing_mode'] ?? null
+                ),
+                'outbound_routing_mode' => normalizeReferentModeOverride(
+                    $referent['outbound_routing_mode'] ?? null
+                ),
+                'outbound_watch_mode' => normalizeReferentModeOverride(
+                    $referent['outbound_watch_mode'] ?? null
+                ),
+            ],
+            'computed_effective' => $computedEffective,
+            'daemon_startup_effective' => $daemonStartupEffective,
+            'pending_restart' => $pendingRestart,
         ];
     }
 
@@ -359,6 +394,7 @@ function buildRelationshipStatusPageData(PDO $pdo, int $logTailLines): array
         'shadow_stats' => $shadowStats,
         'referents' => $pageReferents,
         'log_tail_lines' => $logTailLines,
+        'daemon_global_modes' => $startupGlobals,
     ];
 }
 
