@@ -136,3 +136,15 @@ No daemon restart button (per constraint).
 | **Panel restart control** | Separate PROMPT if desired |
 
 This PROMPT ships the **mechanism**; it does **not** execute production cutover.
+
+---
+
+## Addendum — PROMPT-73.1 (2026-09-14)
+
+**Issue:** `_referent_effective_modes` was never purged when a referent left the active set via `_sync_database_state()`'s `removed_ref_ids` path. If the referent was later reactivated within the same daemon uptime after an operator edited its override columns, `_ensure_referent_modes_cached()` returned the stale pre-deactivation entry and ignored the new DB values.
+
+**Fix:** After `_unschedule_watchdog_for_referent(ref_id)` and discarding from `_watched_referent_ids`, call `self._referent_effective_modes.pop(ref_id, None)`. Reactivation via `new_ref_ids` (or `start()` after process restart) then re-resolves from current DB columns and re-logs `[REFERENT_EFFECTIVE_MODES]`.
+
+**Cache-entry presence:** Every referent that reaches `removed_ref_ids` was previously in `_watched_referent_ids`, which is only populated by `_setup_watchdog_for_referent` after `_register_watches_for_referent` calls `_ensure_referent_modes_cached`. A cache entry should therefore exist, but `.pop(ref_id, None)` is used defensively for any edge path where a referent had referent-level watches without a prior cache write.
+
+**Unchanged:** Restart-only semantics for referents that stay continuously active (`test_override_change_does_not_alter_cached_modes`). No relationship-level watch reconciliation changes. Panel PHP mirror unaffected (no daemon-side cache).

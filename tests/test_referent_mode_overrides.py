@@ -122,6 +122,14 @@ class ProxyDaemonWatchModeTest(unittest.TestCase):
         daemon._register_watches_for_referent = (
             lambda ref: ProxyDaemon._register_watches_for_referent(daemon, ref)
         )
+        daemon._sync_database_state = (
+            lambda: ProxyDaemon._sync_database_state(daemon)
+        )
+        daemon._load_referents = MagicMock()
+        daemon._sync_relationship_watches = MagicMock()
+        daemon._unschedule_watchdog_for_referent = MagicMock()
+        daemon._observer = MagicMock()
+        daemon._referent_path_registry = {}
         return daemon
 
     def test_referent_only_effective_skips_relationship_watches(self) -> None:
@@ -187,6 +195,50 @@ class ProxyDaemonWatchModeTest(unittest.TestCase):
             )
         self.assertEqual(modes_v1, modes_v2)
         self.assertEqual(modes_v2.outbound_watch, OutboundWatchMode.REFERENT_ONLY)
+
+    def test_deactivation_purges_cache_reactivation_picks_up_new_override(
+        self,
+    ) -> None:
+        """Deactivate→reactivate must re-resolve overrides; unlike continuous-active stale cache."""
+        daemon = self._make_daemon()
+        ref_id = 20
+        ref_v1 = {
+            'id': ref_id,
+            'username': 'R20',
+            'local_inbox': 'r20@test.loc',
+            'local_outbox': '/var/vmail/r20/Maildir',
+            'inbound_routing_mode': None,
+            'outbound_routing_mode': None,
+            'outbound_watch_mode': 'referent_only',
+        }
+        with patch.object(self.mpd, 'OUTBOUND_WATCH_MODE', OutboundWatchMode.DUAL):
+            modes_v1 = self.mpd.ProxyDaemon._ensure_referent_modes_cached(
+                daemon, ref_v1
+            )
+        self.assertEqual(modes_v1.outbound_watch, OutboundWatchMode.REFERENT_ONLY)
+        daemon._watched_referent_ids.add(ref_id)
+
+        ref_v2 = dict(ref_v1)
+        ref_v2['outbound_watch_mode'] = 'relationship_only'
+        ref_v2['outbound_routing_mode'] = 'relationship_live'
+
+        daemon._load_referents.return_value = []
+        with patch.object(self.mpd, 'OUTBOUND_WATCH_MODE', OutboundWatchMode.DUAL):
+            daemon._sync_database_state()
+        self.assertNotIn(ref_id, daemon._referent_effective_modes)
+        self.assertNotIn(ref_id, daemon._watched_referent_ids)
+
+        daemon._load_referents.return_value = [ref_v2]
+        with patch.object(self.mpd, 'OUTBOUND_WATCH_MODE', OutboundWatchMode.DUAL):
+            daemon._sync_database_state()
+        modes_reactivated = daemon._referent_effective_modes.get(ref_id)
+        self.assertIsNotNone(modes_reactivated)
+        self.assertEqual(
+            modes_reactivated.outbound_watch, OutboundWatchMode.RELATIONSHIP_ONLY
+        )
+        self.assertEqual(
+            modes_reactivated.outbound_routing, OutboundRoutingMode.RELATIONSHIP_LIVE
+        )
 
     def test_collision_guard_still_applies_under_custom_watch_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

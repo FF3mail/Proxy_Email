@@ -2135,6 +2135,7 @@ class ProxyDaemon:
             self._unschedule_watchdog_for_referent(ref_id)
             with self._watched_lock:
                 self._watched_referent_ids.discard(ref_id)
+            self._referent_effective_modes.pop(ref_id, None)
 
         for ref in current_refs:
             ref_id = int(ref['id'])
