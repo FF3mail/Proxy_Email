@@ -479,4 +479,25 @@ or cutover execution in the same PROMPT.
 
 ---
 
+## 14. Pilot cutover status — referent #1 (PROMPT-75)
+
+**Full report:** [`docs/reports/PROMPT-75-pilot-cutover-referent-1.md`](reports/PROMPT-75-pilot-cutover-referent-1.md)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-14 |
+| **Host** | Lab VPS `192.168.125.116` |
+| **Referent** | #1 only |
+| **Overrides** | `inbound_routing_mode=relationship_live`, `outbound_routing_mode=relationship_live`, `outbound_watch_mode=referent_only` |
+| **Global env** | Unchanged: `shadow` / `shadow` / `referent_only` |
+| **Activation restart** | `2026-09-14T07:33:33Z` |
+| **Effective modes (daemon)** | `inbound=relationship_live outbound=relationship_live watch=referent_only` |
+| **Live traffic** | Inbound + outbound verified for relationships #1 and #2; cross-relationship isolation confirmed |
+| **Observation window** | 4 h from activation → ends `2026-09-14T11:33:33Z` |
+| **Verdict** | **NOT ACCEPTED** — observation window incomplete at report time; pilot **active** (not rolled back) |
+
+**Next:** Accept after clean 4 h window, then PROMPT-76 (second referent pilot) per staged rollout.
+
+---
+
 *Конец документа · DELTA-transit Anchor v3.7*
