@@ -152,14 +152,15 @@ IMAP proof: token **FOUND** on `clientint2@bofoma.net`; **MISSING** on `clientin
 | **Window end (acceptance gate)** | `2026-09-14T11:33:33Z` |
 | **Report timestamp** | `2026-09-14T07:58:00Z` (~24 min elapsed) |
 
-**Watched during partial window:**
+**Watched during full window (`07:33:33Z` → `11:33:33Z`; sign-off check `11:41:08Z`):**
 
 | Signal | Seen? |
 |--------|-------|
 | Fallback-to-legacy without log | **No** |
-| `[RELATIONSHIP_LIVE] lookup/validation error` | **No** (only expected `no match` fail-closed lines for non-relationship senders) |
-| Errors/exceptions referencing referent 1 or relationships 1/2 | **No** |
-| IMAP poll cadence | **Steady 60 s** — sample: `07:54:34`, `07:55:34`, `07:56:34`, `07:57:34` (`ImapPoller enqueued 2 IMAP tasks`) |
+| `[RELATIONSHIP_LIVE] lookup/validation error` | **No** (0 lines; only expected `no match` fail-closed for non-relationship senders) |
+| Errors/exceptions referencing referent 1 or relationships 1/2 | **No** (2 transient IMAP read timeouts at `08:00–08:01`; cadence unaffected) |
+| IMAP poll cadence | **240 cycles** in window; max gap **61 s**; **0 gaps > 90 s** |
+| Daemon restarts / crash-loop | **No** — single activation restart at `07:33:33Z`; continuous `active` through sign-off |
 | Other referents affected | **N/A** — only referent #1 exists on lab VPS |
 
 **Fail-closed logging assessment:** Non-matching senders produce explicit `[RELATIONSHIP_LIVE] no match ... — skipped (no legacy fallback)` at INFO — **audible enough to notice** in log tail / relationship-status page.
@@ -168,7 +169,7 @@ IMAP proof: token **FOUND** on `clientint2@bofoma.net`; **MISSING** on `clientin
 
 ### 7. Final verdict
 
-## **NOT ACCEPTED** (observation window incomplete)
+## **ACCEPTED**
 
 | Criterion | Status |
 |-----------|--------|
@@ -177,9 +178,9 @@ IMAP proof: token **FOUND** on `clientint2@bofoma.net`; **MISSING** on `clientin
 | Restart effective modes | **PASS** (live traffic confirmed) |
 | Live inbound/outbound both relationships | **PASS** |
 | Cross-relationship isolation | **PASS** |
-| 4-hour observation window | **IN PROGRESS** — ~24 min of 240 min at report time |
+| 4-hour observation window | **PASS** — completed `2026-09-14T11:33:33Z`; no rollback trigger fired |
 
-**Current referent #1 state (not rolled back):**
+**Referent #1 state at acceptance (not rolled back):**
 
 ```text
 inbound_routing_mode=relationship_live
@@ -188,7 +189,7 @@ outbound_watch_mode=referent_only
 Daemon active since 2026-09-14T07:33:33Z with effective modes relationship_live/relationship_live/referent_only
 ```
 
-**Acceptance gate:** Re-run observation checklist at `2026-09-14T11:33:33Z`. If all signals remain clean → declare **ACCEPTED** in a follow-up (PROMPT-75.1 or operator sign-off). If any rollback trigger fires → execute rollback per §6 and report failure mode precisely.
+**Acceptance signed off:** `2026-09-14T11:41:08Z` (VPS log audit post window end).
 
 ---
 

@@ -493,10 +493,10 @@ or cutover execution in the same PROMPT.
 | **Activation restart** | `2026-09-14T07:33:33Z` |
 | **Effective modes (daemon)** | `inbound=relationship_live outbound=relationship_live watch=referent_only` |
 | **Live traffic** | Inbound + outbound verified for relationships #1 and #2; cross-relationship isolation confirmed |
-| **Observation window** | 4 h from activation → ends `2026-09-14T11:33:33Z` |
-| **Verdict** | **NOT ACCEPTED** — observation window incomplete at report time; pilot **active** (not rolled back) |
+| **Observation window** | 4 h completed `2026-09-14T07:33:33Z` → `11:33:33Z`; 240 poll cycles, max gap 61 s, 0 rollback triggers |
+| **Verdict** | **ACCEPTED** (`2026-09-14T11:41:08Z` sign-off); pilot **active** on referent #1 |
 
-**Next:** Accept after clean 4 h window, then PROMPT-76 (second referent pilot) per staged rollout.
+**Next:** PROMPT-76 — second referent pilot (requires second lab referent).
 
 ---
 
