@@ -479,4 +479,23 @@ or cutover execution in the same PROMPT.
 
 ---
 
+## 15. Message rebuild specification (PROMPT-76)
+
+**Full report:** [`docs/reports/PROMPT-76-message-rebuild-spec.md`](reports/PROMPT-76-message-rebuild-spec.md)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-14 |
+| **Type** | Design/spec only (no code) |
+| **Code baseline** | `88339c4` — `_stream_file_via_smtp()` still relays **original RFC822** both directions |
+| **Approved target** | Attachment-only rebuild + new From/To per ClientRelationship (PROMPT-52 §3.2–3.3) |
+| **Primary PDF admin guide** | **Silent** on rebuild semantics (size limits only) |
+| **Rebuild gate** | **`relationship_live`** per direction (shadow/legacy remain raw stream) |
+| **Customer questions open** | CQ-1…CQ-12 (zero-attachment rule, inline parts, threading headers, S/MIME, envelope sender, …) |
+| **Non-goals** | Spam delete (PROMPT-78), full spec reconciliation (PROMPT-79) |
+
+**Status:** Spec draft awaiting customer answers on CQ-* before PROMPT-77 implementation.
+
+---
+
 *Конец документа · DELTA-transit Anchor v3.7*
