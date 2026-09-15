@@ -1,16 +1,103 @@
-# PROMPT-76 — Message transformation specification: attachment-only rebuild + new From/To
+# PROMPT-76.1 — Message transformation specification: inbound fan-out + outbound 1:1 rebuild
 
 **Branch:** `prompt-76-message-rebuild-spec` (from `origin/master` @ `88339c4`)  
 **Type:** Design/specification only — **zero code changes**  
-**Date:** 2026-09-14  
+**Date:** 2026-09-15 (revision of PROMPT-76, 2026-09-14)  
 **Baseline code:** `88339c412bdf40e6e0f99eea2631fc41a9931552`  
-**Predecessor audits:** PROMPT-51 (gap), PROMPT-52 (architecture), PROMPT-53 (data model), PROMPT-75 (relationship_live pilot)
+**Predecessor audits:** PROMPT-51 (gap), PROMPT-52 (architecture), PROMPT-53 (data model), PROMPT-75 (relationship_live pilot)  
+**Revision trigger:** Customer closed CQ-1…CQ-12 interactively; CQ-2 revealed inbound is **1:N fan-out**, not 1:1 transformation.
 
 ---
 
 ## Response format (mandatory)
 
-### 1. Current-code re-verification (item 1)
+### 1. Revised algorithm description — diffed against PROMPT-76
+
+#### 1.1 What PROMPT-76 assumed (superseded for inbound)
+
+PROMPT-76 framed rebuild as **message-in / message-out**: one internet message → one rebuilt local RFC822 with zero or more attachment parts bundled together. Section 3.2 said multiple attachments go into **one** rebuilt message; the test matrix (T4) expected **three parts in one message**.
+
+#### 1.2 What this revision specifies
+
+| Direction | Shape | Summary |
+|-----------|-------|---------|
+| **Inbound** | **1:N fan-out** | One internet message with N attachable parts → **N separate** local RFC822 messages, each with **exactly one** attachment |
+| **Outbound** | **1:1** | One local Maildir message (already guaranteed single-attachment by house convention) → one rebuilt external RFC822 |
+
+Inbound and outbound are **structurally distinct algorithms** — do not unify them into a shared message-in/message-out description.
+
+#### 1.3 Inbound algorithm (normative — `relationship_live` + rebuild gate)
+
+```text
+External Referent mailbox → IMAP fetch one UNSEEN message
+  → identify Client by From (relationship lookup — unchanged from today)
+  → unknown From → skip (interim: mark Seen, no delivery — PROMPT-78 scope)
+  → known → DB: ClientRelationshipDTO (local_client, local_referent, …)
+  → parse MIME; collect attachable parts (Content-Disposition: attachment only)
+  → N = count of attachable parts
+       N = 0  → FAIL CLOSED (no delivery, UNSEEN, loud log)
+       N ≥ 1  → for each part i ∈ 1..N:
+                    build rebuilt RFC822ᵢ:
+                      From = local_client_email
+                      To   = local_referent_email   (Cc dropped)
+                      Subject = filenameᵢ (with extension) of this part only
+                      Date, Message-ID, References — all regenerated (per part)
+                      body = empty text/plain + exactly one attachment part
+                    (all N must rebuild successfully before any SMTP — see §4.3)
+  → deliver rebuilt RFC822₁ … rebuilt RFC822ₙ sequentially via local SMTP
+  → IMAP \Seen only when entire fan-out completes successfully (see §4.3)
+```
+
+**Per original internet message (once):** routing lookup, MIME parse, attachable-part enumeration, fan-out orchestration, IMAP Seen policy.
+
+**Per fan-out child i (repeated N times):** header regeneration, single-attachment rebuild, SMTP DATA, per-child success/failure logging.
+
+**House convention (customer-confirmed, inbound only):**
+
+- Original internet `Subject` lists attachment filename(s) space-separated — human-readable only; **never copied** to fan-out children.
+- Inline parts (embedded images, HTML signatures) are **discarded**, never extracted.
+- `message/rfc822` / `.eml` nested forwards **do not occur** in real usage; encountering one is CQ-9 fail-closed (same as any malformed MIME).
+- Password-protected archives: password handling is out of scope; daemon passes attachment bytes through without inspection.
+
+#### 1.4 Outbound algorithm (normative — `relationship_live` + rebuild gate)
+
+```text
+local Client mailbox → Maildir pickup (watchdog)
+  → identify Client by To (relationship lookup — unchanged)
+  → unknown → must not send externally (fail closed)
+  → known → DB: ClientRelationshipDTO (external_client, external_referent, …)
+  → parse MIME; expect exactly one attachable part (house convention guarantee)
+       0 attachable parts → FAIL CLOSED (file stays in new/, loud log)
+       >1 attachable parts → FAIL CLOSED (unexpected; no fan-out on outbound)
+       1 attachable part → build one rebuilt RFC822:
+         From = external_referent_email
+         To   = external_client_email   (Cc dropped)
+         Subject = attachment filename (with extension)
+         Date, Message-ID, References — all regenerated
+         body = empty text/plain + exactly one attachment part
+  → deliver via external SMTP
+  → delete Maildir source file only on SMTP 250 (unchanged discipline)
+```
+
+Outbound does **not** fan out. A locally originated message is already single-attachment before the daemon sees it.
+
+#### 1.5 Diff summary (PROMPT-76 → PROMPT-76.1)
+
+| Area | PROMPT-76 | PROMPT-76.1 |
+|------|-----------|-------------|
+| Inbound shape | 1:1 (all attachments in one rebuilt message) | **1:N fan-out** (one attachment per rebuilt message) |
+| Outbound shape | 1:1 (unchanged intent, now explicit) | **1:1** (explicit; no fan-out) |
+| Subject | Open (CQ-6) | **Regenerated = attachment filename per fan-out child** |
+| Multiple attachments | Bundle into one message (CQ-2 open) | **Fan out; all kept** |
+| Zero attachments | Open (CQ-1) | **Fail closed** |
+| Inline parts | Open (CQ-3) | **Discarded** |
+| Nested .eml | Open (CQ-12) | **Fail closed (CQ-9 class)** |
+| Atomicity | Single-message (implicit) | **Fan-out orchestration rules (§4.3, RD-13)** |
+| Open questions | CQ-1…CQ-12 | **All closed — §7** |
+
+---
+
+### 2. Current-code re-verification (unchanged from PROMPT-76 §1)
 
 **Verdict:** PROMPT-51’s core finding **still holds** on `88339c4`. PROMPT-53–75 changed **routing** (which relationship/account/mailbox a message uses) but **never changed message CONTENT**. Both directions still stream the **original RFC822 bytes** through SMTP DATA.
 
@@ -25,31 +112,6 @@
 
 Under `relationship_live`, only the **SMTP envelope** (`MAIL FROM` / `RCPT TO`) changes to relationship targets; **RFC822 headers and body inside DATA are unchanged** from the external message.
 
-```845:847:mail-proxy-daemon.py
-            delivered = self._stream_file_via_smtp(
-                smtp, plan.mail_from, plan.local_rcpts, mail_file
-            )
-```
-
-```881:938:mail-proxy-daemon.py
-    def _stream_file_via_smtp(
-        self,
-        server: smtplib.SMTP,
-        mail_from: str,
-        recipients: List[str],
-        file_path: Path,
-    ) -> bool:
-        """Потоковая передача содержимого файла через SMTP DATA."""
-        ...
-        with open(file_path, 'rb') as f:
-            ...
-                server.sock.sendall(send_data)
-        ...
-        return True
-```
-
-**No MIME rebuild:** `grep` on `88339c4` `mail-proxy-daemon.py` finds **no** `walk()`, `get_payload()`, or `MIMEMultipart` in the daemon. Header parse uses `email.message_from_binary_file` (L779–780) for routing only.
-
 #### Outbound path (relationship_live included)
 
 | Step | Behavior | Evidence |
@@ -59,17 +121,6 @@ Under `relationship_live`, only the **SMTP envelope** (`MAIL FROM` / `RCPT TO`) 
 | Envelope | `MAIL FROM = acc['email']` (external referent mailbox) | L1054 |
 | Recipients | `RCPT TO` = addresses parsed from original message **`To`/`Cc`** | L1888–1891, L1062–1068 |
 | DATA | **Original Maildir file bytes** streamed | L1087–1107 |
-
-```1053:1107:mail-proxy-daemon.py
-            code, resp = server.mail(acc['email'])
-            ...
-            for rcpt in recipients:
-                code, resp = server.rcpt(rcpt)
-            ...
-            with open(file_path, 'rb') as f:
-                ...
-                    server.sock.sendall(send_data)
-```
 
 **What changed since PROMPT-51 (must not be conflated with rebuild):**
 
@@ -81,307 +132,255 @@ Under `relationship_live`, only the **SMTP envelope** (`MAIL FROM` / `RCPT TO`) 
 | Outbound RCPT | Raw header `To`/`Cc` | **Still raw header `To`/`Cc`** — not mapped to `external_client_email` |
 | Message body | Original RFC822 stream | **Still original RFC822 stream** |
 
-Anchor doc explicitly lists rebuild as **not yet implemented** (`docs/DELTA-transit_anchor.md` §3.1 L194–198).
+Anchor doc §15 references this report. Rebuild remains **not yet implemented** in code.
 
 ---
 
-### 2. Primary-source quote/reference (item 2)
+### 3. Primary-source quote/reference (PROMPT-76 §2 — condensed)
 
-#### 2.1 `docs/DELTA_transit_admin_guide.pdf` (audited by PROMPT-51)
+#### 3.1 `docs/DELTA_transit_admin_guide.pdf`
 
-**Finding:** The admin guide (v3.4 text extract, 10 pages) covers installation, limits (150 MB attachment **size**), systemd, monitoring, backup, and troubleshooting. It does **not** describe bidirectional routing, attachment-only relay, or From/To rewriting.
+**Finding:** Silent on rebuild semantics (size limits only). Cannot answer transformation edge cases.
 
-Relevant excerpt (size limits only — **not** a rebuild requirement):
+#### 3.2 Approved customer algorithm (repository chain — inbound superseded by §1.3)
 
-> «Целевой лимит вложения для конечного пользователя — 150 МБ.»  
-> — `docs/DELTA_transit_admin_guide.pdf`, §4
+PROMPT-52 §3.2–3.3 established bidirectional rebuild intent. **Inbound** is now refined by customer confirmation: fan-out replaces «extract attachment(s) → NEW local RFC822» as a single message. **Outbound** remains aligned with PROMPT-52 §3.3 (single rebuilt message).
 
-**Conclusion:** The PDF is **silent** on message-rebuild semantics. It cannot answer item 3 sub-questions alone.
-
-#### 2.2 Approved customer algorithm (repository chain)
-
-The rebuild requirement is **not** lost — it was reconstructed and approved in the PROMPT-51 business baseline and restated as the **approved target architecture** in PROMPT-52 §3. That chain is the strongest in-repo “primary” specification for routing + transformation intent:
-
-**Inbound (approved target — PROMPT-52 §3.2):**
-
-```text
-External Referent mailbox → IMAP → identify Client by From
-  → unknown From → delete as spam
-  → known → DB: local_client, local_referent
-  → extract attachment(s) → NEW local RFC822
-       From=local_client  To=local_referent  attachment(s) only
-  → local SMTP → local Referent mailbox
-```
-
-**Outbound (approved target — PROMPT-52 §3.3):**
-
-```text
-local Client mailbox → Maildir → watchdog → identify Client by To
-  → unknown → must not send externally
-  → known → DB: external_client, external_referent
-  → extract attachment(s) → NEW external RFC822
-       From=external_referent  To=external_client  attachment(s) only
-  → external SMTP → external Client mailbox
-```
-
-**Four-address data model (PROMPT-53 §5 — authoritative column mapping):**
+**Four-address data model (PROMPT-53 §5 — unchanged):**
 
 | Logical address | Column |
 |-----------------|--------|
 | External client (inbound **From** key) | `clients.external_client_email` |
-| Local client (outbound pickup / rebuilt **From** inbound) | `clients.local_client_email` |
-| Local referent (inbound rebuilt **To**) | `clients.local_referent_email` |
-| External referent (polled mailbox / outbound rebuilt **From**) | `external_accounts.email` via `clients.external_account_id` |
+| Local client (rebuilt **From** inbound / outbound pickup key) | `clients.local_client_email` |
+| Local referent (rebuilt **To** inbound) | `clients.local_referent_email` |
+| External referent (polled mailbox / rebuilt **From** outbound) | `external_accounts.email` via `clients.external_account_id` |
 
-#### 2.3 Phrase «часто нужны только вложения»
+#### 3.3 Phrase «часто нужны только вложения»
 
-**Not found** in `DELTA_transit_admin_guide.pdf`, `schema.sql`, anchor doc body, or PROMPT-51/52/53 reports. It appears in the PROMPT-76 task brief (customer confirmation context) but **has no verbatim primary-source citation in this repository**. Treat it as **customer intent signal**, not as an auditable spec line — see open questions §7.
-
----
-
-### 3. Answers to item 3 sub-questions
-
-Each sub-question: **Resolved** (from approved in-repo baseline) or **Customer question** (primary source silent/ambiguous).
-
-#### 3.0 Directionality — one-way or both?
-
-| | Status |
-|---|--------|
-| **Resolved (in-repo baseline)** | **Both directions.** PROMPT-52 §3.2 (inbound) and §3.3 (outbound) each mandate `extract attachment(s) → NEW RFC822` with direction-specific From/To. The customer **example** was inbound-flavored; the **approved spec** is bidirectional. |
-
-Implementation PROMPT must implement **both** unless the customer explicitly narrows scope in writing (would be a spec change, not an implementer default).
+Not found verbatim in repository primary sources. Customer interactive confirmation (CQ-1…CQ-12) is now authoritative via §7.
 
 ---
 
-#### 3.1 Message with **no** attachment
+### 4. Resolved transformation rules (former item 3 sub-questions)
 
-| | Status |
-|---|--------|
-| **Customer question (CQ-1)** | Approved PROMPT-52 text says «extract attachment(s)» but defines **no rule** when zero MIME parts qualify as attachments. PROMPT-52 §9.3 explicitly lists «Missing attachment» as **unresolved**. |
+All twelve customer questions are **closed**. Normative answers are in §7 (verbatim decision table). This section records **how each rule applies** in the fan-out vs 1:1 model.
 
-**Do not silently default in implementation.** Candidate policies (for customer decision only):
+#### 4.0 Directionality
 
-| Option | Effect |
-|--------|--------|
-| A — Fail closed | Do not deliver; inbound stays UNSEEN / outbound file stays in `new/` (aligns with «attachment-only» strict reading) |
-| B — Deliver empty rebuilt message | New From/To, no MIME parts (likely useless to referent) |
-| C — Fall back to full-body relay | Contradicts «attachment(s) only» |
+| Scope | Rule |
+|-------|------|
+| **Both directions** | Rebuild activates under `relationship_live` (CQ-11). Shadow/legacy remain raw stream. |
+| **Inbound only** | 1:N fan-out, Subject = per-child filename, multiple-attachment handling. |
+| **Outbound only** | 1:1, single-attachment expectation, no fan-out. |
 
-**Spec recommendation for customer review:** Option **A** (fail closed + loud log) pending explicit customer choice — matches PROMPT-52 §11 security posture, but **is not adopted as normative until CQ-1 is answered**.
+#### 4.1 No attachments / no attachable parts (CQ-1, CQ-7)
 
----
+| Direction | N = 0 attachable parts | Outcome |
+|-----------|------------------------|---------|
+| Inbound | After parse, before fan-out | Fail closed — no local delivery; IMAP **UNSEEN**; `[MESSAGE_REBUILD] zero_attachments` |
+| Outbound | After parse | Fail closed — Maildir file **retained** in `new/`; `[MESSAGE_REBUILD] zero_attachments` |
 
-#### 3.2 Message with **multiple** attachments
+No empty-body rebuild. No fallback to full original relay.
 
-| | Status |
-|---|--------|
-| **Resolved (in-repo baseline)** | **Include all qualifying attachment parts** in the rebuilt message. PROMPT-52 §3 uses plural «attachment(s)»; §9.2 «Multiple attachments | Feasible | Spec says attachment(s)». |
+#### 4.2 Multiple attachments (CQ-2) — inbound only
 
-| | Status |
-|---|--------|
-| **Customer question (CQ-2)** | No primary-source rule for **selection** (whitelist by MIME type, filename pattern, max count, or max aggregate size beyond existing 150 MB transport limit). Default spec: **no filtering** — all `Content-Disposition: attachment` parts (see CQ-3 for inline) — **pending customer confirmation**. |
+All attachable parts are kept via **fan-out** into N separate local messages. No bundling, no whitelist/filtering.
 
----
+| Scope | Behavior |
+|-------|----------|
+| Per original message | Enumerate all `Content-Disposition: attachment` parts → N |
+| Per fan-out child | Exactly one of those parts in the rebuilt MIME |
 
-#### 3.3 «New From/To» — header mapping to existing DB columns
+#### 4.3 Inline parts (CQ-3)
 
-**Resolved — use existing ClientRelationship columns only (no new schema fields for addresses).**
+Discarded entirely at parse time. Never promoted to attachable parts. Applies both directions (inbound fan-out enumeration and outbound single-part extraction).
 
-| Direction | Rebuilt RFC822 header | Source column | Notes |
-|-----------|----------------------|---------------|-------|
-| **Inbound** | `From:` | `clients.local_client_email` | Matches PROMPT-52 «From=local_client» |
-| **Inbound** | `To:` | `clients.local_referent_email` | Matches PROMPT-52 «To=local_referent»; aligns with `relationship_live` RCPT today |
-| **Outbound** | `From:` | `external_accounts.email` (= `ClientRelationshipDTO.external_referent_email`) | Matches PROMPT-52 «From=external_referent» |
-| **Outbound** | `To:` | `clients.external_client_email` | Matches PROMPT-52 «To=external_client»; **not** today’s behavior (daemon still RCPTs original header addresses) |
+#### 4.4 Envelope / From (CQ-4)
 
-**SMTP envelope (operational, separate from RFC822 headers):**
+**Never rewritten to a fixed address.** Rebuilt RFC822 `From:` is always the natural local mailbox of the actual sender:
 
-| Direction | Today (`88339c4`) | Target after rebuild (spec) |
-|-----------|-------------------|----------------------------|
-| Inbound `MAIL FROM` | `plan.mail_from` → `local_referent_email` under `relationship_live` | **Customer question (CQ-4):** envelope sender = `local_client_email`, `local_referent_email`, or Postfix-mandated mailbox? PROMPT-53 OQ-3 / PROMPT-52 §9.3 flag Postfix `reject_unlisted_sender` tension |
-| Inbound `RCPT TO` | `local_referent_email` | Unchanged — `local_referent_email` |
-| Outbound `MAIL FROM` | `external_accounts.email` | Unchanged — external referent mailbox |
-| Outbound `RCPT TO` | Original `To`/`Cc` | **Must become** `external_client_email` only (single RCPT per approved model) |
+| Direction | Rebuilt `From:` | Source |
+|-----------|-----------------|--------|
+| Inbound | `clients.local_client_email` | Per fan-out child (same value for all N children of one relationship) |
+| Outbound | `external_accounts.email` | Single rebuilt message |
 
-`Cc`/`Bcc` on rebuilt messages: **Customer question (CQ-5)** — approved baseline specifies single To pair only.
+SMTP envelope `MAIL FROM` follows the same natural-sender rule per direction (implementation PROMPT must satisfy Postfix/iRedMail `reject_unlisted_sender` — no fixed rewrite).
 
----
+#### 4.5 Cc (CQ-5)
 
-#### 3.4 Subject, Date, Message-ID, In-Reply-To / References (threading)
+Always dropped. Rebuilt message has **`To:` only** — per fan-out child (inbound) or per outbound message.
 
-| | Status |
-|---|--------|
-| **Customer question (CQ-6)** | Approved PROMPT-52 algorithm is **silent** on these headers. |
+#### 4.6 Subject / Date / Message-ID / References (CQ-6)
 
-**Options for customer (not chosen in this spec):**
+**All regenerated, never carried from the original.** Applies **per fan-out child** (inbound) or **per outbound message**.
 
-| Header | Preserve original | Regenerate | Hybrid |
-|--------|-------------------|------------|--------|
-| `Subject:` | Keeps client subject visible to referent | Loses context | Prefix e.g. `[via proxy]` |
-| `Date:` | Historical accuracy | Injection time | — |
-| `Message-ID:` | Threading with external side | New ID breaks cross-mailbox threading | New ID with `References` to original |
-| `In-Reply-To` / `References` | Preserve if present | Drop | — |
+| Header | Inbound (per child i) | Outbound |
+|--------|----------------------|----------|
+| `Subject:` | Filename (with extension) of attachmentᵢ | Filename (with extension) of the single attachment |
+| `Date:` | Injection time (each child may differ by milliseconds) | Injection time |
+| `Message-ID:` | New unique ID per child | New unique ID |
+| `In-Reply-To` / `References` | Omitted / not set | Omitted / not set |
 
-**Impact:** Referent mail client conversation view depends on CQ-6. **No implementer default.**
+The original internet `Subject` (space-separated filename list) is **never** copied.
 
----
+#### 4.7 Body when attachment present, no text (CQ-8)
 
-#### 3.5 Inline (non-attachment) body text
+Include an **empty `text/plain`** part alongside the attachment in `multipart/mixed` — not a bare attachment-only multipart. Applies per fan-out child and per outbound message.
 
-| | Status |
-|---|--------|
-| **Resolved (interpretive, from approved «attachment(s) only»)** | Non-attachment body parts (plain/html) are **not copied** into the rebuilt message unless CQ-3 overrides. |
+#### 4.8 Malformed / unparseable MIME, nested forward (CQ-9, CQ-12)
 
-| | Status |
-|---|--------|
-| **Customer question (CQ-3)** | Primary source does not define **`Content-Disposition: inline`** parts (embedded images, signature HTML). PROMPT-52 §9.3: «Inline … **Unresolved** — treat as attachment or discard». |
+Strict **fail closed** always. No raw relay fallback, even under an operator flag.
 
-| | Status |
-|---|--------|
-| **Customer question (CQ-7)** | If no attachable parts remain after extraction (e.g. HTML-only email): same as CQ-1 — **no silent default**. |
+| Condition | Handling |
+|-----------|----------|
+| MIME parse failure | No delivery; inbound UNSEEN / outbound file retained |
+| `message/rfc822` / `.eml` attachment encountered | Same fail-closed path as any parse failure — **no distinct log category** |
+| Unexpected outbound multi-attachment | Fail closed (outbound expects N=1) |
 
-**Placeholder body text:** Not specified in primary source — **Customer question (CQ-8)** (empty body vs fixed line vs omitted `text/plain` entirely).
+#### 4.9 S/MIME / PGP (CQ-10)
 
----
+Out of scope for v1. Fail closed if detected (same as CQ-9).
 
-#### 3.6 Malformed / unparseable MIME
+#### 4.10 Rebuild activation (CQ-11)
 
-| | Status |
-|---|--------|
-| **Resolved (failure mode direction)** | Rebuild failure must follow §4 (no message loss). |
-
-| Path | Today (`88339c4`) | Spec for rebuild step |
-|------|-------------------|----------------------|
-| Outbound header parse | `BytesHeaderParser` failure → log error, **file stays in Maildir** (L1884–1886) | Same: **do not delete** source file |
-| Inbound | `message_from_binary_file` for routing; stream even if body is odd | If rebuild parser **cannot** extract policy-compliant parts → **fail closed**, no local delivery, inbound **UNSEEN** (match inbound error policy in `finalize_inbound_process_result`) |
-| Fallback to original unchanged stream | N/A today | **Rejected for `relationship_live`+rebuild path** — would violate attachment-only requirement; only acceptable under `shadow`/`legacy` raw relay modes |
-
-**Customer question (CQ-9):** Whether a **deliberate** «parse failure → raw relay» escape hatch is ever desired (likely **no** given customer priority on rebuild).
-
----
-
-#### 3.7 Multi-part signed / encrypted (S/MIME, PGP)
-
-| | Status |
-|---|--------|
-| **Resolved (spec proposal — out of scope v1)** | **Do not apply attachment-extraction rebuild** to messages detected as S/MIME (`multipart/signed`, `application/pkcs7-mime`) or PGP (`multipart/encrypted`, `application/pgp-encrypted`) in v1. |
-
-**Justification:** Extracting «attachments» from signed/encrypted wrappers **breaks signature verification** and cannot produce a meaningful rebuilt message without decryption keys (not in scope). v1 behavior under `relationship_live`+rebuild:
-
-| Detection | Proposed handling |
-|-----------|-------------------|
-| Signed/encrypted outer structure | **Fail closed** — log `[MESSAGE_REBUILD] signed_or_encrypted skip relationship_id=…` — no delivery; preserve UNSEEN / Maildir file |
-
-| | Status |
-|---|--------|
-| **Customer question (CQ-10)** | Confirm out-of-scope vs future «decrypt → rebuild → re-sign» workflow. |
-
----
-
-### 4. Failure and rollback semantics (item 4)
-
-Rebuild must preserve the project’s **never silently drop a message** discipline (PROMPT-51 §5; anchor §3.1).
-
-#### 4.1 Processing pipeline (normative for implementation PROMPT)
-
-```text
-[source artifact] → parse/extract → [rebuilt temp RFC822 in TEMP_DIR] → SMTP DATA → success?
-                      ↓ fail                              ↓ fail
-              keep source unchanged                   delete temp only;
-              no IMAP Seen / no Maildir delete        keep source unchanged
-```
-
-| Stage | Inbound | Outbound |
-|-------|---------|----------|
-| Source artifact | IMAP message (UNSEEN) + temp fetch file | Maildir `new/` file |
-| Rebuild throws / zero attachments (pending CQ-1) | Do **not** mark `\Seen`; do **not** inject | Do **not** delete Maildir file; release queue reservation per today |
-| Rebuild succeeds, SMTP fails | UNSEEN retained (`mark_imap_seen=False`) — L190–197 | File retained — L1211–1214 |
-| SMTP 250 on **rebuilt** message | Mark `\Seen` (when policy says so) | Delete Maildir source file — L1217–1218 |
-| Temp rebuilt file | Always unlink in `finally` after attempt | Same |
-
-**Original file preserved until rebuilt+delivery both succeed** — mirrors existing «delete Maildir file only after SMTP 250» pattern; inbound temp fetch file is already unlinked separately (L758–763) but IMAP UNSEEN is the retry anchor.
-
-#### 4.2 Rollback of rebuild feature itself
-
-| Mechanism | Effect |
-|-----------|--------|
-| Per-referent override: leave routing `relationship_live`, add future **`message_rebuild_mode=off`** | **Not in schema today** — would require separate PROMPT if decoupling requested (§5) |
-| Revert referent to `shadow`/`legacy` routing | Raw RFC822 stream behavior returns immediately after daemon restart (PROMPT-73 pattern) |
-| Disable rebuild gate (implementation flag) | Engineering option for PROMPT-77 — not specified here |
-
-Rebuild failure must **never** fall back to silent raw relay under `relationship_live` without an explicit logged policy change (would violate customer priority #1).
-
----
-
-### 5. Routing-mode coupling decision (item 5)
-
-| | Decision |
-|---|----------|
-| **Resolved (spec)** | **Gate message rebuild on `relationship_live`** for the relevant direction (inbound and/or outbound per referent effective modes). |
-
-**Reasoning:**
-
-1. **Semantic coupling:** Customer «algorithm» = correct relationship routing **plus** attachment-only rebuild. `relationship_live` already selects the relationship and address pair; rebuild consumes that same `ClientRelationshipDTO`.
-2. **Safety:** Referents still on `shadow`/`legacy` continue **today’s raw-stream behavior** — preserves observability comparisons and avoids changing messages before routing is trusted (PROMPT-75 staged rollout).
-3. **Operational alignment:** Customer deferred production rollout until rebuild exists; pilot acceptance (PROMPT-75) validated routing only — rebuild is the **next** capability increment on the same referents.
-4. **No independent toggle in v1** unless customer requires partial rollout (routing live, rebuild off). PROMPT-73 override columns could be extended later — **Customer question (CQ-11)**. Default spec: **rebuild ON iff direction is `relationship_live`** (single coupling, simplest).
+Coupled to `relationship_live` — no independent toggle. Referent/direction not on `relationship_live` keeps today's raw-stream behavior.
 
 | Mode | Routing | Message body |
 |------|---------|--------------|
-| `shadow` / `legacy` | Legacy paths | **Original RFC822 stream** (unchanged) |
-| `relationship_live` | Relationship lookup | **Attachment-only rebuild** (this spec) |
+| `shadow` / `legacy` | Legacy paths | **Original RFC822 stream** |
+| `relationship_live` | Relationship lookup | **Rebuild per this spec** (inbound fan-out / outbound 1:1) |
 
-Inbound and outbound modes are already independent per referent (PROMPT-73) — rebuild gate follows each direction’s effective mode independently.
-
----
-
-### 6. Test matrix sketch (item 6)
-
-Isolated function/module tests (e.g. `rebuild_message_for_relationship(raw_bytes, dto, direction) → RebuildResult`) with **synthetic fixtures** — no IMAP/SMTP integration required for matrix coverage.
-
-| ID | Fixture | Direction | Routing gate | Expected outcome (pending CQ answers marked *) |
-|----|---------|-----------|--------------|--------------------------------------------------|
-| T1 | `multipart/mixed`: text/plain + one `attachment` PDF | Inbound | `relationship_live` | Rebuilt From=`local_client_email`, To=`local_referent_email`, exactly one PDF part* |
-| T2 | Same as T1 | Outbound | `relationship_live` | Rebuilt From=`external_referent_email`, To=`external_client_email`, one PDF part* |
-| T3 | Single `text/plain` only, no attachment | Both | `relationship_live` | **CQ-1*** — fail closed (recommended) or customer-chosen policy |
-| T4 | Three `attachment` parts (pdf, docx, png) | Both | `relationship_live` | Rebuilt message contains **three** parts with preserved filenames/types* |
-| T5 | `multipart/alternative` html + plain, no attachment | Both | `relationship_live` | **CQ-1/CQ-7*** |
-| T6 | `Content-Disposition: inline` PNG in html related | Both | `relationship_live` | **CQ-3*** |
-| T7 | Nested `message/rfc822` (forward) with attachment inside | Inbound | `relationship_live` | **Customer question** — one-level vs recursive extraction |
-| T8 | `multipart/signed` S/MIME | Both | `relationship_live` | Fail closed (§3.7 proposal) |
-| T9 | Truncated / invalid MIME boundaries | Both | `relationship_live` | Rebuild error; no output artifact |
-| T10 | 150 MB attachment (boundary size) | Both | `relationship_live` | Rebuild succeeds; output size ≤ transport limit |
-| T11 | Raw fixture through pipeline with gate **`shadow`** | Inbound | `shadow` | **Passthrough bytes unchanged** (regression) |
-| T12 | Relationship miss (wrong From) | Inbound | `relationship_live` | No rebuild attempted (routing fail-closed first) |
-| T13 | Rebuilt headers | Both | `relationship_live` | **CQ-6*** — assert chosen Subject/Message-ID policy |
-| T14 | Cross-relationship isolation | Both | `relationship_live` | DTO A rebuild must not contain addresses from relationship B |
-
-**Harness notes:** Golden-file comparison of rebuilt RFC822 (normalized line endings); optional round-trip parse assert counts of `Content-Disposition: attachment` parts.
+Inbound and outbound effective modes remain independent per referent (PROMPT-73); rebuild gate follows each direction separately.
 
 ---
 
-### 7. Open questions for the customer
+### 5. Failure, rollback, and fan-out atomicity (item 4 + RD-13)
 
-Separated from resolved spec decisions. Short list — primary source is good on **directionality and address mapping**, weak on **edge MIME policy**.
+Rebuild must preserve the project's **never silently drop a message** discipline (PROMPT-51 §5: *«Inbound: stays UNSEEN if SMTP fails; outbound: file kept if SMTP fails»*; anchor §3.1 interim policies).
 
-| ID | Question |
-|----|----------|
-| **CQ-1** | Zero attachment parts: drop (fail closed), empty rebuilt body, or full-body fallback? («часто нужны только вложения» implies not always — need rule for the «no attachment» case.) |
-| **CQ-2** | Multiple attachments: confirm «all attachment parts, no filter» vs whitelist/size/count limits. |
-| **CQ-3** | Inline (`Content-Disposition: inline`) parts: extract as attachments or discard? |
-| **CQ-4** | Inbound SMTP envelope `MAIL FROM`: which mailbox (`local_client_email` vs `local_referent_email`) satisfies Postfix/iRedMail policy? |
-| **CQ-5** | Rebuilt messages: single `To` only, or preserve/copy `Cc`? |
-| **CQ-6** | Subject / Date / Message-ID / References: preserve, regenerate, or hybrid? |
-| **CQ-7** | HTML-only or text-only messages with no attachable parts — same as CQ-1? |
-| **CQ-8** | If rebuilt message has attachments but no body part, include empty `text/plain` or attachment-only multipart? |
-| **CQ-9** | Parse failure: strict fail closed only, or ever allow raw relay under operator flag? |
-| **CQ-10** | S/MIME / PGP: confirm v1 out-of-scope + fail closed. |
-| **CQ-11** | Must rebuild be independently disableable while staying on `relationship_live`? |
-| **CQ-12** | Nested `message/rfc822` / `.eml` attachments: extract inner attachments recursively or one level only? |
+#### 5.1 Processing pipeline — inbound fan-out
+
+```text
+[IMAP UNSEEN + temp fetch]
+  → routing (once per original)
+  → parse + enumerate attachable parts (once per original)
+  → N=0 → FAIL (UNSEEN, no SMTP)
+  → rebuild temp RFC822₁ … RFC822ₙ (all before any SMTP)
+       any rebuild fail → delete all temps; FAIL (UNSEEN, no SMTP)
+  → SMTP deliver child 1 … child N sequentially
+       all N × SMTP 250 → mark IMAP \Seen
+       any SMTP fail    → UNSEEN retained; log per failed child index + filename
+  → unlink all temp files in finally
+```
+
+#### 5.2 Processing pipeline — outbound 1:1
+
+```text
+[Maildir new/ file]
+  → routing (once)
+  → parse + expect N=1 attachable part
+  → N≠1 → FAIL (file retained)
+  → rebuild one temp RFC822
+  → SMTP 250 → delete Maildir source
+  → SMTP fail → file retained (unchanged from today)
+```
+
+#### 5.3 Fan-out atomicity decision (RD-13) — **resolved, not open**
+
+**Decision: all-or-nothing orchestration** (rejected: partial-success that delivers some fan-out children while others fail rebuild).
+
+| Phase | Policy | IMAP `\Seen` / source retention |
+|-------|--------|--------------------------------|
+| **A — Parse / enumerate** | Once per original message | N=0 → fail closed, UNSEEN |
+| **B — Rebuild all N children** | **All-or-nothing:** every child must rebuild successfully **before any SMTP attempt** | Any rebuild failure → delete all temps, **zero** deliveries, UNSEEN |
+| **C — SMTP deliver children 1…N** | Sequential best-effort; each SMTP 250 is **irreversible** | `\Seen` **only if all N** deliveries succeed; otherwise UNSEEN |
+| **Retry** | Re-process entire original UNSEEN message | May re-deliver children already accepted in a prior attempt (see below) |
+
+**Justification (vs partial-success):**
+
+1. **PROMPT-51 §5 precedent:** A single-message failure leaves the source artifact intact for retry (`UNSEEN` / Maildir file). Marking `\Seen` when only k<N children delivered would **abandon** the remaining attachments with no retry path — that is silent loss of the undelivered portion.
+2. **Partial-success at rebuild time** would deliver an **incomplete** attachment set (e.g. 2 of 3 filenames) without a machine-readable signal that the original had more — worse than delivering nothing and retrying the full fan-out.
+3. **Never silently drop** means both: (a) do not discard the source until the operation fully succeeds, and (b) do not mark success while work remains. All-or-nothing orchestration satisfies both; partial-success at rebuild violates (b) for failed children, and partial-success with early `\Seen` violates (a) for undelivered children.
+4. **Delivery-phase partial SMTP:** Already-delivered children cannot be rolled back after SMTP 250. Retaining UNSEEN when k<N succeed ensures the **failed** children are retried. The trade-off — possible **duplicate** local delivery of children 1…k−1 on retry — is an explicit, logged operational artifact (`[MESSAGE_REBUILD] fanout_incomplete delivered=N_ok failed=N_fail retry_will_duplicate_ok=true`). Duplicates are preferable to silently losing failed attachments or marking `\Seen` prematurely.
+
+**Not escalated to customer:** The duplicate-on-retry artifact follows directly from IMAP UNSEEN-as-retry-anchor + irreversible SMTP 250, the same at-least-once class as today's single-message inbound retry. No new customer question required.
+
+#### 5.4 Rollback of rebuild feature itself
+
+| Mechanism | Effect |
+|-----------|--------|
+| Revert referent to `shadow`/`legacy` routing | Raw RFC822 stream returns after daemon restart (PROMPT-73 pattern) |
+| Independent `message_rebuild_mode=off` while staying `relationship_live` | **Not in v1** (CQ-11 closed: coupled to `relationship_live`) |
+
+Rebuild failure must **never** fall back to silent raw relay under `relationship_live`.
 
 ---
 
-## Explicit non-goals (item 7 / HARD CONSTRAINTS)
+### 6. Test matrix (item 6)
+
+Isolated function/module tests (e.g. `rebuild_inbound_fanout(raw_bytes, dto) → FanoutRebuildResult` and `rebuild_outbound_message(raw_bytes, dto) → RebuildResult`) with **synthetic fixtures**. Separate entry points reflect inbound vs outbound shape difference.
+
+#### 6.1 Inbound fan-out tests
+
+| ID | Fixture | Gate | Expected outcome |
+|----|---------|------|------------------|
+| **F1** | `multipart/mixed`: text/plain + **one** `attachment` PDF | `relationship_live` | **N=1:** one rebuilt message; From=`local_client_email`, To=`local_referent_email`; Subject=`doc.pdf`; one attachment + empty `text/plain` |
+| **F2** | `multipart/mixed`: text/plain + **three** attachments (pdf, docx, png) | `relationship_live` | **N=3:** three **separate** rebuilt messages; each Subject = that file's filename; each contains exactly one attachment; shared From/To |
+| **F3** | Same as F2 | `relationship_live` | Assert original multi-filename Subject **not** present on any child |
+| **F4** | Single `text/plain` only, no attachment | `relationship_live` | **N=0:** fail closed; `FanoutRebuildResult.success=false`; zero SMTP calls |
+| **F5** | Three attachments; **rebuild fails on child 2** (e.g. oversize / IO error injected) | `relationship_live` | **RD-13:** zero deliveries (children 1 and 3 not sent); UNSEEN; per-child failure logged |
+| **F6** | Three attachments; all rebuild OK; **SMTP fails on child 2** | `relationship_live` | Child 1 delivered; child 2 failed; child 3 not attempted or failed per implementation order; UNSEEN; `[MESSAGE_REBUILD] fanout_incomplete` |
+| **F7** | F6 state; **retry same original** | `relationship_live` | Documents duplicate delivery of child 1 (acceptable per RD-13); eventual all-3 success → `\Seen` |
+| **F8** | `Content-Disposition: inline` PNG + one real attachment | `relationship_live` | **N=1** (inline discarded); only real attachment fanned out |
+| **F9** | Nested `message/rfc822` (.eml) as sole part | `relationship_live` | Fail closed (CQ-9 class); no distinct forward log marker |
+| **F10** | `multipart/signed` S/MIME | `relationship_live` | Fail closed (CQ-10) |
+| **F11** | Truncated MIME boundaries | `relationship_live` | Fail closed; no output |
+| **F12** | Raw fixture, gate **`shadow`** | `shadow` | Passthrough bytes unchanged (regression) |
+| **F13** | Relationship miss (wrong From) | `relationship_live` | No rebuild attempted (routing fail-closed first) |
+
+#### 6.2 Outbound 1:1 tests
+
+| ID | Fixture | Gate | Expected outcome |
+|----|---------|------|------------------|
+| **O1** | `multipart/mixed`: text/plain + one `attachment` PDF | `relationship_live` | One rebuilt message; From=`external_referent_email`, To=`external_client_email`; Subject=filename; one attachment + empty `text/plain` |
+| **O2** | Single `text/plain` only | `relationship_live` | Fail closed; file retained |
+| **O3** | **Two** `attachment` parts | `relationship_live` | Fail closed (unexpected multi-attachment; no fan-out) |
+| **O4** | Inline image + one attachment | `relationship_live` | One rebuilt message (inline discarded) |
+| **O5** | `multipart/signed` | `relationship_live` | Fail closed |
+| **O6** | Rebuilt headers | `relationship_live` | Subject=filename; new Message-ID; no Cc; Date regenerated |
+| **O7** | Cross-relationship isolation | `relationship_live` | DTO A rebuild must not contain addresses from relationship B |
+
+**Harness notes:** Golden-file comparison per rebuilt RFC822 (normalized line endings); inbound F2 asserts **count of output messages == attachment count**, not part count within one message.
+
+---
+
+### 7. Resolved decisions (replaces PROMPT-76 open questions)
+
+All twelve customer questions are **closed**. Authoritative source (verbatim):
+
+| Item | Resolution |
+|------|------------|
+| Architecture | Inbound is 1:N fan-out (N attachments → N single-attachment local messages). Outbound remains 1:1 (already guaranteed single-attachment). |
+| No attachments / no attachable parts (CQ-1/CQ-7) | Fail closed — do not deliver, log loudly. No empty-body rebuild, no fallback to full original. |
+| Multiple attachments (CQ-2) | All are kept — via fan-out into separate messages, not bundled and not filtered/whitelisted. |
+| Inline parts — embedded images, HTML signatures (CQ-3) | Discarded entirely, never extracted as attachments. |
+| Envelope/From (CQ-4) | Never rewritten to a fixed address — always the natural local mailbox of the actual sender (local_client_email if originating from the client, local_referent_email if from the referent). |
+| Cc (CQ-5) | Always dropped. Rebuilt message has To only. |
+| Subject / Date / Message-ID / References (CQ-6) | All regenerated, never carried over from the original. Subject specifically = the filename (with extension) of that single fan-out message's own attachment — not the original multi-file subject line. |
+| Body when attachment present, no text (CQ-8) | Include an empty `text/plain` part alongside the attachment (not a bare attachment-only multipart) — for mail client compatibility. |
+| Malformed/unparseable MIME, including any unexpected nested/forwarded message (CQ-9, CQ-12) | Strict fail-closed always — never fall back to raw relay, even under an operator flag. No distinct handling or logging category for "forwarded" vs. any other malformed case. |
+| S/MIME / PGP (CQ-10) | Out of scope for v1. Fail closed if encountered (same as CQ-9). |
+| Rebuild activation (CQ-11) | Coupled to `relationship_live` — no independent toggle. A referent/relationship not on relationship_live keeps today's raw-stream behavior unchanged. |
+
+**Additional design decision (fan-out atomicity — not a CQ item):**
+
+| Item | Resolution |
+|------|------------|
+| Fan-out atomicity (RD-13) | All-or-nothing orchestration: rebuild all N children before any SMTP; any rebuild failure delivers nothing; `\Seen` only when all N SMTP deliveries succeed; UNSEEN retry may duplicate already-delivered children (logged). See §5.3. |
+
+---
+
+### 8. Explicit non-goals (unchanged)
 
 | ID | Non-goal | Deferred PROMPT |
 |----|----------|-----------------|
@@ -390,12 +389,19 @@ Separated from resolved spec decisions. Short list — primary source is good on
 | NG-3 | Implementation code / tests | PROMPT-77 (follow-up) |
 | NG-4 | New DB address columns | Reuse PROMPT-53 four-address model |
 | NG-5 | Changing routing lookup rules | Already shipped in relationship_live |
+| NG-6 | Archive password extraction / decryption | External applications; out of scope |
+| NG-7 | Fan-out duplicate suppression on IMAP retry | Future hardening if duplicates prove operationally unacceptable |
 
 ---
 
-## Implementation pointer (for PROMPT-77, not this PROMPT)
+### 9. Implementation pointer (for PROMPT-77, not this PROMPT)
 
-Suggested insertion point: new module (e.g. `message_rebuild.py`) called from `_deliver_to_local_smtp` / `send_via_external_smtp` **after** `plan_*_delivery` succeeds and effective mode is `relationship_live`, **before** `_stream_file_via_smtp`. Feed rebuilt temp path to existing stream helper (PROMPT-52 §4 KEEP classification for `_stream_file_via_smtp`).
+Suggested insertion point: new module (e.g. `message_rebuild.py`) with **two entry points**:
+
+- `rebuild_inbound_fanout(raw_bytes, dto) → FanoutRebuildResult` — returns 0..N temp paths + metadata
+- `rebuild_outbound_message(raw_bytes, dto) → RebuildResult` — returns 0..1 temp path
+
+Called from `_deliver_to_local_smtp` / `send_via_external_smtp` **after** `plan_*_delivery` succeeds and effective mode is `relationship_live`, **before** `_stream_file_via_smtp`. Inbound orchestrator loops N SMTP calls; outbound calls once.
 
 ---
 
@@ -405,5 +411,8 @@ Suggested insertion point: new module (e.g. `message_rebuild.py`) called from `_
 |-------|--------|
 | Production code changed | **NO** |
 | Specification only | **YES** |
-| Primary PDF searched for rebuild wording | **YES — silent** |
-| PROMPT-51 finding re-verified on `88339c4` | **YES — confirmed** |
+| PROMPT-76 structurally revised (not appended) | **YES** |
+| Fan-out inbound / 1:1 outbound distinguished | **YES** |
+| CQ-1…CQ-12 closed (verbatim table §7) | **YES** |
+| RD-13 atomicity decided with justification | **YES** |
+| Anchor doc §15 update required | **YES** (see companion edit) |
