@@ -403,7 +403,7 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | Группа | Открытые пункты |
 |--------|-----------------|
 | **Routing** | Полная замена legacy To/Cc inbound |
-| **Message Transformation** | Attachment-only inbound rebuild; новый From/To per relationship |
+| **Message Transformation** | Inbound 1:N fan-out (N attachments → N single-attachment local messages); outbound 1:1 rebuild; новый From/To per relationship |
 | **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
 | **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
 | **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit |
@@ -476,6 +476,42 @@ or cutover execution in the same PROMPT.
 **Measured at N=50 (lab VPS):** IMAP poller DB 94 ms; sync DB portion 121 ms; collision checks ~3 ms; log-tail 100% coverage at 35% shadow density (degrades to 53% at 10%). IMAP network poll latency **not measured**.
 
 **PROMPT-71 record above is preserved for audit; this note supersedes only the scale-based deferral rationale and PROMPT-72 scope pointer.**
+
+---
+
+## 15. Message rebuild specification (PROMPT-76 / PROMPT-76.1)
+
+**Full report:** [`docs/reports/PROMPT-76-message-rebuild-spec.md`](reports/PROMPT-76-message-rebuild-spec.md)
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-15 (PROMPT-76.1 revision) |
+| **Type** | Design/spec only (no code) |
+| **Code baseline** | `88339c4` — `_stream_file_via_smtp()` still relays **original RFC822** both directions |
+| **Approved target** | Attachment-only rebuild + new From/To per ClientRelationship (PROMPT-52 §3.2–3.3, inbound refined) |
+| **Primary PDF admin guide** | **Silent** on rebuild semantics (size limits only) |
+| **Rebuild gate** | **`relationship_live`** per direction (shadow/legacy remain raw stream); no independent toggle (CQ-11) |
+| **Customer questions** | **CQ-1…CQ-12 closed** — see report §7 (resolved decisions table) |
+| **Non-goals** | Spam delete (PROMPT-78), full spec reconciliation (PROMPT-79) |
+
+### Inbound fan-out architecture (PROMPT-76.1)
+
+Customer confirmation changed inbound from 1:1 message transformation to **1:N fan-out**:
+
+| Aspect | Rule |
+|--------|------|
+| **Shape** | One internet message with N attachable parts → **N separate** local RFC822 messages, each with **exactly one** attachment |
+| **Subject** | Regenerated per child = that attachment's filename (with extension); original multi-file Subject is never copied |
+| **Inline parts** | Discarded (CQ-3) |
+| **Zero attachments** | Fail closed — no delivery, UNSEEN (CQ-1/CQ-7) |
+| **Nested .eml / forward** | Fail closed as malformed MIME (CQ-9/CQ-12) — no distinct handling |
+| **Atomicity (RD-13)** | All-or-nothing: rebuild all N before any SMTP; `\Seen` only when all N deliveries succeed; retry may duplicate already-delivered children |
+
+### Outbound (unchanged shape: 1:1)
+
+Locally originated messages are **already single-attachment** by house convention. Outbound rebuild is **1:1** — no fan-out. Unexpected multi-attachment outbound → fail closed.
+
+**Status:** Spec **ready for PROMPT-77 implementation** (all CQ items closed; RD-13 atomicity decided in spec).
 
 ---
 
