@@ -515,4 +515,24 @@ Locally originated messages are **already single-attachment** by house conventio
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.7*
+## 16. Message rebuild VPS pilot — referent #1 (PROMPT-77.1)
+
+**Full report:** [`docs/reports/PROMPT-77-message-rebuild-implementation.md`](reports/PROMPT-77-message-rebuild-implementation.md) §8
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-17 |
+| **Host** | Lab VPS `192.168.125.116` |
+| **Code merge** | `1d5f8c1` (PR #21, PROMPT-77) deployed to VPS |
+| **Isolation** | Shadow-first deploy (overrides cleared → deploy → restart on shadow → then live flip) |
+| **Live flip** | `2026-09-17T07:30:16Z` — `relationship_live` / `relationship_live` / `referent_only` |
+| **Observation** | 60 min (`07:40:56Z`–`08:40:57Z`); no unexpected `[MESSAGE_REBUILD]` beyond deliberate zero-attach |
+| **Verdict** | **NOT ACCEPTED** |
+| **Rollback** | Overrides cleared to NULL; effective `shadow`/`shadow`/`referent_only` since `2026-09-17T08:42:17Z` |
+| **Blockers for ACCEPTED** | (1) fail-closed does not retain IMAP UNSEEN (`FETCH RFC822` side-effect); (2) inbound fan-out into watched referent outbox echoes rebuilt children outbound |
+
+**Next:** **PROMPT-77.2** (UNSEEN/PEEK + inbound/watch coupling). Then re-run live rebuild pilot. **PROMPT-78** (spam/unknown-sender deletion) remains after 77.2.
+
+---
+
+*Конец документа · DELTA-transit Anchor v3.8*
