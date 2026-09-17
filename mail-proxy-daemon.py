@@ -35,6 +35,7 @@ from watchdog.events import FileSystemEventHandler
 # relationship_lookup.py has no top-level side effects beyond class/function defs.
 from relationship_lookup import RelationshipLookup
 from relationship_routing import (
+    InboundDeliveryPlan,
     InboundProcessResult,
     InboundRoutingMode,
     OutboundRoutingMode,
@@ -59,6 +60,7 @@ from relationship_shadow import (
     extract_message_from_address,
     relationship_lookup_shadow_enabled,
 )
+from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
 
 # Константы конфигурации
 CRYPTO_KEY_FILE = '/etc/mail-proxy/crypto.key'
@@ -842,10 +844,19 @@ class MailHandler:
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
             )
             smtp.ehlo()
-            delivered = self._stream_file_via_smtp(
-                smtp, plan.mail_from, plan.local_rcpts, mail_file
-            )
-            smtp_error = None if delivered else 'smtp_delivery_failed'
+            if plan.mode == InboundRoutingMode.RELATIONSHIP_LIVE:
+                delivered, smtp_error = self._deliver_inbound_fanout_via_smtp(
+                    smtp=smtp,
+                    mail_file=mail_file,
+                    plan=plan,
+                    account_id=account_id,
+                    from_addr=from_addr,
+                )
+            else:
+                delivered = self._stream_file_via_smtp(
+                    smtp, plan.mail_from, plan.local_rcpts, mail_file
+                )
+                smtp_error = None if delivered else 'smtp_delivery_failed'
             return finalize_inbound_process_result(
                 plan, delivered, smtp_error=smtp_error
             )
@@ -876,6 +887,64 @@ class MailHandler:
                 try:
                     smtp.quit()
                 except Exception:
+                    pass
+
+    def _deliver_inbound_fanout_via_smtp(
+        self,
+        *,
+        smtp: smtplib.SMTP,
+        mail_file: Path,
+        plan: InboundDeliveryPlan,
+        account_id: int,
+        from_addr: str,
+    ) -> tuple:
+        """
+        relationship_live inbound: fan-out rebuild then sequential SMTP (RD-13).
+        Returns (delivered, smtp_error).
+        """
+        dto = self._relationship_lookup.resolve_inbound(int(account_id), from_addr)
+        if dto is None:
+            logger.error(
+                '[MESSAGE_REBUILD] inbound_missing_dto relationship_id=%s',
+                plan.relationship_id,
+            )
+            return False, 'missing_relationship_dto'
+
+        fanout = rebuild_inbound_fanout(
+            mail_file.read_bytes(),
+            dto,
+            temp_dir=TEMP_DIR,
+        )
+        if not fanout.success:
+            return False, fanout.error or 'rebuild_failed'
+
+        rebuild_paths: List[Path] = []
+        try:
+            rebuild_paths = fanout.temp_paths
+            mail_from = dto.local_client_email
+            delivered_count = 0
+            total = len(rebuild_paths)
+            for child_path in rebuild_paths:
+                ok = self._stream_file_via_smtp(
+                    smtp, mail_from, plan.local_rcpts, child_path
+                )
+                if not ok:
+                    failed = total - delivered_count
+                    logger.error(
+                        '[MESSAGE_REBUILD] fanout_incomplete delivered=%s failed=%s '
+                        'relationship_id=%s',
+                        delivered_count,
+                        failed,
+                        plan.relationship_id,
+                    )
+                    return False, 'fanout_incomplete'
+                delivered_count += 1
+            return True, None
+        finally:
+            for path in rebuild_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
                     pass
 
     def _stream_file_via_smtp(
@@ -978,9 +1047,55 @@ class MailHandler:
         """
         acc = task.account
         file_path = task.file_path
-        recipients = task.recipients
-        server = None
+        recipients = list(task.recipients)
+        rebuild_temp: Optional[Path] = None
+        outbound_mode = OutboundRoutingMode(
+            task.referent_data.get(
+                'effective_outbound_routing_mode',
+                OUTBOUND_ROUTING_MODE.value,
+            )
+        )
+        if outbound_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
+            try:
+                with open(file_path, 'rb') as header_f:
+                    msg = email.message_from_binary_file(header_f)
+            except Exception as exc:
+                logger.error(
+                    '[MESSAGE_REBUILD] outbound_header_parse_failed file=%s err=%s',
+                    file_path.name,
+                    exc,
+                )
+                return False
+            from_address = extract_outbound_identity_from_message(msg)
+            try:
+                dto = self._relationship_lookup.resolve_outbound(from_address)
+            except Exception as exc:
+                logger.error(
+                    '[MESSAGE_REBUILD] outbound_lookup_failed file=%s err=%s',
+                    file_path.name,
+                    exc,
+                )
+                return False
+            if dto is None:
+                logger.error(
+                    '[MESSAGE_REBUILD] outbound_missing_dto file=%s identity=%s',
+                    file_path.name,
+                    from_address or '(empty)',
+                )
+                return False
+            rebuild_result = rebuild_outbound_message(
+                file_path.read_bytes(),
+                dto,
+                temp_dir=TEMP_DIR,
+            )
+            if not rebuild_result.success or rebuild_result.temp_path is None:
+                return False
+            rebuild_temp = rebuild_result.temp_path
+            file_path = rebuild_temp
+            recipients = [dto.external_client_email]
+
         try:
+            server = None
             if not self._validate_account_settings(acc, 'smtp_encryption', 'SMTP'):
                 return False
             logger.info(
@@ -1129,6 +1244,12 @@ class MailHandler:
                 except Exception:
                     pass
             return False
+        finally:
+            if rebuild_temp is not None:
+                try:
+                    rebuild_temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 # =============================================================================
 # Пул IMAP-воркеров
 # =============================================================================
