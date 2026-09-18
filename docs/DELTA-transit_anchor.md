@@ -531,7 +531,23 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Rollback** | Overrides cleared to NULL; effective `shadow`/`shadow`/`referent_only` since `2026-09-17T08:42:17Z` |
 | **Blockers for ACCEPTED** | (1) fail-closed does not retain IMAP UNSEEN (`FETCH RFC822` side-effect); (2) inbound fan-out into watched referent outbox echoes rebuilt children outbound |
 
-**Next:** **PROMPT-77.2** (UNSEEN/PEEK + inbound/watch coupling). Then re-run live rebuild pilot. **PROMPT-78** (spam/unknown-sender deletion) remains after 77.2.
+**Next:** ~~PROMPT-77.2~~ → see §17. Then **PROMPT-77.3** (VPS re-pilot). **PROMPT-78** (spam/unknown-sender deletion) remains after 77.3.
+
+---
+
+## 17. PROMPT-77.2 — Rebuild live defects (PEEK + watch coupling)
+
+**Full report:** [`docs/reports/PROMPT-77-message-rebuild-implementation.md`](reports/PROMPT-77-message-rebuild-implementation.md) §9
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-18 |
+| **Branch** | `prompt-77-2-rebuild-live-defects` (from `origin/master` `c55aa9e`) |
+| **Defect 1** | `FETCH (BODY.PEEK[])` — `\Seen` only via gated `STORE`; regression `tests/test_imap_fetch_seen.py` |
+| **Defect 2 investigation** | **Confirmed:** rebuilt `From=local_client_email` matches `resolve_outbound`; raw external From does not — path coupling under `referent_only` now fires |
+| **Defect 2 fix** | **Config (option c):** rebuild pilot must use `outbound_watch_mode=relationship_only` (not `referent_only`); no delivery-target or watch-exclusion code change |
+| **VPS in this PROMPT** | **No** live flip / no override change — code + docs only |
+| **Next** | **PROMPT-77.3** — deploy PEEK, shadow-first, then live with `relationship_live`/`relationship_live`/`relationship_only` |
 
 ---
 

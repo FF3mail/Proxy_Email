@@ -713,12 +713,18 @@ class MailHandler:
                     )
                     continue
 
-                status, data = mail.fetch(num, '(RFC822)')
+                # BODY.PEEK[] — full message without setting \Seen (RFC 3501).
+                # FETCH (RFC822) / BODY[] marks \Seen as a side effect, which
+                # defeated mark_imap_seen=False fail-closed retry (PROMPT-77.2).
+                # imaplib response shape matches RFC822: data[0] is
+                # (header_bytes, literal_bytes); server replies as BODY[]
+                # (PEEK omitted from the untagged response). data[0][1] is safe.
+                status, data = mail.fetch(num, '(BODY.PEEK[])')
                 if status != 'OK' or not data or not data[0]:
                     continue
 
                 # Ограничение стандартного imaplib:
-                # метод fetch() возвращает RFC822 целиком в памяти процесса.
+                # метод fetch() возвращает тело письма целиком в памяти процесса.
                 # Потоковое получение письма напрямую в файл штатными
                 # средствами imaplib не поддерживается — это нижний предел
                 # без замены протокольного слоя imaplib (вне рамок патча).

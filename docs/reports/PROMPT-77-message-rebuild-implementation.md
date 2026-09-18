@@ -335,3 +335,100 @@ DB after rollback: `NULL` / `NULL` / `NULL`. PROMPT-77 code remains deployed (ha
 2. **Inbound delivery vs outbound watch coupling:** rebuilt inbound children land in `local_referent` Maildir `new/`, which `referent_only` watches — causing immediate outbound echo. Fix options (pick one in 77.2): deliver inbound to client maildir instead; exclude freshly delivered inbound from outbound watch; or require `relationship_only` watch before rebuild pilot.
 
 **PROMPT-78** (roadmap, after 77.2): spam / unknown-sender deletion — **not** started here.
+
+---
+
+## 9. PROMPT-77.2 — Defect fixes (code + config recommendation)
+
+**Date:** 2026-09-18  
+**Branch:** `prompt-77-2-rebuild-live-defects` (from `origin/master` = `c55aa9e`)  
+**VPS action in this PROMPT:** **none** — no `relationship_live` re-enable; live re-verification is PROMPT-77.3.
+
+### 9.1 Defect 1 — IMAP Seen-on-fetch
+
+**Fix:** `poll_external_imap()` now fetches with `mail.fetch(num, '(BODY.PEEK[])')` instead of `(RFC822)`.
+
+**Response shape (traced, not assumed):** imaplib assembles FETCH literals as `data = [(header_bytes, literal_bytes), b')']` for both RFC822 and BODY.PEEK[]. The server replies to PEEK as `BODY[]` (PEEK omitted from the untagged line). Existing `raw_email = data[0][1]` remains correct.
+
+**Regression:** `tests/test_imap_fetch_seen.py`
+
+| Test | Role |
+|------|------|
+| `test_rfc822_fetch_marks_seen` | Documents pre-fix protocol model (RFC822 → `\Seen`) |
+| `test_peek_fetch_leaves_unseen` | PEEK leaves UNSEEN |
+| `test_daemon_poll_fetch_uses_body_peek` | Source contract — **fails if fetch reverted to `(RFC822)`** |
+| `test_fail_closed_gate_store_only_marks_seen` | `mark_imap_seen=False` → no STORE → UNSEEN; STORE is sole gate |
+| `test_peek_response_tuple_shape_matches_rfc822` | `data[0][1]` shape parity |
+
+**Revert verification (PROMPT-73.1 style):** temporarily replace `'(BODY.PEEK[])'` with `'(RFC822)'` in `mail-proxy-daemon.py` → `test_daemon_poll_fetch_uses_body_peek` **FAIL**; restore PEEK → **PASS**.
+
+### 9.2 Defect 2 — Investigation findings
+
+**Theory from §8.9:** content-dependent outbound match — raw external `From` does not match `resolve_outbound`; rebuilt `From=local_client_email` does.
+
+**Verdict: CONFIRMED** by code tracing + unit evidence.
+
+| Step | Evidence |
+|------|----------|
+| Inbound delivery target | `relationship_target_email()` → `local_referent_email` (PROMPT-53 convention; rebuild and raw-stream alike) |
+| Rebuild child headers | `message_rebuild._build_rebuilt_message(from_addr=dto.local_client_email, to_addr=dto.local_referent_email)` |
+| Outbound identity | `extract_outbound_identity_from_message` → RFC822 **From** |
+| Lookup | `RelationshipLookup.resolve_outbound` SQL: `WHERE c.local_client_email = %s` |
+| Raw-stream | External `From` (e.g. `clientint1@frona.ru`) → `no_relationship_match` → silently skipped |
+| Rebuild | `From=clientloc1@testvps.loc` → match → external re-relay |
+
+Path coupling (`referent_only` watches the same Maildir inbound lands in) existed since PROMPT-53/63–65 but was **harmless for raw-stream** because From never matched. PROMPT-77 rebuild made the coupling fire.
+
+Unit proof: `TestRebuildOutboundEchoMechanism.test_rebuilt_from_matches_outbound_identity_external_does_not`.
+
+### 9.3 Defect 2 — Resolution choice
+
+| Option | Decision | Why |
+|--------|----------|-----|
+| **(a)** Redirect inbound to `local_client_maildir` address | **Reject** | Breaks `relationship_target_email()` used since PROMPT-53 for **all** `relationship_live` inbound (raw + rebuild). Would require reopening PROMPT-53’s delivery convention, not a narrow rebuild patch. |
+| **(b)** Exclude freshly delivered inbound from outbound watch (time-window / provenance) | **Reject** | Fragile/racy: Maildir delivery vs watchdog timing races; provenance markers need cross-process durable state; false negatives drop legitimate outbound; false positives still echo. Patches the symptom while leaving path coupling intact. |
+| **(c)** Cut `outbound_watch_mode` to `relationship_only` for rebuild pilot | **Adopt** | Watches only per-relationship `local_client_maildir/new` — does **not** include the referent inbox inbound lands in. Eliminates physical path coupling. Mechanism already built (PROMPT-66/73); collision guard (PROMPT-67) and per-referent `relationship_only` tests already cover the mode. |
+
+**Recommendation implemented here:** code does **not** change delivery/watch logic. PROMPT-77.3 **must** set referent #1 overrides to:
+
+`inbound=relationship_live` / `outbound=relationship_live` / `outbound_watch_mode=relationship_only`
+
+(not `referent_only` as in 77.1). Global systemd drop-in stays `referent_only` (safe default for non-pilot referents).
+
+**Safety notes for (c):**
+
+- PROMPT-66 fail-closed: `relationship_only` requires `outbound_routing=relationship_live` — satisfied by the same pilot flip.
+- PROMPT-67 collision guard: if `local_client_maildir` == referent outbox (misconfig), relationship observer is skipped; lab paths for rel1/rel2 are distinct from referent outbox (PROMPT-75/77.1 evidence).
+- Residual risk: legitimate outbound must be placed in `local_client_maildir/new` under `relationship_only` — already the PROMPT-66/73 target end state; confirm on VPS in 77.3 with a deliberate outbound inject into the client maildir (not the referent outbox).
+
+### 9.4 Defect 2 regression coverage
+
+No new daemon code path for (c) → no new unit test that “echo does not occur” after a code patch.
+
+**Substitutes:**
+
+1. Existing: `test_relationship_only_effective_skips_referent_watch` (`tests/test_referent_mode_overrides.py`) — referent outbox not watched under `relationship_only`.
+2. Existing: PROMPT-67 collision + PROMPT-73 override tests.
+3. Mechanism evidence test in `tests/test_imap_fetch_seen.py` (§9.2) — locks the content-dependent match explanation.
+4. **PROMPT-77.3 VPS:** after PEEK deploy + `relationship_only` flip, inject multi-attach inbound; assert local children remain in referent Maildir and are **not** externally re-relayed; inject outbound into `local_client_maildir/new` and assert external delivery still works.
+
+### 9.5 Test suite (local)
+
+```text
+python -m unittest tests.test_imap_fetch_seen tests.test_message_rebuild \
+  tests.test_outbound_watch tests.test_relationship_routing \
+  tests.test_referent_mode_overrides
+```
+
+**Result (2026-09-18):** `Ran 75 tests in ~3.4s` — **OK**.
+
+**Revert check:** temporarily replace `BODY.PEEK[]` with `RFC822` → `test_daemon_poll_fetch_uses_body_peek` **FAIL** (exit 1); restore → **PASS**.
+
+### 9.6 Scope for PROMPT-77.3
+
+1. Deploy this branch’s code to lab VPS (shadow-first isolation pattern from §8).
+2. Do **not** flip live until PEEK is confirmed on a fail-closed probe (zero-attach → IMAP UNSEEN retained).
+3. Flip referent #1 to `relationship_live` / `relationship_live` / **`relationship_only`** (watch tier change vs 77.1).
+4. Re-run inbound fan-out + zero-attach + outbound 1:1 + cross-rel isolation.
+5. Confirm no inbound→outbound echo; confirm outbound from client maildir still works.
+6. Observation window + accept/reject verdict.
