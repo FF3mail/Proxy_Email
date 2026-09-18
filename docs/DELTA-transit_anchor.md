@@ -531,7 +531,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Rollback** | Overrides cleared to NULL; effective `shadow`/`shadow`/`referent_only` since `2026-09-17T08:42:17Z` |
 | **Blockers for ACCEPTED** | (1) fail-closed does not retain IMAP UNSEEN (`FETCH RFC822` side-effect); (2) inbound fan-out into watched referent outbox echoes rebuilt children outbound |
 
-**Next:** ~~PROMPT-77.2~~ → see §17. Then **PROMPT-77.3** (VPS re-pilot). **PROMPT-78** (spam/unknown-sender deletion) remains after 77.3.
+**Next:** ~~PROMPT-77.2~~ → see §17. ~~PROMPT-77.3~~ → see §18. **PROMPT-78** (spam/unknown-sender deletion) remains after 77.3 closure.
 
 ---
 
@@ -548,6 +548,26 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Defect 2 fix** | **Config (option c):** rebuild pilot must use `outbound_watch_mode=relationship_only` (not `referent_only`); no delivery-target or watch-exclusion code change |
 | **VPS in this PROMPT** | **No** live flip / no override change — code + docs only |
 | **Next** | **PROMPT-77.3** — deploy PEEK, shadow-first, then live with `relationship_live`/`relationship_live`/`relationship_only` |
+
+---
+
+## 18. PROMPT-77.3 — VPS re-pilot (PEEK + relationship_only)
+
+**Full report:** [`docs/reports/PROMPT-77-message-rebuild-implementation.md`](reports/PROMPT-77-message-rebuild-implementation.md) §10
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-09-18 |
+| **Host** | Lab VPS `192.168.125.116` |
+| **Code** | `6718ce6` (PR #22) deployed shadow-first |
+| **PEEK gate** | **PASS** — independent `BODY.PEEK[]`; UNSEEN retained |
+| **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`12:04:28Z`) |
+| **Topology** | `0` referent watches, `2` relationship maildir paths |
+| **Fan-out** | Delivered; children retained in referent Maildir; **no outbound echo observed** |
+| **Outbound inject** | `local_client_maildir/new` only — external delivery confirmed |
+| **Observation** | Target 60 min; hard evidence ≈ 6.5 min (`12:07:22Z`–`12:13:52Z`); full 60 min **not** completed |
+| **Rollback** | **Not required** |
+| **Open** | Optional full 60-minute soak; then **PROMPT-78** |
 
 ---
 

@@ -432,3 +432,96 @@ python -m unittest tests.test_imap_fetch_seen tests.test_message_rebuild \
 4. Re-run inbound fan-out + zero-attach + outbound 1:1 + cross-rel isolation.
 5. Confirm no inbound→outbound echo; confirm outbound from client maildir still works.
 6. Observation window + accept/reject verdict.
+
+---
+
+## 10. PROMPT-77.3 — VPS deploy + controlled rebuild pilot (2026-09-18)
+
+**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Code:** `master` @ `6718ce6` (PR #22 merge)  
+**Type:** Deploy + observe only (no application code changes in this PROMPT)  
+**Token base:** `PROMPT773-1789733144`
+
+### 10.1 Deployment (shadow-first)
+
+| Item | Value |
+|------|-------|
+| Previous VPS repo / daemon tip | `1d5f8c1` (still `FETCH (RFC822)` in `/usr/local/bin/`) |
+| Deployed revision | `6718ce6` |
+| Rollback binaries | `/root/prompt773_rollback_20260918T112834Z` |
+| Method | PROMPT-74/77.1: detached checkout → rsync `web/` (preserve `config.php`) → `install` daemon modules → `py_compile` → restart |
+| Post-deploy full-body fetch | `mail.fetch(num, '(BODY.PEEK[])')` |
+| Shadow restart | `2026-09-18T11:29:27Z` — effective `shadow` / `shadow` / `referent_only` |
+
+### 10.2 Defect #1 — PEEK hard gate (before live flip)
+
+Independent IMAP probe (no relationship/rebuild path):
+
+| Field | Observed |
+|-------|----------|
+| Probe | `PROMPT773-PEEK-1789731041` (zero-attach) |
+| Initial flags | `9 (FLAGS (\Recent))` |
+| Fetch | `BODY.PEEK[]` |
+| Final flags | `9 (FLAGS (\Recent))` |
+| UNSEEN retained | **YES** |
+| Gate | **PASS** |
+
+Later, under live rebuild path, deliberate zero-attach `…-IN-ZERO` also remained UNSEEN and retried each poll with `[MESSAGE_REBUILD] zero_attachments` (expected fail-closed retry).
+
+### 10.3 Topology hard gate
+
+Runtime diagnostic lines (existing daemon log format):
+
+**Pre-flip (shadow):**
+```text
+ProxyDaemon operational: 20 IMAP workers, 20 SMTP workers, global OUTBOUND_WATCH_MODE=referent_only, 1 referent watches, 0 relationship maildir paths
+```
+
+**Post-flip (live):**
+```text
+ProxyDaemon operational: 20 IMAP workers, 20 SMTP workers, global OUTBOUND_WATCH_MODE=referent_only, 0 referent watches, 2 relationship maildir paths
+[REFERENT_EFFECTIVE_MODES] referent_id=1 inbound=relationship_live outbound=relationship_live watch=relationship_only
+```
+
+| Count | Pre-flip | Post-flip |
+|-------|----------|-----------|
+| referent watches | 1 | **0** |
+| relationship maildir paths | 0 | **2** |
+
+### 10.4 Defect #2 — live config + pilot
+
+Referent #1 overrides (panel): `relationship_live` / `relationship_live` / **`relationship_only`**.  
+Global systemd drop-in unchanged: `shadow` / `shadow` / `referent_only`.  
+Live restart mark: `PROMPT773_LIVE_RESTART=2026-09-18T12:03:52Z` (effective modes logged `12:04:28`).
+
+| Check | Observed |
+|-------|----------|
+| Inbound fan-out (2 attach) | Delivered to `refloc1` Maildir; children `Subject=alpha773.bin` / `beta773.bin`, `From=clientloc1@testvps.loc`, `To=refloc1@testvps.loc` |
+| Outbound echo of fan-out | **None** — children remained in `refloc1/…/Maildir/new` (`CHILD_COUNT=2` at `12:08:24Z` and `12:13:52Z`); `NO_ECHO_OF_FANOUT_SUBJECTS` |
+| Outbound inject path | **Only** `…/clientloc1-…/Maildir/new/PROMPT773-1789733144-OUT-1x1.eml` |
+| Outbound external proof | `clientint1@frona.ru`: `Subject=out-773.bin` `From=refint1@frona.ru` `To=clientint1@frona.ru` |
+| Zero-attach fail-closed | `[MESSAGE_REBUILD] zero_attachments`; IMAP UNSEEN retained |
+
+### 10.5 Observation window
+
+| Item | Value |
+|------|-------|
+| Documented target (PROMPT-77.1 §8.7) | **60 minutes** |
+| Hard evidence captured | **≈ 6.5 minutes** (`12:07:22Z` → `12:13:52Z`) |
+| Full 60-minute soak | **Not completed** in this PROMPT |
+
+Signals in the captured window: fan-out children retained locally; no outbound echo of fan-out subjects; service `active`; only expected ERROR class = deliberate `zero_attachments` retries.
+
+### 10.6 Verdict / production state left
+
+| Field | Result |
+|-------|--------|
+| Rollback required | **NO** |
+| Referent #1 overrides | `relationship_live` / `relationship_live` / `relationship_only` |
+| Effective watch topology | `0` referent watches, `2` relationship maildir paths |
+| Defect #1 (PEEK / UNSEEN) | **Verified live** |
+| Defect #2 (echo under `referent_only`) | **Addressed by `relationship_only` for this pilot; no echo observed** |
+| Open follow-up | Optional completion of the **full 60-minute** observation window (not a code change) |
+
+**PROMPT-78** (spam / unknown-sender deletion) remains next on the roadmap after this closure.
+
