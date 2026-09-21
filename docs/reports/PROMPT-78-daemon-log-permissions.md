@@ -137,10 +137,12 @@ Distinguish in `monitor.php:603` between “file missing” and “permission de
 
 | Field | Value |
 |-------|-------|
-| Effective modes referent #1 | *(not in log tail at snapshot time; restored after restart)* |
+| Effective modes referent #1 | `relationship_live` / `relationship_live` / **`relationship_only`** — pilot state since §18 v3.8 (`2026-09-18T12:04:28Z`); **unchanged by PROMPT-78** |
 | UNSEEN refloc1 / clientloc1 | **6** / **0** |
 | `postqueue -p` | empty |
 | Daemon log | `0640 vmail:vmail` — www-data **NO** |
+
+**Note:** `watch=relationship_only` is the accepted PROMPT-77.4 pilot configuration, not introduced by this prompt.
 
 ### 5.3 Live scenarios
 
@@ -151,16 +153,27 @@ Distinguish in `monitor.php:603` between “file missing” and “permission de
 | **V3** rm + restart | file removed | `0640 vmail:mail-proxy-logs` (3 665 B) | **YES** / **YES** | `active` |
 | **V4** reboot | — | — | — | **SKIPPED** — `systemd-tmpfiles --cat-config` shows `/etc/tmpfiles.d/mail-proxy.conf` registered for boot |
 
-**Deviation:** first V2 attempt hit logrotate `destination …-20260921 already exists` (midnight rotation earlier today); harness rolled back, then V2 re-run after removing dated archive — **not a fix defect**.
+**Deviation:** first V2 attempt hit logrotate `destination …-20260921 already exists` (midnight rotation earlier today); harness rolled back, then V2 re-run after removing dated archive — **not a fix defect** (see §5.5).
 
 ### 5.4 Snapshot AFTER + 10 min observe
 
 | Field | Before → After |
 |-------|----------------|
-| Effective modes referent #1 | → `relationship_live` / `relationship_live` / `relationship_only` (**unchanged**) |
+| Effective modes referent #1 | `relationship_live` / `relationship_live` / `relationship_only` → **same** |
 | UNSEEN refloc1 / clientloc1 | **6** / **0** → **6** / **0** |
-| Daemon | `active` throughout; no new `[ERROR]` attributable to deploy |
+| `[ERROR]` count (10 min window) | **60** (12:03–12:12 UTC, pre-deploy) → **33** (12:25–12:35 UTC, post-deploy); all 33 post-deploy = `zero_attachments relationship_id=1` (PROMPT-77.4 probe, pre-existing) |
+| Daemon | `active` throughout |
 | Final log perms | `0640 vmail:mail-proxy-logs`; www-data **YES** |
+
+### 5.5 Log archive `mail-proxy-daemon.log-20260921`
+
+| Artifact | Size | Origin | Status |
+|----------|------|--------|--------|
+| Midnight rotation (pre-V2) | ~1 563 729 B | Daily logrotate `2026-09-21 00:00` | **Removed** during V2 harness `rm -f …-20260921*` — **no separate copy retained** |
+| Pre-deploy backup | 1 005 323 B | `/root/prompt78-backup-20260921121259/mail-proxy-daemon.log.bak` | **Retained** on VPS; contains PROMPT-77.4 markers (`PROMPT774_WINDOW_START`) |
+| Current `-20260921` | 1 029 524 B | V2 forced rotation `2026-09-21 12:22` | **Preserved in place** at `/var/log/mail-proxy/mail-proxy-daemon.log-20260921`; spans `00:00` → `12:22` UTC incl. PROMPT-77.4 observation window (`07:27`–`08:29`) |
+
+**Content:** daemon IMAP poll/delivery, `[MESSAGE_REBUILD] zero_attachments` probe lines, `PROMPT774_WINDOW_START` tokens — consistent with §18 §11 observation evidence. Not a permissions-related log loss.
 
 ---
 
@@ -177,6 +190,18 @@ tests/validate_log_permissions_infra.sh (new)
 docs/DELTA-transit_anchor.md
 docs/reports/PROMPT-78-daemon-log-permissions.md (new)
 ```
+
+---
+
+## 6.1 Docs-only delta (`ac24213` → `ee1af9f`)
+
+```
+ docs/DELTA-transit_anchor.md                     |  2 +-
+ docs/reports/PROMPT-78-daemon-log-permissions.md | 65 +++++--
+ 2 files changed, 54 insertions(+), 13 deletions(-)
+```
+
+Infra commit `ac24213`; evidence commit `ee1af9f` is documentation only.
 
 ---
 

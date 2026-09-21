@@ -582,8 +582,12 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Root cause** | `logrotate` `create 0640 vmail vmail` + daemon creates `vmail:vmail`; fragile `ExecStartPre chown` fails as unprivileged `vmail` |
 | **Fix** | `tmpfiles.d` (setgid `2750` dir + file ACLs); `UMask=0027`; `ExecStartPre=+systemd-tmpfiles`; logrotate `create … mail-proxy-logs` |
 | **Target perms** | dir `2750 vmail:mail-proxy-logs`; `mail-proxy-daemon.log` `0640 vmail:mail-proxy-logs`; `web_admin.log` `0660 vmail:mail-proxy-logs` |
+| **Invariant** | `/var/log/mail-proxy` **must** retain setgid (`2750`) so new files inherit `mail-proxy-logs`; enforced via `tmpfiles.d` + installers |
+| **Operational note** | Forced `logrotate -f` same calendar day as midnight `dateext` rotation fails if `…-YYYYMMDD` archive already exists — remove dated archive first or wait next day |
+| **V4 (reboot)** | **Deferred** — `systemd-tmpfiles --cat-config` confirms boot registration; execute at next maintenance window |
+| **Pilot state** | referent #1 modes unchanged: `relationship_live` / `relationship_live` / `relationship_only` (§18; pre-existing) |
 | **Out of scope** | `message_rebuild.py`, routing/watch, PHP panel code (proposal: distinguish missing vs unreadable in `monitor.php:603`) |
-| **Verdict** | **ACCEPTED** — V1–V3 pass on lab VPS (`ac24213`); V4 reboot deferred (`tmpfiles.d` boot path confirmed) |
+| **Verdict** | **ACCEPTED** — V1–V3 pass on lab VPS (`ac24213`); V4 reboot deferred to maintenance window |
 
 ---
 
