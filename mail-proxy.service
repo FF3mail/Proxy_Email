@@ -8,11 +8,14 @@ Requires=mariadb.service
 Type=simple
 User=vmail
 Group=vmail
+# New log files: 0640 (group mail-proxy-logs via setgid directory + tmpfiles.d).
+UMask=0027
 # Panel monitor.php reads this pid file under PHP-FPM (no shell_exec).
 RuntimeDirectory=mail-proxy
 RuntimeDirectoryMode=0755
+# "+" runs as root: idempotent log path provisioning (replaces fragile vmail chown).
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/mail-proxy.conf
 ExecStart=/usr/bin/python3 /usr/local/bin/mail-proxy-daemon.py
-ExecStartPre=/bin/bash -c 'touch /var/log/mail-proxy/mail-proxy-daemon.log && chmod 0640 /var/log/mail-proxy/mail-proxy-daemon.log && chown vmail:mail-proxy-logs /var/log/mail-proxy/mail-proxy-daemon.log'
 Restart=on-failure
 RestartSec=30s
 StandardOutput=journal

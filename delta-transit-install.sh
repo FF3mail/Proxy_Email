@@ -100,6 +100,7 @@ REQUIRED_FILES=(
     "./mail-proxy-daemon.py"
     "./mail-proxy.service"
     "./logrotate-mail-proxy"
+    "./tmpfiles.d-mail-proxy.conf"
     "./schema.sql"
     "./requirements.txt"
 )
@@ -721,7 +722,7 @@ ensure_vmail_user_exists() {
 create_base_directories() {
     install -d -m 0750 -o root  -g vmail         "$INSTALL_ROOT"
     install -d -m 0750 -o root  -g root          "$CONFIG_DIR"
-    install -d -m 0770 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
+    install -d -m 2750 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
     install -d -m 0700 -o vmail -g vmail         "$TEMP_DIR"
 }
 
@@ -1121,7 +1122,8 @@ secure_crypto_key() {
 }
 
 secure_log_directory() {
-    install -d -m 0770 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
+    # setgid: new files inherit mail-proxy-logs (PROMPT-78).
+    install -d -m 2750 -o vmail -g "$GROUP_LOGS" "$LOG_DIR"
 }
 
 secure_temp_directory() {
@@ -1142,13 +1144,40 @@ secure_web_root() {
     find "$WEB_ROOT" -type f -exec chmod 0644 {} \;
 }
 
-ensure_log_file() {
+TMPFILES_SOURCE="./tmpfiles.d-mail-proxy.conf"
+TMPFILES_TARGET="/etc/tmpfiles.d/mail-proxy.conf"
+
+install_tmpfiles_config() {
+    if [[ ! -f "$TMPFILES_SOURCE" ]]
+    then
+        log_warn "tmpfiles.d-mail-proxy.conf not found"
+        return 0
+    fi
+    install -m 0644 -o root -g root "$TMPFILES_SOURCE" "$TMPFILES_TARGET"
+}
+
+apply_log_permissions() {
+    secure_log_directory
+    if [[ -f "$TMPFILES_TARGET" ]]
+    then
+        systemd-tmpfiles --create "$TMPFILES_TARGET"
+        return 0
+    fi
+    ensure_log_file_legacy
+}
+
+ensure_log_file_legacy() {
     touch "$DAEMON_LOG"
     chown vmail:"$GROUP_LOGS" "$DAEMON_LOG"
     chmod 0640 "$DAEMON_LOG"
     touch "$WEB_ADMIN_LOG"
     chown vmail:"$GROUP_LOGS" "$WEB_ADMIN_LOG"
     chmod 0660 "$WEB_ADMIN_LOG"
+}
+
+ensure_log_file() {
+    install_tmpfiles_config
+    apply_log_permissions
 }
 
 # Dovecot mail delivery user:group (numeric or name from doveconf; fallback vmail:vmail).
@@ -2788,11 +2817,17 @@ install_logrotate() {
         ./logrotate-mail-proxy /etc/logrotate.d/mail-proxy
 }
 
+install_tmpfiles() {
+    install_tmpfiles_config
+    apply_log_permissions
+}
+
 phase_systemd() {
 
     log_info "Phase: systemd"
 
     validate_service_source
+    install_tmpfiles
     install_systemd_unit
     verify_unit_paths
     verify_systemd_unit
