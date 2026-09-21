@@ -98,6 +98,8 @@ function renderHeader(string $title): void
 {
     global $flash, $action;
 
+    $legacyBacklogCount = fetchLegacyRelationshipBacklog(getPdo())['legacy_count'];
+
     ?>
 <!DOCTYPE html>
 <html lang="<?= h(panelHtmlLang()) ?>">
@@ -132,8 +134,10 @@ function renderHeader(string $title): void
                <?= ($action ?? '') === 'dashboard' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.dashboard')) ?></a>
             <a href="/index.php?action=referent_list"
                <?= in_array($action ?? '', ['referent_list', 'referents', 'referent_form', 'referent_view', 'relationship_form', 'relationship_backfill'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.referents')) ?></a>
+            <?php if ($legacyBacklogCount > 0): ?>
             <a href="/index.php?action=relationship_backfill"
-               <?= ($action ?? '') === 'relationship_backfill' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.backfill')) ?></a>
+               <?= ($action ?? '') === 'relationship_backfill' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.backfill_pending', ['count' => (string)$legacyBacklogCount])) ?></a>
+            <?php endif; ?>
             <a href="/index.php?action=account_list"
                <?= in_array($action ?? '', ['account_list', 'accounts', 'account_form'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.accounts')) ?></a>
             <a href="/index.php?action=provider_list"

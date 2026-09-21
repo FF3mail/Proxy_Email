@@ -39,7 +39,8 @@ return [
 
     // Navigation
     'nav.referents' => 'Referents',
-    'nav.backfill' => 'Legacy backlog',
+    'nav.backfill' => 'Unfinished relationships',
+    'nav.backfill_pending' => 'Unfinished relationships ({count})',
     'nav.accounts' => 'Accounts',
     'nav.providers' => 'Providers',
     'nav.monitor' => 'Monitor',
@@ -49,16 +50,16 @@ return [
     'nav.dashboard' => 'Dashboard',
     'nav.control_panel' => 'Control Panel',
 
-    // PROMPT-57 — legacy relationship backfill (discovery / triage)
-    'backfill.title' => 'Legacy backlog — relationship migration',
-    'backfill.hint' => 'Clients rows that still have only a legacy email (no four-address data). Migrate one at a time via the PROMPT-56 form; nothing is auto-filled beyond carrying the known legacy address.',
-    'backfill.count' => '{legacy} of {total} relationships still on the legacy model',
-    'backfill.empty' => 'Legacy backlog is empty — every clients row has four-address data, or there are no clients rows.',
-    'backfill.migrate' => 'Migrate',
-    'backfill.back_to_list' => 'Back to backlog',
-    'backfill.prefill_note' => 'Only external_client_email is pre-filled from the legacy email (GET). Other fields are operator-entered. Nothing is written until Save.',
+    // Unfinished relationships — discovery and setup
+    'backfill.title' => 'Unfinished relationships — finish setup',
+    'backfill.hint' => 'These relationships have only a client address on file, not the full set of four addresses. Finish each one manually in the edit form — nothing is auto-filled beyond the known client address.',
+    'backfill.count' => '{legacy} of {total} relationships still need setup',
+    'backfill.empty' => 'All relationships are fully configured, or there are no client relationships yet.',
+    'backfill.migrate' => 'Finish setup',
+    'backfill.back_to_list' => 'Back to unfinished list',
+    'backfill.prefill_note' => 'The external client address is pre-filled from the old record. Enter the remaining fields manually. Nothing is saved until you click Save.',
     'backfill.col_referent' => 'Referent',
-    'backfill.col_legacy_email' => 'Legacy email',
+    'backfill.col_legacy_email' => 'Client address (old record)',
     'backfill.col_active' => 'Active',
 
     // Authentication
@@ -127,25 +128,25 @@ return [
     'referent.field.inbound_routing_mode' => 'Inbound routing override',
     'referent.field.outbound_routing_mode' => 'Outbound routing override',
     'referent.field.outbound_watch_mode' => 'Outbound watch override',
-    'referent.mode.routing.legacy' => 'legacy',
+    'referent.mode.routing.legacy' => 'previous model',
     'referent.mode.routing.shadow' => 'shadow',
     'referent.mode.routing.relationship_live' => 'relationship_live',
     'referent.mode.watch.referent_only' => 'referent_only',
     'referent.mode.watch.dual' => 'dual',
     'referent.mode.watch.relationship_only' => 'relationship_only',
 
-    // ClientRelationship (PROMPT-56)
+    // ClientRelationship
     'relationship.list_title' => 'Client relationships',
-    'relationship.list_hint' => 'Each relationship has four independent addresses and one external referent mailbox. Status «complete» matches RelationshipLookup (PROMPT-53 §9).',
+    'relationship.list_hint' => 'Each relationship has four independent addresses and one external referent mailbox. Status «complete» means all required fields are filled and the relationship is ready for routing.',
     'relationship.empty' => 'No relationships yet. Add the first client relationship.',
     'relationship.add' => 'Add relationship',
     'relationship.edit' => 'Edit relationship',
     'relationship.form_title' => 'Client relationship',
     'relationship.back_to_referent' => 'Back to referent',
     'relationship.form_for_referent' => 'Referent: {name}',
-    'relationship.create_legacy_hint' => 'Optional: one legacy client email (previous model). After creating the referent, configure full relationships on the edit screen.',
-    'relationship.legacy_email' => 'Legacy email',
-    'relationship.legacy_banner' => 'This row is still legacy (email={email}). Fill all fields below to upgrade it to the four-address model.',
+    'relationship.create_legacy_hint' => 'Optional: one client address from the previous record format. After creating the referent, configure full relationships on the edit screen.',
+    'relationship.legacy_email' => 'Client address (old record)',
+    'relationship.legacy_banner' => 'This relationship is not fully set up yet (address: {email}). Fill all fields below to complete the four-address configuration.',
     'relationship.all_or_nothing_hint' => 'All address fields and the external account are all-or-nothing. Partial saves are rejected.',
     'relationship.mailbox_precondition_hint' => 'Address must already exist as an active physical iRedMail mailbox (not an alias).',
     'relationship.maildir_hint' => 'Absolute Maildir path for the local client (list_watch_targets). Not auto-filled — enter manually.',
@@ -168,7 +169,7 @@ return [
     'relationship.manage_link' => 'Manage relationships on the referent form',
     'relationship.status_complete' => 'complete',
     'relationship.status_incomplete' => 'incomplete — missing {fields}',
-    'relationship.status_legacy' => 'legacy (email only)',
+    'relationship.status_legacy' => 'unfinished (client address only)',
     'relationship.status_inactive_complete' => 'complete (relationship inactive)',
     'relationship.field.external_client_email' => 'external_client_email',
     'relationship.field.local_client_email' => 'local_client_email',
@@ -330,7 +331,7 @@ return [
     'error.oauth_dns_failed' => 'Failed to resolve hostname {field}: {host}',
     'error.oauth_blocked_ip' => 'Forbidden IP for {field} ({host} → {ip}): private, loopback and metadata networks are not allowed',
 
-    // PROMPT-69 — relationship routing observability (read-only)
+    // Relationship routing observability (read-only)
     'observability.title' => 'Relationship routing status',
     'observability.hint' => 'Read-only snapshot: daemon startup modes, per-relationship shadow markers (from log tail), process-wide shadow counters, and watch-path collision warnings. No control actions on this page.',
     'observability.refresh' => 'Refresh',
@@ -341,7 +342,7 @@ return [
     'observability.referent_mode_overrides' => 'DB overrides',
     'observability.referent_mode_computed' => 'Computed effective (override + global)',
     'observability.referent_mode_daemon_startup' => 'Daemon resolved at last startup',
-    'observability.referent_mode_daemon_missing' => 'No per-referent startup line in log tail (daemon predates PROMPT-73 or increase tail lines).',
+    'observability.referent_mode_daemon_missing' => 'No per-referent startup line in log tail (daemon has not restarted recently, or increase tail lines).',
     'observability.mode_pending_restart' => 'override changed — restart pending',
     'observability.stats_title' => 'Process-wide inbound shadow counters',
     'observability.stats_unavailable' => 'Stats file unavailable ({path}): {error}',
@@ -360,7 +361,7 @@ return [
     'observability.collision_db' => 'Path collision (DB paths): relationship maildir/new equals referent outbox/new',
     'observability.dual_warning' => 'Dual-watch divergence ({count} events in log tail)',
     'observability.readiness.valid' => 'valid',
-    'observability.readiness.legacy-only-pending-backfill' => 'legacy-only (pending backfill)',
+    'observability.readiness.legacy-only-pending-backfill' => 'client address only (setup pending)',
     'observability.readiness.inactive' => 'inactive',
     'observability.readiness.incomplete' => 'incomplete',
     'observability.tail_lines_label' => 'Log tail lines ({min}–{max})',

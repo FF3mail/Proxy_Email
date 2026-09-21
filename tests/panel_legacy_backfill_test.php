@@ -75,7 +75,13 @@ assert_contains($ru, "'nav.backfill'", 'RU nav.backfill');
 assert_contains($en, "'nav.backfill'", 'EN nav.backfill');
 assert_contains($ru, "'backfill.count'", 'RU backfill.count');
 assert_contains($en, "'backfill.count'", 'EN backfill.count');
-assert_contains($en, 'still on the legacy model', 'EN progress sentence');
+assert_contains($en, 'still need setup', 'EN progress sentence');
+assert_contains($index, 'fetchLegacyRelationshipBacklog(getPdo())', 'nav reuses backlog query');
+assert_contains($index, '$legacyBacklogCount > 0', 'nav hidden when backlog empty');
+assert_contains($ru, "'nav.backfill_pending'", 'RU nav.backfill_pending');
+assert_contains($en, "'nav.backfill_pending'", 'EN nav.backfill_pending');
+assert_not_contains($ru, 'PROMPT-', 'RU operator strings have no PROMPT citations');
+assert_not_contains($en, 'PROMPT-', 'EN operator strings have no PROMPT citations');
 
 // Daemon unchanged for this feature
 assert_not_contains($daemon, 'relationship_lookup', 'daemon still ignores relationship_lookup');
