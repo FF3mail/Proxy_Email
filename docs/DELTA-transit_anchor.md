@@ -1,4 +1,4 @@
-# DELTA-transit — Якорный документ v3.8
+# DELTA-transit — Якорный документ v3.9
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-11  
@@ -406,7 +406,7 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | **Message Transformation** | Inbound 1:N fan-out (N attachments → N single-attachment local messages); outbound 1:1 rebuild; новый From/To per relationship; **NG-7** — fan-out duplicate suppression on IMAP retry (deferred hardening) |
 | **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
 | **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
-| **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit |
+| **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit; ~~daemon log permission drift (Issue #23)~~ → **закрыто PROMPT-78** (§19) |
 
 ---
 
@@ -568,8 +568,23 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Observation (PROMPT-77.4)** | **60 min completed** — `2026-09-21T07:27:25Z` → `2026-09-21T08:29:35Z` (3730 s wall clock; 60 poll samples) |
 | **Rollback** | **Not required** |
 | **Verdict** | **ACCEPTED** — full window clean; referent #1 remains live |
-| **Next** | **PROMPT-78** (spam/unknown-sender deletion) |
+| **Next** | ~~PROMPT-78 (daemon log permissions)~~ → see §19 |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.8*
+## 19. PROMPT-78 — Durable daemon log permissions (Issue #23)
+
+**Full report:** [`docs/reports/PROMPT-78-daemon-log-permissions.md`](reports/PROMPT-78-daemon-log-permissions.md)
+
+| Field | Value |
+|-------|-------|
+| **Issue** | [#23](https://github.com/FF3mail/Proxy_Email/issues/23) — panel `monitor.php` shows `"(недоступен)"` for daemon log after restart/rotation |
+| **Root cause** | `logrotate` `create 0640 vmail vmail` + daemon creates `vmail:vmail`; fragile `ExecStartPre chown` fails as unprivileged `vmail` |
+| **Fix** | `tmpfiles.d` (setgid `2750` dir + file ACLs); `UMask=0027`; `ExecStartPre=+systemd-tmpfiles`; logrotate `create … mail-proxy-logs` |
+| **Target perms** | dir `2750 vmail:mail-proxy-logs`; `mail-proxy-daemon.log` `0640 vmail:mail-proxy-logs`; `web_admin.log` `0660 vmail:mail-proxy-logs` |
+| **Out of scope** | `message_rebuild.py`, routing/watch, PHP panel code (proposal: distinguish missing vs unreadable in `monitor.php:603`) |
+| **Verdict** | **ACCEPTED** (infra + static tests); live V1–V4 pending operator-confirmed VPS deploy |
+
+---
+
+*Конец документа · DELTA-transit Anchor v3.9*
