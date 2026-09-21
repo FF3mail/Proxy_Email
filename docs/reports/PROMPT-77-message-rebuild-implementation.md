@@ -521,7 +521,164 @@ Signals in the captured window: fan-out children retained locally; no outbound e
 | Effective watch topology | `0` referent watches, `2` relationship maildir paths |
 | Defect #1 (PEEK / UNSEEN) | **Verified live** |
 | Defect #2 (echo under `referent_only`) | **Addressed by `relationship_only` for this pilot; no echo observed** |
-| Open follow-up | Optional completion of the **full 60-minute** observation window (not a code change) |
+| Open follow-up | Full 60-minute observation window — **completed in PROMPT-77.4** (see §11) |
 
 **PROMPT-78** (spam / unknown-sender deletion) remains next on the roadmap after this closure.
+
+---
+
+## 11. PROMPT-77.4 — Full 60-minute observation closure (2026-09-21)
+
+**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Branch:** `prompt-77-4-observation-closure` (from `origin/master` @ `8e8c8a4`)  
+**Type:** Observe + document only (no application code changes)  
+**Authoritative window token:** `PROMPT774-1789975645`  
+**Log artifact:** `/var/log/mail-proxy/prompt774_observe_run2.log` on VPS
+
+### 11.1 Pre-flight state confirmation
+
+| Check | Observed | Result |
+|-------|----------|--------|
+| Referent #1 overrides | `relationship_live` / `relationship_live` / `relationship_only` | **PASS** — unchanged since PROMPT-77.3 live flip (`2026-09-18T12:04:28Z`) |
+| Rollback since 77.3 | None | **PASS** — last `mail-proxy` restart `2026-09-18T12:04:28Z`; no override clear |
+| VPS repo `HEAD` | `6718ce6` | **PASS** — code baseline |
+| `origin/master` delta | `8e8c8a4` — docs only (`6718ce6..8e8c8a4`) | **PASS** — deployed binaries match repo; no code drift |
+| Deployed fetch | `mail.fetch(num, '(BODY.PEEK[])')` @ L722 | **PASS** |
+| Binary MD5 vs repo | `mail-proxy-daemon.py` / `message_rebuild.py` identical | **PASS** (`DRIFT_CHECK=PASS`) |
+| Service | `active` since live flip | **PASS** |
+| Effective topology | `0` referent watches, `2` relationship maildir paths | **PASS** (from daemon log at window start) |
+
+### 11.2 Aborted run 1 (not counted toward acceptance)
+
+| Item | Value |
+|------|-------|
+| Start | `2026-09-21T07:20:47Z` (`PROMPT774-1789975247`) |
+| Stop | `2026-09-21T07:22:18Z` — observation script exited after `INIT_VERIFY` (`set -e` + `grep` pipefail) |
+| Duration | ~91 s — **not** part of acceptance window |
+| Action | Script fixed; **fresh** window started (run 2) per standing rule — no stitched partial windows |
+
+### 11.3 Authoritative observation window (run 2)
+
+| Item | Value |
+|------|-------|
+| **Window start** | `2026-09-21T07:27:25Z` |
+| **Probe inject** | `2026-09-21T07:27:27Z` — fan-out (`PROMPT774-1789975645-IN-2x`, attachments `alpha774.bin` / `beta774.bin`) + zero-attach (`…-IN-ZERO`) |
+| **Initial verify** | `2026-09-21T07:28:57Z` — fan-out children present; zero UNSEEN retained |
+| **Poll samples** | 60 × ~60 s cadence (`i=1` @ `07:28:58Z` … `i=60` @ `08:29:34Z`) |
+| **Window end** | `2026-09-21T08:29:35Z` |
+| **Wall-clock duration** | **3730 s** (~62.2 min incl. 90 s initial wait + 60 poll intervals) |
+| **Daemon** | `active` at every sample; no restarts during window |
+| **IMAP poll cadence** | Steady ~60 s — `ImapPoller enqueued 2 IMAP tasks` each minute for both relationships |
+
+#### Per-sample summary (all 60 samples)
+
+| i | ts (UTC) | elapsed_s | zero UNSEEN | fanout children | outbound echo | rel2 leak | rel2 rebuild err |
+|---|----------|-----------|-------------|-----------------|---------------|-----------|------------------|
+| 1 | 07:28:58 | 93 | YES | 4 | 0 | 0 | 0 |
+| 2 | 07:29:58 | 153 | YES | 4 | 0 | 0 | 0 |
+| 3 | 07:30:59 | 214 | YES | 4 | 0 | 0 | 0 |
+| 4 | 07:32:00 | 275 | YES | 4 | 0 | 0 | 0 |
+| 5 | 07:33:01 | 336 | YES | 4 | 0 | 0 | 0 |
+| 6 | 07:34:02 | 397 | YES | 4 | 0 | 0 | 0 |
+| 7 | 07:35:03 | 458 | YES | 4 | 0 | 0 | 0 |
+| 8 | 07:36:04 | 519 | YES | 4 | 0 | 0 | 0 |
+| 9 | 07:37:05 | 580 | YES | 4 | 0 | 0 | 0 |
+| 10 | 07:38:07 | 642 | YES | 4 | 0 | 0 | 0 |
+| 11 | 07:39:08 | 703 | YES | 4 | 0 | 0 | 0 |
+| 12 | 07:40:10 | 765 | YES | 4 | 0 | 0 | 0 |
+| 13 | 07:41:12 | 827 | YES | 4 | 0 | 0 | 0 |
+| 14 | 07:42:14 | 889 | YES | 4 | 0 | 0 | 0 |
+| 15 | 07:43:15 | 950 | YES | 4 | 0 | 0 | 0 |
+| 16 | 07:44:17 | 1012 | YES | 4 | 0 | 0 | 0 |
+| 17 | 07:45:19 | 1074 | YES | 4 | 0 | 0 | 0 |
+| 18 | 07:46:21 | 1136 | YES | 4 | 0 | 0 | 0 |
+| 19 | 07:47:22 | 1197 | YES | 4 | 0 | 0 | 0 |
+| 20 | 07:48:24 | 1259 | YES | 4 | 0 | 0 | 0 |
+| 21 | 07:49:25 | 1320 | YES | 4 | 0 | 0 | 0 |
+| 22 | 07:50:27 | 1382 | YES | 4 | 0 | 0 | 0 |
+| 23 | 07:51:28 | 1443 | YES | 4 | 0 | 0 | 0 |
+| 24 | 07:52:30 | 1505 | YES | 4 | 0 | 0 | 0 |
+| 25 | 07:53:31 | 1566 | YES | 4 | 0 | 0 | 0 |
+| 26 | 07:54:33 | 1628 | YES | 4 | 0 | 0 | 0 |
+| 27 | 07:55:34 | 1689 | YES | 4 | 0 | 0 | 0 |
+| 28 | 07:56:36 | 1751 | YES | 4 | 0 | 0 | 0 |
+| 29 | 07:57:37 | 1812 | YES | 4 | 0 | 0 | 0 |
+| 30 | 07:58:41 | 1876 | YES | 4 | 0 | 0 | 0 |
+| 31 | 07:59:42 | 1937 | YES | 4 | 0 | 0 | 0 |
+| 32 | 08:00:44 | 1999 | YES | 4 | 0 | 0 | 0 |
+| 33 | 08:01:45 | 2060 | YES | 4 | 0 | 0 | 0 |
+| 34 | 08:02:47 | 2122 | YES | 4 | 0 | 0 | 0 |
+| 35 | 08:03:48 | 2183 | YES | 4 | 0 | 0 | 0 |
+| 36 | 08:04:50 | 2245 | YES | 4 | 0 | 0 | 0 |
+| 37 | 08:05:51 | 2306 | YES | 4 | 0 | 0 | 0 |
+| 38 | 08:06:53 | 2368 | YES | 4 | 0 | 0 | 0 |
+| 39 | 08:07:54 | 2429 | YES | 4 | 0 | 0 | 0 |
+| 40 | 08:08:58 | 2493 | YES | 4 | 0 | 0 | 0 |
+| 41 | 08:10:00 | 2555 | YES | 4 | 0 | 0 | 0 |
+| 42 | 08:11:01 | 2616 | YES | 4 | 0 | 0 | 0 |
+| 43 | 08:12:03 | 2678 | YES | 4 | 0 | 0 | 0 |
+| 44 | 08:13:04 | 2739 | YES | 4 | 0 | 0 | 0 |
+| 45 | 08:14:06 | 2801 | YES | 4 | 0 | 0 | 0 |
+| 46 | 08:15:07 | 2862 | YES | 4 | 0 | 0 | 0 |
+| 47 | 08:16:09 | 2924 | YES | 4 | 0 | 0 | 0 |
+| 48 | 08:17:10 | 2985 | YES | 4 | 0 | 0 | 0 |
+| 49 | 08:18:12 | 3047 | YES | 4 | 0 | 0 | 0 |
+| 50 | 08:19:15 | 3110 | YES | 4 | 0 | 0 | 0 |
+| 51 | 08:20:17 | 3172 | YES | 4 | 0 | 0 | 0 |
+| 52 | 08:21:18 | 3233 | YES | 4 | 0 | 0 | 0 |
+| 53 | 08:22:20 | 3295 | YES | 4 | 0 | 0 | 0 |
+| 54 | 08:23:21 | 3356 | YES | 4 | 0 | 0 | 0 |
+| 55 | 08:24:23 | 3418 | YES | 4 | 0 | 0 | 0 |
+| 56 | 08:25:24 | 3479 | YES | 4 | 0 | 0 | 0 |
+| 57 | 08:26:26 | 3541 | YES | 4 | 0 | 0 | 0 |
+| 58 | 08:27:27 | 3602 | YES | 4 | 0 | 0 | 0 |
+| 59 | 08:28:31 | 3666 | YES | 4 | 0 | 0 | 0 |
+| 60 | 08:29:34 | 3729 | YES | 4 | 0 | 0 | 0 |
+
+> Fan-out child count = 4 because two probe injections (aborted run 1 + run 2) each produced `alpha774.bin` / `beta774.bin` children; all four remained in `refloc1/…/Maildir/new` for the full window.
+
+#### Deep fan-out re-checks (samples 5, 30, 55)
+
+At each deep-check point, all four children present in `new/` with rebuilt headers:
+
+```text
+From: clientloc1@testvps.loc
+To: refloc1@testvps.loc
+Subject: alpha774.bin | beta774.bin
+```
+
+`OUTBOUND_ROUTING` lines matching `alpha774` / `beta774` / `PROMPT774` since window start: **0** at every sample.
+
+#### Zero-attachment / BODY.PEEK[] sustained proof
+
+- Subject `PROMPT774-1789975645-IN-ZERO`: **UNSEEN retained at all 60 samples** (`REL1_ZERO_UNSEEN=YES`; flags `(FLAGS ())` — no `\Seen`).
+- Daemon emitted `[MESSAGE_REBUILD] zero_attachments relationship_id=1` on each poll cycle (expected fail-closed retry) — **186 lines** in daemon log during window (`07:27`–`08:29` UTC).
+- No `\Seen` STORE on fail-closed path.
+
+#### Cross-relationship isolation (relationship 2)
+
+- `REL2_ZERO_COUNT=0` at every sample (zero probe not on rel2 mailbox).
+- `REL2_TOKEN_LEAK=0` — no `PROMPT774` / `alpha774` / `beta774` tokens in rel2 Maildir.
+- `REL2_REBUILD_ERRORS=0` — no `[MESSAGE_REBUILD]` for `relationship_id=2`.
+- Rel2 IMAP polls steady (`Found 0 unread` typical); no anomalies attributable to rel1 activity.
+
+#### Unexpected `[MESSAGE_REBUILD]` / `[ERROR]`
+
+| Class | Count (window) | Notes |
+|-------|----------------|-------|
+| `zero_attachments relationship_id=1` | 186 | Deliberate probe — expected |
+| Any other `[MESSAGE_REBUILD]` | **0** | |
+| Any other `[ERROR]` | **0** | |
+
+### 11.4 Final verdict
+
+**ACCEPTED.**
+
+| Field | Resulting state |
+|-------|-----------------|
+| 60-minute observation window | **Completed** (`07:27:25Z` → `08:29:35Z`) |
+| Referent #1 overrides | `relationship_live` / `relationship_live` / `relationship_only` (**not rolled back**) |
+| Effective topology | `0` referent watches, `2` relationship maildir paths |
+| VPS code | `6718ce6` deployed (matches `origin/master` application code) |
+| Next roadmap item | **PROMPT-78** (spam / unknown-sender deletion) |
 

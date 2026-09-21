@@ -1,4 +1,4 @@
-# DELTA-transit — Якорный документ v3.7
+# DELTA-transit — Якорный документ v3.8
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-11  
@@ -305,16 +305,16 @@ Base64-overhead ~33% → SMTP ≈ 200 МБ. Значения согласова�
 | Этап | Статус |
 |------|--------|
 | `_deliver_to_local_smtp()` / исходящая SMTP | **Закрыт** — потоковая передача из временного файла (чанки 64 КБ) |
-| Pre-fetch size guard в `poll_external_imap()` | **Частично закрыт** — `RFC822.SIZE` (primary), `BODYSTRUCTURE` (defensive fallback) до `fetch(RFC822)` |
+| Pre-fetch size guard в `poll_external_imap()` | **Частично закрыт** — `RFC822.SIZE` (primary), `BODYSTRUCTURE` (defensive fallback) до `fetch('(BODY.PEEK[])')` |
 | Oversized / unknown-size inbound | **Пропуск** — без полного RFC822 fetch; fail-closed при неизвестном размере |
 | Retry / forced `\Seen` | `MAX_SIZE_SKIP_RETRIES` последовательных skip → `UID STORE` `\Seen` (fallback: `STORE` по seq) |
-| `imaplib.fetch(num, '(RFC822)')` для принятых писем | **Открыт** — письма ≤ лимита всё ещё буферизуются imaplib в RAM |
+| `imaplib.fetch(num, '(BODY.PEEK[])')` для принятых писем | **Открыт** — письма ≤ лимита всё ещё буферизуются imaplib в RAM (PEEK устраняет побочный `\Seen`, но не снижает footprint) |
 
-Перед каждым `fetch(RFC822)` демон запрашивает `(UID RFC822.SIZE)`. Если размер неизвестен или `> MAX_INBOUND_MESSAGE_BYTES` — RFC822 fetch не выполняется. `MAX_INBOUND_MESSAGE_BYTES` задаётся через env (default 200 MiB, согласован с `configure_limits.sh`). Process-local трекер `(account_id, uid)` ограничен `MAX_SIZE_SKIP_TRACKER_ENTRIES`.
+Перед каждым `fetch('(BODY.PEEK[])')` демон запрашивает `(UID RFC822.SIZE)`. Если размер неизвестен или `> MAX_INBOUND_MESSAGE_BYTES` — полный body fetch не выполняется. `MAX_INBOUND_MESSAGE_BYTES` задаётся через env (default 200 MiB, согласован с `configure_limits.sh`). Process-local трекер `(account_id, uid)` ограничен `MAX_SIZE_SKIP_TRACKER_ENTRIES`.
 
 BODYSTRUCTURE fallback: только однопартовые структуры без `multipart`; неоднозначный BODYSTRUCTURE → `unknown` (fail-closed), без оценки размера.
 
-> P4 не полностью закрыт: сообщения на или ниже лимита всё ещё полностью буферизуются imaplib при RFC822 fetch.
+> P4 не полностью закрыт: сообщения на или ниже лимита всё ещё полностью буферизуются imaplib при `BODY.PEEK[]` fetch.
 
 ### P7 — закрыт (FIX P7)
 
@@ -403,7 +403,7 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | Группа | Открытые пункты |
 |--------|-----------------|
 | **Routing** | Полная замена legacy To/Cc inbound |
-| **Message Transformation** | Inbound 1:N fan-out (N attachments → N single-attachment local messages); outbound 1:1 rebuild; новый From/To per relationship |
+| **Message Transformation** | Inbound 1:N fan-out (N attachments → N single-attachment local messages); outbound 1:1 rebuild; новый From/To per relationship; **NG-7** — fan-out duplicate suppression on IMAP retry (deferred hardening) |
 | **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
 | **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
 | **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit |
@@ -551,23 +551,24 @@ Locally originated messages are **already single-attachment** by house conventio
 
 ---
 
-## 18. PROMPT-77.3 — VPS re-pilot (PEEK + relationship_only)
+## 18. PROMPT-77.3/77.4 — VPS rebuild pilot closure (PEEK + relationship_only)
 
-**Full report:** [`docs/reports/PROMPT-77-message-rebuild-implementation.md`](reports/PROMPT-77-message-rebuild-implementation.md) §10
+**Full report:** [`docs/reports/PROMPT-77-message-rebuild-implementation.md`](reports/PROMPT-77-message-rebuild-implementation.md) §10–§11
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-09-18 |
+| **Date** | 2026-09-18 (pilot) / 2026-09-21 (observation closure) |
 | **Host** | Lab VPS `192.168.125.116` |
-| **Code** | `6718ce6` (PR #22) deployed shadow-first |
+| **Code** | `6718ce6` (PR #22) deployed; binaries match repo — no drift vs `origin/master` code |
 | **PEEK gate** | **PASS** — independent `BODY.PEEK[]`; UNSEEN retained |
-| **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`12:04:28Z`) |
+| **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`2026-09-18T12:04:28Z`) |
 | **Topology** | `0` referent watches, `2` relationship maildir paths |
-| **Fan-out** | Delivered; children retained in referent Maildir; **no outbound echo observed** |
-| **Outbound inject** | `local_client_maildir/new` only — external delivery confirmed |
-| **Observation** | Target 60 min; hard evidence ≈ 6.5 min (`12:07:22Z`–`12:13:52Z`); full 60 min **not** completed |
+| **Fan-out** | Delivered; children retained in referent Maildir; **no outbound echo** across full window |
+| **Outbound inject** | `local_client_maildir/new` only — external delivery confirmed (PROMPT-77.3) |
+| **Observation (PROMPT-77.4)** | **60 min completed** — `2026-09-21T07:27:25Z` → `2026-09-21T08:29:35Z` (3730 s wall clock; 60 poll samples) |
 | **Rollback** | **Not required** |
-| **Open** | Optional full 60-minute soak; then **PROMPT-78** |
+| **Verdict** | **ACCEPTED** — full window clean; referent #1 remains live |
+| **Next** | **PROMPT-78** (spam/unknown-sender deletion) |
 
 ---
 
