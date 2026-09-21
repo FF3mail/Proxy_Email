@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>DELTA-транзит: Руководство системного администратора</title>
+  <link rel="stylesheet" href="admin_guide.css">
+</head>
+<body>
+
+<div class="title-block">
+  <h1>DELTA-транзит</h1>
+  <p><strong>Руководство системного администратора</strong></p>
+  <p>Версия дистрибутива: <strong>v3.4</strong></p>
+  <p>Установщик: <code>delta-transit-install.sh</code> v3.1.0</p>
+  <p>Применённые патчи: PROMPT 01–09, PROMPT V2.0, PROMPT 10–13, PROMPT 35, PROMPT 36</p>
+  <p>Статус PROMPT 14: Не применён (см. Раздел 9)</p>
+</div>
+
+<h2>1. Архитектура и файловая структура</h2>
+
+<p>DELTA-транзит — корпоративный почтовый прокси-шлюз, передающий файлы между сотрудниками
+офиса (референтами) и внешними контрагентами через электронную почту. Система состоит из
+четырёх слоёв:</p>
+
+<ul>
+  <li><strong>Nginx + PHP-FPM</strong> — веб-панель администратора (<code>/var/www/mail-proxy</code>);</li>
+  <li><strong>MariaDB</strong> — база данных <code>mail_proxy</code> (референты, аккаунты, OAuth2-токены, провайдеры);</li>
+  <li><strong>iRedMail (Postfix + Dovecot)</strong> — почтовый стек, локальная доставка референтам;</li>
+  <li><strong>Python-демон</strong> (systemd-служба <code>mail-proxy</code>, пользователь <code>vmail</code>) — мост между Maildir
+      референтов и внешними IMAP/SMTP-серверами контрагентов.</li>
+</ul>
+
+<h3>1.1. Карта файлов дистрибутива</h3>
+
+<pre>./
+├── delta-transit-install.sh       # Полный установщик (12 фаз, см. раздел 2)
+├── mail-proxy-setup.sh            # Облегчённый установщик зависимостей демона
+├── configure_limits.sh            # Настройка лимитов 150 МБ (раздел 4)
+├── mail-proxy-daemon.py           # Python-демон (systemd-служба)
+├── mail-proxy.service             # systemd unit-файл демона
+├── logrotate-mail-proxy           # Конфигурация ротации логов
+├── schema.sql                     # DDL базы данных mail_proxy
+├── requirements.txt               # Python-зависимости демона
+├── test_large_attachment.py       # Скрипт ручного теста передачи крупных вложений
+├── web/
+│   ├── config.php                 # APP_BASE_URL и связанные константы
+│   ├── index.php                  # Точка входа веб-панели, роутинг по action=
+│   ├── monitor.php                # Страница мониторинга (раздел 6)
+│   └── includes/
+│       ├── Cryptor.php            # AES-256-GCM/CBC-legacy шифрование
+│       ├── helpers.php            # getClientIp, CSRF, SSRF-guard, БД-хелперы
+│       ├── oauth2.php             # OAuth2 authorization code flow
+│       └── providers_ui.php       # CRUD-интерфейс OAuth2-провайдеров
+└── docs/                          # Технические задания и анкорный документ проекта</pre>
+
+<p class="note"><strong>Примечание о статусе файлов репозитория.</strong>
+В корне репозитория присутствуют два установочных скрипта:
+<code>delta-transit-install.sh</code> (полный установщик, 12 фаз, формирует production-отчёт и проводит финальный аудит)
+и <code>mail-proxy-setup.sh</code> (более ранний, облегчённый скрипт, который устанавливает только Python-зависимости
+демона, базовые группы/права и systemd-юнит, без настройки Nginx/PHP/MariaDB и без финального аудита).
+Оба файла рабочие и непротиворечивы друг другу по правам и группам, но на момент написания документа
+<code>mail-proxy-setup.sh</code> не используется основным сценарием установки — он оставлен в дистрибутиве как
+вспомогательный инструмент для ручной пересборки окружения демона (например, при восстановлении после сбоя без полной
+переустановки веб-панели). Используйте <code>delta-transit-install.sh</code> как основной установщик;
+обращайтесь к <code>mail-proxy-setup.sh</code> только при сценариях из раздела 10.</p>
+
+<div class="section-break"></div>
+
+<h2>2. Установка и первичная настройка</h2>
+
+<h3>2.1. Предварительные требования</h3>
+
+<p>Установщик <code>delta-transit-install.sh</code> ожидает следующие пакеты (устанавливаются автоматически
+на фазе Packages, если отсутствуют): <code>python3</code>, <code>python3-pip</code>, <code>python3-venv</code>,
+<code>mariadb-server</code>, <code>nginx</code>, <code>postfix</code>, <code>dovecot-imapd</code>, <code>logrotate</code>,
+<code>openssl</code>, <code>curl</code>. iRedMail (Postfix/Dovecot) должен быть развёрнут и настроен для доставки почты
+референтам до запуска установщика — установщик не разворачивает почтовый стек, только интегрируется с ним.</p>
+
+<p>Обязательные файлы дистрибутива, без которых установщик завершится с ошибкой:
+<code>mail-proxy-daemon.py</code>, <code>mail-proxy.service</code>, <code>logrotate-mail-proxy</code>,
+<code>schema.sql</code>, <code>requirements.txt</code>. Запускайте установщик из директории, где лежат эти файлы.</p>
+
+<h3>2.2. Применение schema.sql</h3>
+
+<p>Установщик применяет схему автоматически на фазе Database. Если требуется применить её вручную
+(например, при восстановлении):</p>
+
+<pre>mysql -u root -p &lt; schema.sql</pre>
+
+<p>Схема создаёт базу <code>mail_proxy</code> (charset <code>utf8mb4</code>, collation <code>utf8mb4_unicode_ci</code>)
+и пять таблиц: <code>referents</code>, <code>clients</code>, <code>external_accounts</code>, <code>oauth_tokens</code>,
+<code>oauth_providers</code>. Поля <code>auth_type</code>, <code>imap_encryption</code>, <code>smtp_encryption</code>
+в <code>external_accounts</code> защищены на уровне СУБД через ENUM — недопустимые значения СУБД отклонит на уровне
+INSERT/UPDATE (подробнее — раздел 9, пункт 2). Таблица <code>oauth_providers</code> предзаполняется записями для Google,
+Yandex и Microsoft с <code>ON DUPLICATE KEY UPDATE</code>, то есть повторное применение <code>schema.sql</code> безопасно
+обновит эндпоинты провайдеров без создания дублей.</p>
+
+<h3>2.3. Запуск delta-transit-install.sh</h3>
+
+<p>Установщик выполняется в 12 последовательных фазах:</p>
+
+<ol>
+  <li><strong>Preflight</strong> — проверка обязательных файлов, прав запуска (root), ОС.</li>
+  <li><strong>Packages</strong> — установка APT-пакетов.</li>
+  <li><strong>Database</strong> — применение <code>schema.sql</code>, создание пользователя БД.</li>
+  <li><strong>Users/Groups</strong> — создание <code>mail-proxy-logs</code>, <code>mail-proxy-crypto</code>, удаление <code>www-data</code> из группы <code>vmail</code>, если он там оказался (см. раздел 8).</li>
+  <li><strong>Python</strong> — создание venv в <code>/opt/delta-transit/venv</code>, установка <code>requirements.txt</code>.</li>
+  <li><strong>Web</strong> — копирование <code>web/</code> в <code>/var/www/mail-proxy</code>, права 0644 / 0755.</li>
+  <li><strong>Postfix</strong> — интеграция с локальным Postfix.</li>
+  <li><strong>Dovecot</strong> — интеграция с локальным Dovecot.</li>
+  <li><strong>PHP</strong> — настройка <code>php.ini</code> (лимиты, раздел 4); фаза пропускается с предупреждением, если PHP не установлен.</li>
+  <li><strong>Nginx</strong> — установка фрагмента лимита тела запроса (раздел 2.6).</li>
+  <li><strong>systemd</strong> — установка <code>mail-proxy.service</code>, <code>systemd-analyze verify</code>, <code>daemon-reload</code>, <code>enable</code>.</li>
+  <li><strong>Validation</strong> — запуск службы, проверка её активности, наличия лога, входа в БД, отсутствия плейсхолдеров CHANGE_ME / mail-proxy.local в конфигурации.</li>
+  <li><strong>Production audit</strong> — финальная проверка (раздел 2.6) и запись отчёта <code>/root/delta-transit-install-report.txt</code> (права 0600).</li>
+</ol>
+
+<pre>sudo ./delta-transit-install.sh</pre>
+
+<h3>2.4. Настройка /etc/mail-proxy/db.conf и crypto.key</h3>
+
+<p>Оба файла создаются установщиком в <code>/etc/mail-proxy/</code> с правами <code>0640</code>, владелец
+<code>root:mail-proxy-crypto</code>. Группа <code>mail-proxy-crypto</code> создаётся установщиком и в неё включаются
+<code>www-data</code> (для веб-панели) и <code>vmail</code> (для демона) — это единственный легитимный путь чтения секретов
+обоими процессами без предоставления избыточных прав друг на друга.</p>
+
+<p><code>db.conf</code> — INI-файл с секцией <code>[db]</code>:</p>
+
+<pre>[db]
+db_host = 127.0.0.1
+db_user = mail_proxy
+db_pass = &lt;пароль&gt;
+db_name = mail_proxy</pre>
+
+<p><code>crypto.key</code> — файл из ровно 64 шестнадцатеричных символов (256 бит), генерируется установщиком через Python.
+Из этого hex-ключа оба компонента (Python-демон и PHP-Cryptor) детерминированно выводят реальный 256-битный ключ AES через
+<code>SHA-256(hex_string)</code>. И PHP-, и Python-сторона при чтении <code>crypto.key</code> строго проверяют длину (64 символа)
+и корректность hex.</p>
+
+<h3>2.5. APP_BASE_URL в config.php</h3>
+
+<p><code>web/config.php</code> определяет константу <code>APP_BASE_URL</code>, используемую исключительно для построения
+<code>redirect_uri</code> в OAuth2-flow (раздел 5). Эта константа не строится из заголовка Host входящего запроса — это
+намеренное решение безопасности для защиты от Host header injection.</p>
+
+<h3>2.6. Пример конфигурации Nginx (allow/deny, X-Real-IP)</h3>
+
+<p class="note"><strong>Важно:</strong> фаза Nginx установщика создаёт только файл <code>/etc/nginx/conf.d/mail-proxy.conf</code>
+со строкой <code>client_max_body_size 210M;</code> и требует вручную добавить
+<code>include /etc/nginx/conf.d/mail-proxy.conf;</code> внутрь блока <code>http {}</code>.</p>
+
+<pre>server {
+    listen 443 ssl;
+    server_name mail-proxy.example.local;
+    root /var/www/mail-proxy;
+    index index.php;
+    location / {
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        allow 192.168.0.0/16;
+        allow 127.0.0.1;
+        deny all;
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param HTTP_X_REAL_IP $remote_addr;
+        fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
+        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+    }
+}</pre>
+
+<div class="section-break"></div>
+
+<h2>3. Управление службой</h2>
+
+<h3>3.1. Базовые команды</h3>
+
+<pre># Старт / остановка / перезапуск
+sudo systemctl start mail-proxy.service
+sudo systemctl stop mail-proxy.service
+sudo systemctl restart mail-proxy.service
+
+# Текущий статус
+sudo systemctl status mail-proxy.service</pre>
+
+<h3>3.2. Сигналы, понимаемые демоном</h3>
+
+<table>
+  <thead>
+    <tr><th>Сигнал</th><th>Обработчик</th><th>Эффект</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>SIGTERM</td><td><code>_handle_signal</code></td><td>Инициирует graceful shutdown (<code>_stop_event.set()</code>)</td></tr>
+    <tr><td>SIGINT</td><td><code>_handle_signal</code></td><td>То же самое (Ctrl+C при запуске в foreground)</td></tr>
+    <tr><td>SIGUSR1</td><td><code>_handle_log_reopen</code></td><td>Переоткрывает файловые хендлеры логгера после ротации</td></tr>
+  </tbody>
+</table>
+
+<div class="section-break"></div>
+
+<h2>4. Настройка лимитов вложений (150 МБ)</h2>
+
+<p>Целевой лимит вложения для конечного пользователя — <strong>150 МБ</strong>. Фактический лимит на уровне
+почтовых протоколов и веб-сервера установлен с запасом — ≈200–210 МБ (с учётом Base64 overhead ~33%).</p>
+
+<p>Скрипт <code>configure_limits.sh</code> применяет согласованные значения и перезапускает затронутые службы.
+Перед изменением конфигурационных файлов создаёт резервные копии с суффиксом <code>.bak_YYYYMMDD_…</code>.</p>
+
+<pre>sudo ./configure_limits.sh</pre>
+
+<table>
+  <thead>
+    <tr><th>Компонент</th><th>Параметр</th><th>Значение</th><th>Назначение</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Postfix</td><td><code>message_size_limit</code></td><td>209715200 (200 МБ)</td><td>Максимальный размер письма</td></tr>
+    <tr><td>Postfix</td><td><code>mailbox_size_limit</code></td><td>314572800 (300 МБ)</td><td>Максимальный размер ящика</td></tr>
+    <tr><td>MariaDB</td><td><code>max_allowed_packet</code></td><td>256M</td><td>Максимальный размер пакета для хранения крупных данных</td></tr>
+    <tr><td>Nginx</td><td><code>client_max_body_size</code></td><td>210M</td><td>Лимит тела HTTP-запроса веб-панели</td></tr>
+    <tr><td>PHP-FPM</td><td><code>upload_max_filesize</code></td><td>200M</td><td>Лимит загружаемого файла</td></tr>
+    <tr><td>PHP-FPM</td><td><code>memory_limit</code></td><td>512M</td><td>Лимит памяти PHP-процесса</td></tr>
+  </tbody>
+</table>
+
+<h3>4.1. Интерактивный шаг: квоты почтовых ящиков (MariaDB)</h3>
+
+<p>После настройки <code>max_allowed_packet</code> в конфигурации MariaDB скрипт <strong>останавливается и запрашивает
+данные с клавиатуры</strong>. Этот шаг не описан в таблице выше, но обязателен для завершения скрипта: без ответов
+на запросы <code>configure_limits.sh</code> не продолжит настройку Nginx/PHP-FPM и перезапуск служб.</p>
+
+<h4>Запрос 1: пароль root MariaDB</h4>
+
+<pre>MySQL root password:</pre>
+
+<ul>
+  <li>Ввод <strong>скрыт</strong> (символы не отображаются на экране).</li>
+  <li>Используется тот же пароль <code>root</code>, который задавался при первоначальной установке MariaDB / iRedMail.</li>
+  <li>Пароль нужен для выполнения SQL-запроса <code>UPDATE vmail.mailbox SET quota = …</code> от имени <code>mysql -u root</code>.</li>
+</ul>
+
+<h4>Запрос 2: выбор почтовых ящиков</h4>
+
+<pre>Email-адреса через запятую или --all-referents:</pre>
+
+<p>Допустимы <strong>два варианта</strong>:</p>
+
+<ol>
+  <li><strong>Список адресов через запятую</strong> — например:
+      <code>referent1@example.com, referent2@example.com</code>.
+      Скрипт проверяет формат каждого адреса и выполняет
+      <code>UPDATE vmail.mailbox SET quota = 10240 WHERE username IN ('…');</code></li>
+  <li><strong>Флаг <code>--all-referents</code></strong> — скрипт задаёт дополнительный запрос:
+      <pre>Домен:</pre>
+      и выполняет
+      <code>UPDATE vmail.mailbox SET quota = 10240 WHERE username LIKE '%@&lt;домен&gt;';</code>,
+      поднимая квоту всем ящикам указанного домена.</li>
+</ol>
+
+<h4>Значение квоты</h4>
+
+<p>Скрипт устанавливает <code>quota = 10240</code> в таблице <code>vmail.mailbox</code> (схема iRedMail).
+В этой колонке значение хранится в <strong>мегабайтах (МБ)</strong>; <code>10240</code> соответствует
+<strong>10 ГБ</strong> дисковой квоты на ящик. Это отдельный параметр от лимитов Postfix/Nginx/PHP в таблице выше:
+он ограничивает суммарный объём хранимой почты в Dovecot/iRedMail, а не размер одного вложения.</p>
+
+<p>После выполнения запроса скрипт выводит строку вида <code>Updated mailbox rows: N</code>, где <code>N</code> —
+число затронутых строк. Если <code>N = 0</code>, проверьте правильность адресов или домена.</p>
+
+<div class="warning">
+  <p><strong>Интерактивный режим — не для автоматизации.</strong>
+  У <code>configure_limits.sh</code> <strong>нет флагов</strong> для передачи пароля MariaDB или списка ящиков
+  неинтерактивно (нет <code>--password</code>, <code>--mailboxes</code> и т.п.). Перенаправление stdin
+  (<code>echo … | ./configure_limits.sh</code>) и запуск из cron/CI <strong>не поддерживаются</strong> —
+  оператор должен присутствовать у консоли и отвечать на запросы вручную. Для полностью автоматизированного
+  развёртывания этот шаг нужно выполнять отдельно в интерактивной SSH-сессии после основного установщика.</p>
+</div>
+
+<div class="section-break"></div>
+
+<h2>5. Анализ логов</h2>
+
+<p>Логи демона пишутся в <code>/var/log/mail-proxy/mail-proxy-daemon.log</code>. Логи веб-панели направляются
+в <code>/var/log/mail-proxy/web_admin.log</code>.</p>
+
+<pre>2025-01-15 14:23:01,123 INFO mail_proxy.daemon: XOAUTH2 AUTH succeeded for account@example.com
+[2025-01-15 14:23:01] CSRF token mismatch for action referent_save</pre>
+
+<h2>6. Мониторинг</h2>
+
+<p>Страница <code>monitor.php</code> доступна по адресу <code>https://&lt;APP_BASE_URL&gt;/monitor.php</code> и отображает
+текущее состояние службы, доступность логов, критические ошибки и статус авторизации OAuth2/IMAP/SMTP.</p>
+
+<h2>7. Резервное копирование и восстановление</h2>
+
+<p>Критически важные объекты для бэкапа:</p>
+<ul>
+  <li>Ключ шифрования: <code>/etc/mail-proxy/crypto.key</code> (максимальная критичность)</li>
+  <li>Конфигурация БД: <code>/etc/mail-proxy/db.conf</code></li>
+  <li>Дамп базы данных MariaDB <code>mail_proxy</code></li>
+</ul>
+
+<h2>8. Контрольный список безопасности</h2>
+
+<table>
+  <thead>
+    <tr><th>№</th><th>Пункт</th><th>Статус</th><th>Подтверждение в коде</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td><code>www-data</code> не входит в группу <code>vmail</code></td><td>✅ Закрыт</td><td>Активно удаляется во время фазы Users/Groups.</td></tr>
+    <tr><td>2</td><td>Права на <code>crypto.key</code> / <code>db.conf</code></td><td>✅ Закрыт</td><td>Установлены права 0640 (<code>root:mail-proxy-crypto</code>).</td></tr>
+    <tr><td>3</td><td>systemd hardening</td><td>✅ Закрыт</td><td>Unit включает NoNewPrivileges, ProtectSystem=strict и др.</td></tr>
+    <tr><td>4</td><td>SSRF-защита (OAuth2 эндпоинты)</td><td>✅ Закрыт</td><td><code>assertSafeOAuthEndpoint()</code> блокирует loopback/приватные IP.</td></tr>
+  </tbody>
+</table>
+
+<div class="section-break"></div>
+
+<h2>9. Известные ограничения и эксплуатационные особенности</h2>
+
+<h3>9.1. Буферизация писем в памяти при приёме через IMAP</h3>
+
+<p>Библиотека <code>imaplib</code> возвращает письмо целиком в памяти процесса. При пиковой нагрузке формула расхода RAM:
+<code>RAM_peak ≈ IMAP_WORKER_COUNT × размер_письма_RFC822 ≈ 20 × 200 МБ ≈ 4 ГБ</code>.</p>
+
+<h3>9.3. Разрыв dot-stuffing на границе SMTP-чанков</h3>
+
+<p>Статус: закрыт (PROMPT 10). Функция удерживает последний байт каждого чанка в переменной <code>carry</code>
+для исключения разрывов экранирования на стыках.</p>
+
+<h2>10. Типовые неисправности (troubleshooting)</h2>
+
+<p>При ошибках старта проверьте валидность hex-ключа:
+<code>wc -c /etc/mail-proxy/crypto.key</code> (ожидается 64 символа) и права доступа.</p>
+
+<h2>11. Обновление системы</h2>
+
+<p>Штатный перезапуск службы безопасен в любой момент. Входящие письма остаются в статусе UNSEEN до подтверждения
+локальной доставки, а исходящие сохраняются в <code>Maildir/new</code> референтов.</p>
+
+<p class="footer-note">DELTA-транзит: Руководство системного администратора v3.4</p>
+
+</body>
+</html>
