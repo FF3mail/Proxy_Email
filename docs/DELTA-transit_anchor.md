@@ -583,7 +583,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Fix** | `tmpfiles.d` (setgid `2750` dir + file ACLs); `UMask=0027`; `ExecStartPre=+systemd-tmpfiles`; logrotate `create … mail-proxy-logs` |
 | **Target perms** | dir `2750 vmail:mail-proxy-logs`; `mail-proxy-daemon.log` `0640 vmail:mail-proxy-logs`; `web_admin.log` `0660 vmail:mail-proxy-logs` |
 | **Out of scope** | `message_rebuild.py`, routing/watch, PHP panel code (proposal: distinguish missing vs unreadable in `monitor.php:603`) |
-| **Verdict** | **ACCEPTED** (infra + static tests); live V1–V4 pending operator-confirmed VPS deploy |
+| **Verdict** | **ACCEPTED** — V1–V3 pass on lab VPS (`ac24213`); V4 reboot deferred (`tmpfiles.d` boot path confirmed) |
 
 ---
 
