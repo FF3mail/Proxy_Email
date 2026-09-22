@@ -40,25 +40,14 @@ from relationship_routing import (
     InboundRoutingMode,
     OutboundRoutingMode,
     OutboundWatchMode,
-    ReferentEffectiveModes,
+    extract_message_from_address,
     extract_outbound_identity_from_message,
     finalize_inbound_process_result,
     parse_inbound_routing_mode,
-    parse_optional_inbound_routing_mode,
-    parse_optional_outbound_routing_mode,
-    parse_optional_outbound_watch_mode,
     parse_outbound_routing_mode,
     parse_outbound_watch_mode,
     plan_inbound_delivery,
     plan_outbound_delivery,
-    referent_effective_modes_as_dict,
-    resolve_effective_outbound_watch_mode,
-    resolve_referent_effective_modes,
-)
-from relationship_shadow import (
-    SHADOW_COUNTERS,
-    extract_message_from_address,
-    relationship_lookup_shadow_enabled,
 )
 from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
 
@@ -102,24 +91,15 @@ _DEFAULT_MAX_INBOUND = 200 * 1024 * 1024
 MAX_INBOUND_MESSAGE_BYTES = int(
     os.environ.get('MAX_INBOUND_MESSAGE_BYTES', _DEFAULT_MAX_INBOUND)
 )
-# PROMPT-58 shadow logging (default ON in shadow mode).
-RELATIONSHIP_LOOKUP_SHADOW = relationship_lookup_shadow_enabled()
-# PROMPT-63 Stage 2a: inbound routing mode (default shadow — safe).
+# PROMPT-79.1: process-global routing/watch (systemd drop-in, live-only).
 INBOUND_ROUTING_MODE = parse_inbound_routing_mode()
-# PROMPT-65 Stage 2b: outbound routing mode (default shadow — safe).
 OUTBOUND_ROUTING_MODE = parse_outbound_routing_mode()
-# PROMPT-66 Stage 2c: outbound watch mode (default referent_only — safe).
-_REQUESTED_OUTBOUND_WATCH_MODE = parse_outbound_watch_mode()
-# Resolved after logging init in main() — see resolve_effective_outbound_watch_mode().
-OUTBOUND_WATCH_MODE = OutboundWatchMode.REFERENT_ONLY
+OUTBOUND_WATCH_MODE = parse_outbound_watch_mode()
 # After this many consecutive size skips for the same message, mark it Seen.
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
 MAX_SIZE_SKIP_TRACKER_ENTRIES = 10000
-_REFERENT_ROW_COLUMNS = (
-    'id, username, local_inbox, local_outbox, '
-    'inbound_routing_mode, outbound_routing_mode, outbound_watch_mode'
-)
+_REFERENT_ROW_COLUMNS = 'id, username, local_inbox, local_outbox'
 GCM_PREFIX = 'gcm:'
 GCM_NONCE_LENGTH = 12
 GCM_TAG_LENGTH = 16
@@ -786,48 +766,35 @@ class MailHandler:
         try:
             with open(mail_file, 'rb') as header_f:
                 msg = email.message_from_binary_file(header_f)
-            resolved = self._resolve_local_recipients(msg, referent_data)
             from_addr = extract_message_from_address(msg)
             account_id = int(account['id']) if account is not None else 0
             account_email = str(account.get('email') or '') if account else ''
 
-            inbound_mode = InboundRoutingMode(
-                referent_data.get(
-                    'effective_inbound_routing_mode',
-                    INBOUND_ROUTING_MODE.value,
-                )
-            )
             plan = plan_inbound_delivery(
-                mode=inbound_mode,
                 resolve_inbound=self._relationship_lookup.resolve_inbound,
                 account_id=account_id,
                 account_email=account_email,
                 from_address=from_addr,
-                legacy_resolved=resolved,
                 referent_local_inbox=referent_data['local_inbox'],
-                shadow_enabled=RELATIONSHIP_LOOKUP_SHADOW,
-                shadow_counters=SHADOW_COUNTERS,
-                shadow_log=logger,
             )
 
-            if plan.mode == InboundRoutingMode.RELATIONSHIP_LIVE:
-                if plan.lookup_error:
-                    logger.error(
-                        '[RELATIONSHIP_LIVE] lookup/validation error '
-                        'account=%s sender=%s error=%s — fail closed',
-                        account_email,
-                        from_addr or '(empty)',
-                        plan.lookup_error,
-                    )
-                    return finalize_inbound_process_result(plan, False)
-                if plan.skip_reason == 'no_relationship_match':
-                    logger.info(
-                        '[RELATIONSHIP_LIVE] no match account=%s sender=%s '
-                        '— skipped (no legacy fallback)',
-                        account_email,
-                        from_addr or '(empty)',
-                    )
-                    return finalize_inbound_process_result(plan, False)
+            if plan.lookup_error:
+                logger.error(
+                    '[RELATIONSHIP_LIVE] lookup/validation error '
+                    'account=%s sender=%s error=%s — fail closed',
+                    account_email,
+                    from_addr or '(empty)',
+                    plan.lookup_error,
+                )
+                return finalize_inbound_process_result(plan, False)
+            if plan.skip_reason == 'no_relationship_match':
+                logger.info(
+                    '[RELATIONSHIP_LIVE] no match account=%s sender=%s '
+                    '— skipped (no legacy fallback)',
+                    account_email,
+                    from_addr or '(empty)',
+                )
+                return finalize_inbound_process_result(plan, False)
 
             if not plan.local_rcpts:
                 logger.error(
@@ -850,40 +817,25 @@ class MailHandler:
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
             )
             smtp.ehlo()
-            if plan.mode == InboundRoutingMode.RELATIONSHIP_LIVE:
-                delivered, smtp_error = self._deliver_inbound_fanout_via_smtp(
-                    smtp=smtp,
-                    mail_file=mail_file,
-                    plan=plan,
-                    account_id=account_id,
-                    from_addr=from_addr,
-                )
-            else:
-                delivered = self._stream_file_via_smtp(
-                    smtp, plan.mail_from, plan.local_rcpts, mail_file
-                )
-                smtp_error = None if delivered else 'smtp_delivery_failed'
+            delivered, smtp_error = self._deliver_inbound_fanout_via_smtp(
+                smtp=smtp,
+                mail_file=mail_file,
+                plan=plan,
+                account_id=account_id,
+                from_addr=from_addr,
+            )
             return finalize_inbound_process_result(
                 plan, delivered, smtp_error=smtp_error
             )
         except Exception as e:
             logger.error(f"Local SMTP delivery failed: {e}")
             if plan is None:
-                inbound_mode = InboundRoutingMode(
-                    referent_data.get(
-                        'effective_inbound_routing_mode',
-                        INBOUND_ROUTING_MODE.value,
-                    )
-                )
                 plan = plan_inbound_delivery(
-                    mode=inbound_mode,
                     resolve_inbound=self._relationship_lookup.resolve_inbound,
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
                     from_address='',
-                    legacy_resolved=[],
                     referent_local_inbox=referent_data['local_inbox'],
-                    shadow_enabled=False,
                 )
             return finalize_inbound_process_result(
                 plan, False, smtp_error=str(e)
@@ -1055,50 +1007,43 @@ class MailHandler:
         file_path = task.file_path
         recipients = list(task.recipients)
         rebuild_temp: Optional[Path] = None
-        outbound_mode = OutboundRoutingMode(
-            task.referent_data.get(
-                'effective_outbound_routing_mode',
-                OUTBOUND_ROUTING_MODE.value,
+        try:
+            with open(file_path, 'rb') as header_f:
+                msg = email.message_from_binary_file(header_f)
+        except Exception as exc:
+            logger.error(
+                '[MESSAGE_REBUILD] outbound_header_parse_failed file=%s err=%s',
+                file_path.name,
+                exc,
             )
+            return False
+        from_address = extract_outbound_identity_from_message(msg)
+        try:
+            dto = self._relationship_lookup.resolve_outbound(from_address)
+        except Exception as exc:
+            logger.error(
+                '[MESSAGE_REBUILD] outbound_lookup_failed file=%s err=%s',
+                file_path.name,
+                exc,
+            )
+            return False
+        if dto is None:
+            logger.error(
+                '[MESSAGE_REBUILD] outbound_missing_dto file=%s identity=%s',
+                file_path.name,
+                from_address or '(empty)',
+            )
+            return False
+        rebuild_result = rebuild_outbound_message(
+            file_path.read_bytes(),
+            dto,
+            temp_dir=TEMP_DIR,
         )
-        if outbound_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
-            try:
-                with open(file_path, 'rb') as header_f:
-                    msg = email.message_from_binary_file(header_f)
-            except Exception as exc:
-                logger.error(
-                    '[MESSAGE_REBUILD] outbound_header_parse_failed file=%s err=%s',
-                    file_path.name,
-                    exc,
-                )
-                return False
-            from_address = extract_outbound_identity_from_message(msg)
-            try:
-                dto = self._relationship_lookup.resolve_outbound(from_address)
-            except Exception as exc:
-                logger.error(
-                    '[MESSAGE_REBUILD] outbound_lookup_failed file=%s err=%s',
-                    file_path.name,
-                    exc,
-                )
-                return False
-            if dto is None:
-                logger.error(
-                    '[MESSAGE_REBUILD] outbound_missing_dto file=%s identity=%s',
-                    file_path.name,
-                    from_address or '(empty)',
-                )
-                return False
-            rebuild_result = rebuild_outbound_message(
-                file_path.read_bytes(),
-                dto,
-                temp_dir=TEMP_DIR,
-            )
-            if not rebuild_result.success or rebuild_result.temp_path is None:
-                return False
-            rebuild_temp = rebuild_result.temp_path
-            file_path = rebuild_temp
-            recipients = [dto.external_client_email]
+        if not rebuild_result.success or rebuild_result.temp_path is None:
+            return False
+        rebuild_temp = rebuild_result.temp_path
+        file_path = rebuild_temp
+        recipients = [dto.external_client_email]
 
         try:
             server = None
@@ -1523,9 +1468,6 @@ class MaildirHandler(FileSystemEventHandler):
                 f"{self.referent_data['id']}: {file_path.name}"
             )
             source = 'watchdog'
-        self._daemon._log_outbound_watch_dual(
-            file_path, self.watch_source, int(self.referent_data['id'])
-        )
         self._daemon._enqueue_outbound_file(
             referent_data=self.referent_data,
             file_path=file_path,
@@ -1559,14 +1501,13 @@ class ProxyDaemon:
         self._smtp_pool = SmtpWorkerPool(
             self._smtp_task_queue, self._mail_handler, self._stop_event
         )
-        # PROMPT-73: per-referent effective modes, frozen until daemon restart.
-        self._referent_effective_modes: Dict[int, ReferentEffectiveModes] = {}
+        # Referents with relationship-level watches registered (PROMPT-79.1).
+        self._watch_registered_referent_ids: set = set()
         # Планировщик IMAP-опроса
         self._imap_poller = ImapPoller(
             self._imap_task_queue,
             self._db,
             self._stop_event,
-            referent_enricher=self._enrich_referent_row,
         )
         # Watchdog-наблюдатель за Maildir/new
         self._observer: Optional[Observer] = None
@@ -1581,17 +1522,13 @@ class ProxyDaemon:
         # Используется в _sync_database_state() для определения новых и деактивированных референтов.
         # Защищён блокировкой — _sync_database_state() вызывается из главного потока,
         # но в будущем может вызываться из отдельного потока-супервизора.
-        self._watched_referent_ids: set = set()
         self._watched_lock = threading.Lock()
-
-        # Реестр: referent_id -> строковый путь Maildir/new.
-        # Используется _unschedule_watchdog_for_referent() для поиска watch object
-        # без обращения к внутренним структурам watchdog.
         self._referent_path_registry: Dict[int, str] = {}
 
         # PROMPT-66: relationship-level outbound watch registries (dedup by path).
         self._watched_relationship_ids: set = set()
         self._relationship_id_to_watch_path: Dict[int, str] = {}
+        self._relationship_referent_id: Dict[int, int] = {}
         self._watch_path_relationship_ids: Dict[str, set] = {}
         # Paths where a relationship-level Observer watch was scheduled (not
         # referent-covered collisions).
@@ -1629,12 +1566,8 @@ class ProxyDaemon:
         if not referents:
             logger.warning("No active referents found in database.")
         for ref in referents:
-            self._ensure_referent_modes_cached(ref)
             self._register_watches_for_referent(ref)
-        if (
-            (self._watched_referent_ids or self._watched_relationship_ids)
-            and not self._observer_started
-        ):
+        if self._watched_relationship_ids and not self._observer_started:
             self._observer.start()
             self._observer_started = True
             logger.info("Watchdog file system observer started")
@@ -1642,8 +1575,7 @@ class ProxyDaemon:
             f"ProxyDaemon operational: "
             f"{IMAP_WORKER_COUNT} IMAP workers, "
             f"{SMTP_WORKER_COUNT} SMTP workers, "
-            f"global OUTBOUND_WATCH_MODE={OUTBOUND_WATCH_MODE.value}, "
-            f"{len(self._watched_referent_ids)} referent watches, "
+            f"OUTBOUND_WATCH_MODE={OUTBOUND_WATCH_MODE.value}, "
             f"{len(self._watch_path_relationship_ids)} relationship maildir paths"
         )
         # Главный цикл супервизора: синхронизирует список референтов с БД
@@ -1653,135 +1585,24 @@ class ProxyDaemon:
             except Exception as e:
                 logger.error(f"Supervisor sync error: {e}")
             time.sleep(60)
-    def _ensure_referent_modes_cached(
-        self, ref: Dict[str, Any]
-    ) -> ReferentEffectiveModes:
-        """
-        Resolve and cache effective modes once per referent per daemon lifetime.
-        Restart-only: existing cache entries are never refreshed from DB.
-        """
+    def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
+        """Register relationship-level outbound watches for one referent."""
         ref_id = int(ref['id'])
-        cached = self._referent_effective_modes.get(ref_id)
-        if cached is not None:
-            return cached
-        modes = resolve_referent_effective_modes(
-            referent_id=ref_id,
-            inbound_override=parse_optional_inbound_routing_mode(
-                ref.get('inbound_routing_mode')
-            ),
-            outbound_override=parse_optional_outbound_routing_mode(
-                ref.get('outbound_routing_mode')
-            ),
-            watch_override=parse_optional_outbound_watch_mode(
-                ref.get('outbound_watch_mode')
-            ),
-            global_inbound=INBOUND_ROUTING_MODE,
-            global_outbound=OUTBOUND_ROUTING_MODE,
-            global_watch=OUTBOUND_WATCH_MODE,
-            log=logger,
+        targets = (
+            self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                ref_id
+            )
         )
-        self._referent_effective_modes[ref_id] = modes
-        self._log_referent_effective_modes(modes)
-        return modes
-
-    def _log_referent_effective_modes(self, modes: ReferentEffectiveModes) -> None:
-        logger.info(
-            '[REFERENT_EFFECTIVE_MODES] referent_id=%s inbound=%s outbound=%s watch=%s',
-            modes.referent_id,
-            modes.inbound_routing.value,
-            modes.outbound_routing.value,
-            modes.outbound_watch.value,
-        )
-
-    def _enrich_referent_row(self, ref: Dict[str, Any]) -> Dict[str, Any]:
-        modes = self._ensure_referent_modes_cached(ref)
-        enriched = dict(ref)
-        enriched.update(referent_effective_modes_as_dict(modes))
-        return enriched
+        for target in targets:
+            self._setup_watchdog_for_relationship(target)
+            self._scan_existing_outgoing_for_relationship(target)
+        self._watch_registered_referent_ids.add(ref_id)
 
     def _referent_handler_data(self, referent_id: int) -> Dict[str, Any]:
-        modes = self._referent_effective_modes.get(int(referent_id))
-        if modes is None:
-            return {'id': int(referent_id)}
-        return {
-            'id': int(referent_id),
-            **referent_effective_modes_as_dict(modes),
-        }
-
-    def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
-        """Apply referent/relationship watches per cached effective watch mode."""
-        ref_id = int(ref['id'])
-        modes = self._ensure_referent_modes_cached(ref)
-        enriched = self._enrich_referent_row(ref)
-        if modes.outbound_watch in (
-            OutboundWatchMode.REFERENT_ONLY,
-            OutboundWatchMode.DUAL,
-        ):
-            if ref_id not in self._watched_referent_ids:
-                self._setup_watchdog_for_referent(enriched)
-                self._scan_existing_outgoing(enriched)
-        if modes.outbound_watch in (
-            OutboundWatchMode.DUAL,
-            OutboundWatchMode.RELATIONSHIP_ONLY,
-        ):
-            targets = (
-                self._mail_handler._relationship_lookup
-                .list_watch_targets_for_referent(ref_id)
-            )
-            for target in targets:
-                self._setup_watchdog_for_relationship(target)
-                self._scan_existing_outgoing_for_relationship(target)
-
-    def _setup_watchdog_for_referent(self, ref: Dict[str, Any]) -> None:
-        """Регистрирует watchdog-обработчик для Maildir/new референта."""
-        maildir_new = Path(ref['local_outbox']) / 'new'
-        if not maildir_new.exists():
-            try:
-                maildir_new.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.error(
-                    f"Cannot create maildir {maildir_new} "
-                    f"for referent {ref['id']}: {e}"
-                )
-                return
-        handler = MaildirHandler(
-            ref,
-            self._smtp_task_queue,
-            self._db,
-            self,
-            self._mail_handler._relationship_lookup,
-        )
-        self._observer.schedule(handler, path=str(maildir_new), recursive=False)
-
-        self._ensure_observer_started()
-
-        # Синхронно обновляем оба внутренних реестра только после успешной
-        # регистрации watchdog. Это исключает рассинхронизацию между
-        # фактически зарегистрированными наблюдателями и состоянием
-        # _watched_referent_ids.
-        with self._watched_lock:
-            self._watched_referent_ids.add(ref['id'])
-            self._referent_path_registry[ref['id']] = str(maildir_new)
-
-        logger.info(f"Watchdog configured for referent {ref['id']}: {maildir_new}")
-
-    def _referent_allows_referent_watch(self, referent_id: int) -> bool:
-        modes = self._referent_effective_modes.get(int(referent_id))
-        if modes is None:
-            return False
-        return modes.outbound_watch in (
-            OutboundWatchMode.REFERENT_ONLY,
-            OutboundWatchMode.DUAL,
-        )
+        return {'id': int(referent_id)}
 
     def _referent_allows_relationship_watch(self, referent_id: int) -> bool:
-        modes = self._referent_effective_modes.get(int(referent_id))
-        if modes is None:
-            return False
-        return modes.outbound_watch in (
-            OutboundWatchMode.DUAL,
-            OutboundWatchMode.RELATIONSHIP_ONLY,
-        )
+        return int(referent_id) in self._watch_registered_referent_ids
 
     def _validate_relationship_maildir_for_watch(
         self, maildir: str, relationship_id: int
@@ -1861,10 +1682,12 @@ class ProxyDaemon:
         path_str: str,
         *,
         observer_scheduled: bool,
+        referent_id: int,
     ) -> None:
         with self._watched_lock:
             self._watched_relationship_ids.add(relationship_id)
             self._relationship_id_to_watch_path[relationship_id] = path_str
+            self._relationship_referent_id[relationship_id] = int(referent_id)
             self._watch_path_relationship_ids.setdefault(path_str, set()).add(
                 relationship_id
             )
@@ -1890,6 +1713,7 @@ class ProxyDaemon:
                 self._watch_path_relationship_ids[path_str].add(relationship_id)
                 self._watched_relationship_ids.add(relationship_id)
                 self._relationship_id_to_watch_path[relationship_id] = path_str
+                self._relationship_referent_id[relationship_id] = referent_id
                 logger.info(
                     'Watchdog relationship %s shares existing path: %s',
                     relationship_id,
@@ -1908,7 +1732,7 @@ class ProxyDaemon:
                 path_str,
             )
             self._register_relationship_watch_coverage(
-                relationship_id, path_str, observer_scheduled=False
+                relationship_id, path_str, observer_scheduled=False, referent_id=referent_id
             )
             return
 
@@ -1925,7 +1749,7 @@ class ProxyDaemon:
         self._observer.schedule(handler, path=path_str, recursive=False)
         self._ensure_observer_started()
         self._register_relationship_watch_coverage(
-            relationship_id, path_str, observer_scheduled=True
+            relationship_id, path_str, observer_scheduled=True, referent_id=referent_id
         )
 
         logger.info(
@@ -1934,64 +1758,6 @@ class ProxyDaemon:
             path_str,
         )
 
-    def _log_outbound_watch_dual(
-        self, file_path: Path, watch_source: str, referent_id: int
-    ) -> None:
-        """Dual mode: log files visible on only one watch tier (observation only)."""
-        modes = self._referent_effective_modes.get(int(referent_id))
-        if modes is None or modes.outbound_watch != OutboundWatchMode.DUAL:
-            return
-        file_new_dir = str(file_path.parent.resolve())
-        referent_new_paths = set(self._referent_path_registry.values())
-        relationship_new_paths = set(self._watch_path_relationship_ids.keys())
-        if watch_source == 'relationship':
-            if file_new_dir not in referent_new_paths:
-                logger.info(
-                    '[OUTBOUND_WATCH_DUAL] relationship_watch path=%s file=%s '
-                    'not_visible_via_referent_outbox',
-                    file_new_dir,
-                    file_path.name,
-                )
-        elif file_new_dir not in relationship_new_paths:
-            logger.info(
-                '[OUTBOUND_WATCH_DUAL] referent_watch path=%s file=%s '
-                'not_visible_via_relationship_maildir',
-                file_new_dir,
-                file_path.name,
-            )
-
-    def _load_legacy_outbound_account(
-        self, referent_id: int
-    ) -> Optional[Dict[str, Any]]:
-        """Legacy outbound account selection (referent_id LIMIT 1). Shadow/legacy only."""
-        conn = None
-        cursor = None
-        try:
-            conn = self._db.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
-                SELECT id, email, auth_type, smtp_host, smtp_port,
-                       username, password_enc, smtp_encryption,
-                       provider, client_id, client_secret_enc
-                FROM external_accounts
-                WHERE referent_id = %s AND active = 1
-                LIMIT 1
-                """,
-                (int(referent_id),),
-            )
-            return cursor.fetchone()
-        except Exception as e:
-            logger.error(
-                f"Failed to load legacy outbound account for referent "
-                f"{referent_id}: {e}"
-            )
-            return None
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
 
     def _enqueue_outbound_file(
         self,
@@ -2021,20 +1787,9 @@ class ProxyDaemon:
             return
 
         from_address = extract_outbound_identity_from_message(msg)
-        outbound_mode = OutboundRoutingMode(
-            referent_data.get(
-                'effective_outbound_routing_mode',
-                OUTBOUND_ROUTING_MODE.value,
-            )
-        )
         plan = plan_outbound_delivery(
-            mode=outbound_mode,
             resolve_outbound=relationship_lookup.resolve_outbound,
-            load_legacy_account=self._load_legacy_outbound_account,
             from_address=from_address,
-            referent_id=int(referent_data['id']),
-            shadow_enabled=RELATIONSHIP_LOOKUP_SHADOW,
-            shadow_log=logger,
         )
 
         if plan.lookup_error:
@@ -2072,16 +1827,15 @@ class ProxyDaemon:
             )
             return
 
-        if outbound_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
-            logger.info(
-                '[OUTBOUND_ROUTING] relationship_live referent=%s file=%s '
-                'identity=%s relationship_id=%s external_account_id=%s',
-                referent_data['id'],
-                file_path.name,
-                plan.outbound_identity,
-                plan.relationship_id,
-                plan.external_account_id,
-            )
+        logger.info(
+            '[OUTBOUND_ROUTING] relationship_live referent=%s file=%s '
+            'identity=%s relationship_id=%s external_account_id=%s',
+            referent_data['id'],
+            file_path.name,
+            plan.outbound_identity,
+            plan.relationship_id,
+            plan.external_account_id,
+        )
 
         task = SmtpTask(
             referent_data=referent_data,
@@ -2240,36 +1994,24 @@ class ProxyDaemon:
         current_ids = {int(r['id']) for r in current_refs}
         current_refs_by_id = {int(r['id']): r for r in current_refs}
 
-        with self._watched_lock:
-            watched_referent_snapshot = set(self._watched_referent_ids)
-
-        new_ref_ids = current_ids - watched_referent_snapshot
+        registered = set(self._watch_registered_referent_ids)
+        new_ref_ids = current_ids - registered
         for ref_id in new_ref_ids:
             ref = current_refs_by_id[ref_id]
-            self._ensure_referent_modes_cached(ref)
             logger.info(
                 f"Sync: new active referent detected (ID={ref_id}, "
                 f"username={ref['username']}), registering watches"
             )
             self._register_watches_for_referent(ref)
 
-        removed_ref_ids = watched_referent_snapshot - current_ids
+        removed_ref_ids = registered - current_ids
         for ref_id in removed_ref_ids:
             logger.info(
                 f"Sync: referent ID={ref_id} is no longer active, "
-                f"removing from watchdog"
+                f"removing relationship watches"
             )
-            self._unschedule_watchdog_for_referent(ref_id)
-            with self._watched_lock:
-                self._watched_referent_ids.discard(ref_id)
-            self._referent_effective_modes.pop(ref_id, None)
-
-        for ref in current_refs:
-            ref_id = int(ref['id'])
-            if not self._referent_allows_referent_watch(ref_id):
-                continue
-            if ref_id in self._watched_referent_ids:
-                self._scan_existing_outgoing(self._enrich_referent_row(ref))
+            self._unschedule_watches_for_referent(ref_id)
+            self._watch_registered_referent_ids.discard(ref_id)
 
         if new_ref_ids or removed_ref_ids:
             logger.info(
@@ -2279,49 +2021,28 @@ class ProxyDaemon:
             )
 
         self._sync_relationship_watches()
+    def _unschedule_watches_for_referent(self, referent_id: int) -> None:
+        """Remove all relationship-level watches owned by a referent."""
+        rel_ids = [
+            rid
+            for rid, ref_id in self._relationship_referent_id.items()
+            if ref_id == int(referent_id)
+        ]
+        for relationship_id in rel_ids:
+            self._unschedule_watchdog_for_relationship(relationship_id)
+
     def _unschedule_watchdog_for_referent(self, referent_id: int) -> None:
-        """
-        Снимает watchdog-наблюдение для деактивированного референта.
-        Новые файлы в его Maildir/new перестанут попадать в smtp_task_queue.
-        Уже поставленные в очередь задачи будут обработаны в штатном режиме.
-        """
-        if not self._observer:
-            return
-
-        # Надёжная альтернатива: ведём собственный реестр путей
-        # (добавляется в __init__ и _setup_watchdog_for_referent ниже)
-        maildir_path_str = self._referent_path_registry.get(referent_id)
-        if maildir_path_str and self._observer:
-            try:
-                # Находим watch object по пути и снимаем его
-                for emitter in list(self._observer.emitters):
-                    if str(emitter.watch.path) == maildir_path_str:
-                        self._observer.unschedule(emitter.watch)
-                        logger.info(
-                            f"Watchdog unscheduled for referent {referent_id}: "
-                            f"{maildir_path_str}"
-                        )
-                        break
-            except Exception as e:
-                logger.error(
-                    f"Error unscheduling watchdog for referent {referent_id}: {e}"
-                )
-
-        # Удаляем из реестра путей
+        """Legacy hook: referent outbox watches removed in PROMPT-79.1."""
+        self._unschedule_watches_for_referent(referent_id)
         self._referent_path_registry.pop(referent_id, None)
 
     def _sync_relationship_watches(self) -> None:
-        """Reconcile relationship watches for referents with relationship-level mode."""
+        """Reconcile relationship watches for all active referents."""
         targets: List[Dict[str, Any]] = []
-        for ref_id, modes in self._referent_effective_modes.items():
-            if modes.outbound_watch not in (
-                OutboundWatchMode.DUAL,
-                OutboundWatchMode.RELATIONSHIP_ONLY,
-            ):
-                continue
+        for ref in self._load_referents():
             targets.extend(
                 self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                    int(ref_id)
+                    int(ref['id'])
                 )
             )
         current_by_id = {
@@ -2391,6 +2112,7 @@ class ProxyDaemon:
         path_str = self._relationship_id_to_watch_path.pop(relationship_id, None)
         with self._watched_lock:
             self._watched_relationship_ids.discard(relationship_id)
+            self._relationship_referent_id.pop(relationship_id, None)
             if not path_str:
                 return
             rel_ids = self._watch_path_relationship_ids.get(path_str)
@@ -2525,21 +2247,11 @@ def remove_pid_file(path: str = PID_FILE) -> None:
 def main():
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
-    global OUTBOUND_WATCH_MODE
-    OUTBOUND_WATCH_MODE = resolve_effective_outbound_watch_mode(
-        watch_mode=_REQUESTED_OUTBOUND_WATCH_MODE,
-        routing_mode=OUTBOUND_ROUTING_MODE,
-        log=logger,
-    )
     logger.info(
-        "INBOUND_ROUTING_MODE=%s OUTBOUND_ROUTING_MODE=%s "
-        "OUTBOUND_WATCH_MODE=%s (requested=%s) "
-        "RELATIONSHIP_LOOKUP_SHADOW=%s",
+        "INBOUND_ROUTING_MODE=%s OUTBOUND_ROUTING_MODE=%s OUTBOUND_WATCH_MODE=%s",
         INBOUND_ROUTING_MODE.value,
         OUTBOUND_ROUTING_MODE.value,
         OUTBOUND_WATCH_MODE.value,
-        _REQUESTED_OUTBOUND_WATCH_MODE.value,
-        'on' if RELATIONSHIP_LOOKUP_SHADOW else 'off',
     )
     logger.info("=" * 60)
     daemon = None

@@ -364,7 +364,7 @@ def _daemon():
 
 
 class MessageRebuildDaemonIntegrationTest(unittest.TestCase):
-    """F6, F7, F12 — daemon wiring and RD-13 SMTP orchestration."""
+    """F6, F7 — daemon wiring and RD-13 SMTP orchestration."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp(prefix='rebuild_daemon_')
@@ -467,37 +467,6 @@ class MessageRebuildDaemonIntegrationTest(unittest.TestCase):
         self.assertEqual(first, (False, 'fanout_incomplete'))
         self.assertEqual(second, (True, None))
         self.assertEqual(handler._stream_file_via_smtp.call_count, 4)
-
-    def test_F12_shadow_mode_skips_rebuild(self) -> None:
-        handler = self._handler()
-        raw = _build_mixed_message(attachments=[{'filename': 'x.pdf', 'content': b'x'}])
-        mail_file = self._write_mail_file(raw)
-        referent_data = {
-            'id': 1,
-            'local_inbox': 'legacy@testvps.loc',
-            'effective_inbound_routing_mode': InboundRoutingMode.SHADOW.value,
-        }
-        account = {'id': 10, 'email': 'refext@partner.com'}
-        handler._resolve_local_recipients = MagicMock(return_value=['legacy@testvps.loc'])
-        smtp_mock = MagicMock()
-        smtp_instance = MagicMock()
-        smtp_mock.return_value = smtp_instance
-
-        daemon = _daemon()
-        with patch.object(daemon, 'rebuild_inbound_fanout') as rebuild_mock:
-            rebuild_mock.side_effect = AssertionError('rebuild must not run in shadow')
-            with patch('smtplib.SMTP', smtp_mock):
-                with patch.object(handler, '_stream_file_via_smtp', return_value=True) as stream_mock:
-                    result = handler._deliver_to_local_smtp(
-                        mail_file,
-                        referent_data,
-                        account,
-                    )
-        rebuild_mock.assert_not_called()
-        stream_mock.assert_called_once()
-        self.assertEqual(stream_mock.call_args[0][3], mail_file)
-        self.assertTrue(result.mark_imap_seen)
-
 
 if __name__ == '__main__':
     unittest.main()

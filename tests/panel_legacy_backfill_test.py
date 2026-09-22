@@ -98,7 +98,7 @@ def main() -> None:
     assert_contains(en, "'backfill.count'", "EN backfill.count")
     assert_contains(en, "still on the legacy model", "EN progress sentence")
 
-    assert_not_contains(daemon, "relationship_lookup", "daemon still ignores relationship_lookup")
+    assert_contains(daemon, "relationship_lookup", "daemon uses relationship_lookup")
     assert_not_contains(daemon, "relationship_backfill", "daemon has no backfill wiring")
 
     # Confirm PHP helper source still contains the PROMPT-56 predicates (not re-derived elsewhere)

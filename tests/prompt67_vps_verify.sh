@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # PROMPT-67 VPS live verification (no credentials; run as root on lab VPS).
+#
+# NOTE (PROMPT-79.1): shadow/dual/referent_only mode matrix tests below are
+# historical. Post-79.1 production defaults live in routing.conf
+# (relationship_live / relationship_only). Update this script in a follow-up
+# live-test prompt if re-running end-to-end evidence on the lab VPS.
 set -euo pipefail
 
 LOG="/tmp/prompt67_live_test.log"
@@ -11,14 +16,18 @@ log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG"; }
 CLIENTLOC1_NEW="/var/vmail/vmail1/testvps.loc/c/l/i/clientloc1-2026.09.01.10.50.00/Maildir/new"
 REFLOC1_OUT="/var/vmail/vmail1/testvps.loc/r/e/f/refloc1-2026.09.01.10.49.35/Maildir/new"
 DAEMON_LOG="/var/log/mail-proxy/mail-proxy-daemon.log"
-DROPIN="/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf"
+DROPIN="/etc/systemd/system/mail-proxy.service.d/routing.conf"
 
 deploy_files() {
   log "=== DEPLOY ==="
-  for f in mail-proxy-daemon.py relationship_routing.py relationship_shadow.py relationship_lookup.py; do
+  for f in mail-proxy-daemon.py relationship_routing.py relationship_lookup.py; do
     cp -a "/root/Proxy_Email/${f}" "/usr/local/bin/${f}"
     md5sum "/usr/local/bin/${f}"
   done
+  if [[ -f /root/Proxy_Email/mail-proxy.service.d/routing.conf ]]; then
+    install -d -m 0755 /etc/systemd/system/mail-proxy.service.d
+    install -m 0644 /root/Proxy_Email/mail-proxy.service.d/routing.conf "$DROPIN"
+  fi
   /opt/delta-transit/venv/bin/python3 -m py_compile /usr/local/bin/mail-proxy-daemon.py
 }
 
@@ -77,7 +86,7 @@ wait_log() {
   return 1
 }
 
-log "=== PROMPT-67 VPS verification start ==="
+log "=== PROMPT-67 VPS verification start (legacy mode matrix — see PROMPT-79.1 note) ==="
 deploy_files
 
 log "=== TEST 2a: dual mode relationship maildir pickup ==="

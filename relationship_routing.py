@@ -1,54 +1,75 @@
 #!/usr/bin/env python3
 """
-Inbound relationship-centric routing (PROMPT-63 Stage 2a).
+Relationship-centric routing (inbound/outbound) — PROMPT-79.1 live-only.
 
-Pure decision helpers. Import has no side effects beyond definitions.
+Process-global modes from systemd Environment= (see mail-proxy.service.d/routing.conf).
+Per-referent DB override columns are ignored until PROMPT-79.4 schema cleanup.
 """
 
 from __future__ import annotations
 
+import email.utils
 import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from relationship_lookup import ClientRelationshipDTO, normalize_email
-from relationship_shadow import (
-    MARKER_AGREE,
-    MARKER_DIVERGE_LEGACY_ONLY,
-    MARKER_DIVERGE_LOOKUP_ONLY,
-    ShadowCounters,
-    classify_inbound_shadow,
-    classify_outbound_shadow,
-    evaluate_inbound_shadow,
-    evaluate_outbound_shadow,
-    extract_message_from_address,
-    final_legacy_rcpts,
-    relationship_lookup_shadow_enabled,
-)
+
+_LIVE_ALIASES = ('relationship_live', 'live', 'relationship')
+_WATCH_ALIASES = ('relationship_only', 'relationship')
 
 
 class InboundRoutingMode(str, Enum):
-    SHADOW = 'shadow'
-    LEGACY = 'legacy'
     RELATIONSHIP_LIVE = 'relationship_live'
+
+
+class OutboundRoutingMode(str, Enum):
+    RELATIONSHIP_LIVE = 'relationship_live'
+
+
+class OutboundWatchMode(str, Enum):
+    RELATIONSHIP_ONLY = 'relationship_only'
 
 
 def parse_inbound_routing_mode(
     environ: Optional[dict] = None,
 ) -> InboundRoutingMode:
-    """
-    INBOUND_ROUTING_MODE env: shadow (default) | legacy | relationship_live.
-    Safe default after deploy: shadow.
-    """
     env = environ if environ is not None else os.environ
-    raw = (env.get('INBOUND_ROUTING_MODE') or 'shadow').strip().lower()
-    if raw in ('legacy',):
-        return InboundRoutingMode.LEGACY
-    if raw in ('relationship_live', 'live', 'relationship'):
+    raw = (env.get('INBOUND_ROUTING_MODE') or 'relationship_live').strip().lower()
+    if raw in _LIVE_ALIASES:
         return InboundRoutingMode.RELATIONSHIP_LIVE
-    return InboundRoutingMode.SHADOW
+    logging.getLogger(__name__).warning(
+        'Unsupported INBOUND_ROUTING_MODE=%r — using relationship_live', raw
+    )
+    return InboundRoutingMode.RELATIONSHIP_LIVE
+
+
+def parse_outbound_routing_mode(
+    environ: Optional[dict] = None,
+) -> OutboundRoutingMode:
+    env = environ if environ is not None else os.environ
+    raw = (env.get('OUTBOUND_ROUTING_MODE') or 'relationship_live').strip().lower()
+    if raw in _LIVE_ALIASES:
+        return OutboundRoutingMode.RELATIONSHIP_LIVE
+    logging.getLogger(__name__).warning(
+        'Unsupported OUTBOUND_ROUTING_MODE=%r — using relationship_live', raw
+    )
+    return OutboundRoutingMode.RELATIONSHIP_LIVE
+
+
+def parse_outbound_watch_mode(
+    environ: Optional[dict] = None,
+) -> OutboundWatchMode:
+    env = environ if environ is not None else os.environ
+    raw = (env.get('OUTBOUND_WATCH_MODE') or 'relationship_only').strip().lower()
+    if raw in _WATCH_ALIASES:
+        return OutboundWatchMode.RELATIONSHIP_ONLY
+    logging.getLogger(__name__).warning(
+        'Unsupported OUTBOUND_WATCH_MODE=%r — using relationship_only', raw
+    )
+    return OutboundWatchMode.RELATIONSHIP_ONLY
 
 
 class _ResolveInbound(Protocol):
@@ -60,8 +81,6 @@ class _ResolveInbound(Protocol):
 
 @dataclass(frozen=True)
 class InboundDeliveryPlan:
-    """Resolved inbound routing decision (before SMTP attempt)."""
-
     mode: InboundRoutingMode
     local_rcpts: List[str]
     mail_from: str
@@ -74,24 +93,28 @@ class InboundDeliveryPlan:
 
 @dataclass(frozen=True)
 class InboundProcessResult:
-    """Outcome after attempting local delivery (or explicit skip)."""
-
     mark_imap_seen: bool
     local_delivered: bool
     plan: InboundDeliveryPlan
     smtp_error: Optional[str] = None
 
 
+def extract_message_from_address(msg: Any) -> str:
+    """Parse RFC From header only (not To/Cc)."""
+    try:
+        from_header = msg.get('From', '') or ''
+    except Exception:
+        from_header = ''
+    _name, addr = email.utils.parseaddr(from_header)
+    return (addr or '').strip()
+
+
 def relationship_target_email(dto: ClientRelationshipDTO) -> Optional[str]:
-    """PROMPT-53 inbound local target: local_referent_email."""
     target = normalize_email(dto.local_referent_email or '')
     return target or None
 
 
 def validate_relationship_for_live(dto: ClientRelationshipDTO) -> Optional[str]:
-    """
-    Return error string if relationship is not valid for live routing; else None.
-    """
     target = relationship_target_email(dto)
     if not target:
         return 'missing local_referent_email'
@@ -105,79 +128,49 @@ def validate_relationship_for_live(dto: ClientRelationshipDTO) -> Optional[str]:
 
 def plan_inbound_delivery(
     *,
-    mode: InboundRoutingMode,
     resolve_inbound: _ResolveInbound,
     account_id: int,
     account_email: str,
     from_address: str,
-    legacy_resolved: List[str],
     referent_local_inbox: str,
-    shadow_enabled: bool,
-    shadow_counters: Optional[ShadowCounters] = None,
-    shadow_log: Optional[logging.Logger] = None,
 ) -> InboundDeliveryPlan:
-    """
-    Compute local_rcpts and mail_from without performing SMTP.
-    relationship_live: no legacy fallback on miss/error.
-    """
-    legacy_rcpts = final_legacy_rcpts(legacy_resolved, referent_local_inbox)
+    mode = InboundRoutingMode.RELATIONSHIP_LIVE
     mail_from = referent_local_inbox
     sender = (from_address or '').strip()
-
-    if mode == InboundRoutingMode.RELATIONSHIP_LIVE:
-        try:
-            dto = resolve_inbound(int(account_id), sender)
-        except Exception as exc:
-            return InboundDeliveryPlan(
-                mode=mode,
-                local_rcpts=[],
-                mail_from=mail_from,
-                lookup_error=str(exc),
-            )
-        if dto is None:
-            return InboundDeliveryPlan(
-                mode=mode,
-                local_rcpts=[],
-                mail_from=mail_from,
-                skip_reason='no_relationship_match',
-            )
-        validation_err = validate_relationship_for_live(dto)
-        if validation_err:
-            return InboundDeliveryPlan(
-                mode=mode,
-                local_rcpts=[],
-                mail_from=mail_from,
-                relationship_id=int(dto.relationship_id),
-                lookup_error=validation_err,
-            )
-        target = relationship_target_email(dto)
-        assert target is not None
+    try:
+        dto = resolve_inbound(int(account_id), sender)
+    except Exception as exc:
         return InboundDeliveryPlan(
             mode=mode,
-            local_rcpts=[target],
-            mail_from=target,
+            local_rcpts=[],
+            mail_from=mail_from,
+            lookup_error=str(exc),
+        )
+    if dto is None:
+        return InboundDeliveryPlan(
+            mode=mode,
+            local_rcpts=[],
+            mail_from=mail_from,
+            skip_reason='no_relationship_match',
+        )
+    validation_err = validate_relationship_for_live(dto)
+    if validation_err:
+        return InboundDeliveryPlan(
+            mode=mode,
+            local_rcpts=[],
+            mail_from=mail_from,
             relationship_id=int(dto.relationship_id),
-            local_target_email=target,
-            local_client_maildir=dto.local_client_maildir,
+            lookup_error=validation_err,
         )
-
-    # shadow or legacy: legacy routing for delivery
-    if mode == InboundRoutingMode.SHADOW and shadow_enabled:
-        evaluate_inbound_shadow(
-            resolve_inbound=resolve_inbound,
-            account_id=account_id,
-            account_email=account_email,
-            from_address=sender,
-            legacy_delivered=bool(legacy_resolved),
-            legacy_rcpts=list(legacy_rcpts),
-            counters=shadow_counters,
-            log=shadow_log,
-        )
-
+    target = relationship_target_email(dto)
+    assert target is not None
     return InboundDeliveryPlan(
         mode=mode,
-        local_rcpts=list(legacy_rcpts),
-        mail_from=mail_from,
+        local_rcpts=[target],
+        mail_from=target,
+        relationship_id=int(dto.relationship_id),
+        local_target_email=target,
+        local_client_maildir=dto.local_client_maildir,
     )
 
 
@@ -186,30 +179,20 @@ def finalize_inbound_process_result(
     smtp_delivered: bool,
     smtp_error: Optional[str] = None,
 ) -> InboundProcessResult:
-    """Map SMTP outcome + plan to IMAP mark-seen policy."""
-    if plan.mode == InboundRoutingMode.RELATIONSHIP_LIVE:
-        if plan.lookup_error:
-            return InboundProcessResult(
-                mark_imap_seen=False,
-                local_delivered=False,
-                plan=plan,
-                smtp_error=plan.lookup_error,
-            )
-        if plan.skip_reason == 'no_relationship_match':
-            # Interim policy: no local route, acknowledge on IMAP (DELETE not implemented).
-            return InboundProcessResult(
-                mark_imap_seen=True,
-                local_delivered=False,
-                plan=plan,
-                smtp_error='unknown_sender_skipped',
-            )
+    if plan.lookup_error:
         return InboundProcessResult(
-            mark_imap_seen=smtp_delivered,
-            local_delivered=smtp_delivered,
+            mark_imap_seen=False,
+            local_delivered=False,
             plan=plan,
-            smtp_error=smtp_error,
+            smtp_error=plan.lookup_error,
         )
-
+    if plan.skip_reason == 'no_relationship_match':
+        return InboundProcessResult(
+            mark_imap_seen=True,
+            local_delivered=False,
+            plan=plan,
+            smtp_error='unknown_sender_skipped',
+        )
     return InboundProcessResult(
         mark_imap_seen=smtp_delivered,
         local_delivered=smtp_delivered,
@@ -218,318 +201,58 @@ def finalize_inbound_process_result(
     )
 
 
-def shadow_marker_for_divergence_analysis(
-    legacy_resolved: List[str],
-    relationship_id: Optional[int],
-) -> str:
-    """Expose PROMPT-58 classifier for reports/tests."""
-    return classify_inbound_shadow(bool(legacy_resolved), relationship_id)
-
-
-class OutboundRoutingMode(str, Enum):
-    SHADOW = 'shadow'
-    LEGACY = 'legacy'
-    RELATIONSHIP_LIVE = 'relationship_live'
-
-
-class OutboundWatchMode(str, Enum):
-    REFERENT_ONLY = 'referent_only'
-    DUAL = 'dual'
-    RELATIONSHIP_ONLY = 'relationship_only'
-
-
-def parse_outbound_watch_mode(
-    environ: Optional[dict] = None,
-) -> OutboundWatchMode:
-    """
-    OUTBOUND_WATCH_MODE env: referent_only (default) | dual | relationship_only.
-    Unset behaves exactly as referent_only (PROMPT-66).
-    """
-    env = environ if environ is not None else os.environ
-    raw = (env.get('OUTBOUND_WATCH_MODE') or 'referent_only').strip().lower()
-    if raw in ('dual',):
-        return OutboundWatchMode.DUAL
-    if raw in ('relationship_only', 'relationship'):
-        return OutboundWatchMode.RELATIONSHIP_ONLY
-    return OutboundWatchMode.REFERENT_ONLY
-
-
-def resolve_effective_outbound_watch_mode(
-    *,
-    watch_mode: OutboundWatchMode,
-    routing_mode: OutboundRoutingMode,
-    log: Optional[logging.Logger] = None,
-) -> OutboundWatchMode:
-    """
-    relationship_only is only valid with relationship_live routing.
-    Incompatible combo fails closed to referent_only (logged).
-    """
-    if watch_mode != OutboundWatchMode.RELATIONSHIP_ONLY:
-        return watch_mode
-    if routing_mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
-        return watch_mode
-    message = (
-        'OUTBOUND_WATCH_MODE=relationship_only requires '
-        'OUTBOUND_ROUTING_MODE=relationship_live; '
-        f'got OUTBOUND_ROUTING_MODE={routing_mode.value} — '
-        'failing closed to referent_only'
-    )
-    if log is not None:
-        log.error(message)
-    return OutboundWatchMode.REFERENT_ONLY
-
-
-@dataclass(frozen=True)
-class ReferentEffectiveModes:
-    """Resolved per-referent routing/watch modes (PROMPT-73)."""
-
-    referent_id: int
-    inbound_routing: InboundRoutingMode
-    outbound_routing: OutboundRoutingMode
-    outbound_watch: OutboundWatchMode
-
-
-def parse_optional_inbound_routing_mode(
-    value: Optional[str],
-) -> Optional[InboundRoutingMode]:
-    if value is None:
-        return None
-    raw = str(value).strip().lower()
-    if not raw:
-        return None
-    if raw in ('legacy',):
-        return InboundRoutingMode.LEGACY
-    if raw in ('relationship_live', 'live', 'relationship'):
-        return InboundRoutingMode.RELATIONSHIP_LIVE
-    if raw in ('shadow',):
-        return InboundRoutingMode.SHADOW
-    return None
-
-
-def parse_optional_outbound_routing_mode(
-    value: Optional[str],
-) -> Optional[OutboundRoutingMode]:
-    if value is None:
-        return None
-    raw = str(value).strip().lower()
-    if not raw:
-        return None
-    if raw in ('legacy',):
-        return OutboundRoutingMode.LEGACY
-    if raw in ('relationship_live', 'live', 'relationship'):
-        return OutboundRoutingMode.RELATIONSHIP_LIVE
-    if raw in ('shadow',):
-        return OutboundRoutingMode.SHADOW
-    return None
-
-
-def parse_optional_outbound_watch_mode(
-    value: Optional[str],
-) -> Optional[OutboundWatchMode]:
-    if value is None:
-        return None
-    raw = str(value).strip().lower()
-    if not raw:
-        return None
-    if raw in ('dual',):
-        return OutboundWatchMode.DUAL
-    if raw in ('relationship_only', 'relationship'):
-        return OutboundWatchMode.RELATIONSHIP_ONLY
-    if raw in ('referent_only',):
-        return OutboundWatchMode.REFERENT_ONLY
-    return None
-
-
-def resolve_effective_inbound_routing_mode(
-    override: Optional[InboundRoutingMode],
-    global_default: InboundRoutingMode,
-) -> InboundRoutingMode:
-    return override if override is not None else global_default
-
-
-def resolve_effective_outbound_routing_mode(
-    override: Optional[OutboundRoutingMode],
-    global_default: OutboundRoutingMode,
-) -> OutboundRoutingMode:
-    return override if override is not None else global_default
-
-
-def resolve_referent_effective_modes(
-    *,
-    referent_id: int,
-    inbound_override: Optional[InboundRoutingMode],
-    outbound_override: Optional[OutboundRoutingMode],
-    watch_override: Optional[OutboundWatchMode],
-    global_inbound: InboundRoutingMode,
-    global_outbound: OutboundRoutingMode,
-    global_watch: OutboundWatchMode,
-    log: Optional[logging.Logger] = None,
-) -> ReferentEffectiveModes:
-    """
-    effective(mode_col, global) = mode_col if not NULL else global;
-    per-referent fail-closed watch rule via resolve_effective_outbound_watch_mode.
-    """
-    inbound = resolve_effective_inbound_routing_mode(
-        inbound_override, global_inbound
-    )
-    outbound = resolve_effective_outbound_routing_mode(
-        outbound_override, global_outbound
-    )
-    watch_requested = (
-        watch_override if watch_override is not None else global_watch
-    )
-    watch = resolve_effective_outbound_watch_mode(
-        watch_mode=watch_requested,
-        routing_mode=outbound,
-        log=log,
-    )
-    return ReferentEffectiveModes(
-        referent_id=int(referent_id),
-        inbound_routing=inbound,
-        outbound_routing=outbound,
-        outbound_watch=watch,
-    )
-
-
-def referent_effective_modes_as_dict(modes: ReferentEffectiveModes) -> Dict[str, str]:
-    return {
-        'effective_inbound_routing_mode': modes.inbound_routing.value,
-        'effective_outbound_routing_mode': modes.outbound_routing.value,
-        'effective_outbound_watch_mode': modes.outbound_watch.value,
-    }
-
-
-def parse_outbound_routing_mode(
-    environ: Optional[dict] = None,
-) -> OutboundRoutingMode:
-    """
-    OUTBOUND_ROUTING_MODE env: shadow (default) | legacy | relationship_live.
-    Safe default after deploy: shadow.
-    """
-    env = environ if environ is not None else os.environ
-    raw = (env.get('OUTBOUND_ROUTING_MODE') or 'shadow').strip().lower()
-    if raw in ('legacy',):
-        return OutboundRoutingMode.LEGACY
-    if raw in ('relationship_live', 'live', 'relationship'):
-        return OutboundRoutingMode.RELATIONSHIP_LIVE
-    return OutboundRoutingMode.SHADOW
-
-
 class _ResolveOutbound(Protocol):
     def __call__(self, local_client_email: str) -> Optional[ClientRelationshipDTO]:
         ...
 
 
-class _LoadLegacyOutboundAccount(Protocol):
-    def __call__(self, referent_id: int) -> Optional[Dict[str, Any]]:
-        ...
-
-
 @dataclass(frozen=True)
 class OutboundDeliveryPlan:
-    """Resolved outbound routing decision (before SMTP enqueue)."""
-
     mode: OutboundRoutingMode
     account: Optional[Dict[str, Any]]
     outbound_identity: Optional[str] = None
     relationship_id: Optional[int] = None
     external_account_id: Optional[int] = None
-    legacy_account_id: Optional[int] = None
     lookup_error: Optional[str] = None
     skip_reason: Optional[str] = None
 
 
 def extract_outbound_identity_from_message(msg: Any) -> str:
-    """
-    Outbound routing key: RFC822 From address (local_client_email).
-    Mirrors inbound use of From-only parsing.
-    """
     return extract_message_from_address(msg)
 
 
 def account_dict_from_relationship(dto: ClientRelationshipDTO) -> Dict[str, Any]:
-    """Account payload for SmtpTask from resolved ClientRelationship."""
     return dict(dto.account)
 
 
 def plan_outbound_delivery(
     *,
-    mode: OutboundRoutingMode,
     resolve_outbound: _ResolveOutbound,
-    load_legacy_account: _LoadLegacyOutboundAccount,
     from_address: str,
-    referent_id: int,
-    shadow_enabled: bool,
-    shadow_counters: Optional[ShadowCounters] = None,
-    shadow_log: Optional[logging.Logger] = None,
 ) -> OutboundDeliveryPlan:
-    """
-    Compute external SMTP account without performing delivery.
-    relationship_live: no legacy fallback on miss/error.
-    shadow: legacy account for delivery; relationship lookup observational only.
-    """
+    mode = OutboundRoutingMode.RELATIONSHIP_LIVE
     identity = (from_address or '').strip()
-    legacy_account = load_legacy_account(int(referent_id))
-    legacy_account_id = (
-        int(legacy_account['id']) if legacy_account and legacy_account.get('id') else None
-    )
-
-    if mode == OutboundRoutingMode.RELATIONSHIP_LIVE:
-        try:
-            dto = resolve_outbound(identity)
-        except Exception as exc:
-            return OutboundDeliveryPlan(
-                mode=mode,
-                account=None,
-                outbound_identity=identity or None,
-                lookup_error=str(exc),
-            )
-        if dto is None:
-            return OutboundDeliveryPlan(
-                mode=mode,
-                account=None,
-                outbound_identity=identity or None,
-                skip_reason='no_relationship_match',
-            )
-        account = account_dict_from_relationship(dto)
-        return OutboundDeliveryPlan(
-            mode=mode,
-            account=account,
-            outbound_identity=identity or None,
-            relationship_id=int(dto.relationship_id),
-            external_account_id=int(dto.external_account_id),
-        )
-
-    if mode == OutboundRoutingMode.SHADOW and shadow_enabled:
-        evaluate_outbound_shadow(
-            resolve_outbound=resolve_outbound,
-            from_address=identity,
-            legacy_account_id=legacy_account_id,
-            referent_id=int(referent_id),
-            counters=shadow_counters,
-            log=shadow_log,
-        )
-
-    if legacy_account is None:
+    try:
+        dto = resolve_outbound(identity)
+    except Exception as exc:
         return OutboundDeliveryPlan(
             mode=mode,
             account=None,
             outbound_identity=identity or None,
-            legacy_account_id=legacy_account_id,
-            skip_reason='no_legacy_account',
+            lookup_error=str(exc),
         )
-
+    if dto is None:
+        return OutboundDeliveryPlan(
+            mode=mode,
+            account=None,
+            outbound_identity=identity or None,
+            skip_reason='no_relationship_match',
+        )
+    account = account_dict_from_relationship(dto)
     return OutboundDeliveryPlan(
         mode=mode,
-        account=legacy_account,
+        account=account,
         outbound_identity=identity or None,
-        legacy_account_id=legacy_account_id,
+        relationship_id=int(dto.relationship_id),
+        external_account_id=int(dto.external_account_id),
     )
-
-
-def shadow_marker_for_outbound_divergence(
-    legacy_account_id: Optional[int],
-    relationship_account_id: Optional[int],
-) -> str:
-    """Expose outbound shadow classifier for reports/tests."""
-    return classify_outbound_shadow(legacy_account_id, relationship_account_id)

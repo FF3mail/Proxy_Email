@@ -121,18 +121,9 @@ return [
     'referent.mailbox_not_found' => 'Mailbox for {email} not found. Create the mailbox in iRedMail before adding a referent.',
     'referent.storage_unavailable' => 'Unable to determine mail storage location',
     'referent.maildir_invalid' => 'Invalid Maildir path',
-    'referent.mode_section' => 'Routing / watch mode overrides',
-    'referent.mode_section_hint' => 'Leave empty to inherit process-global daemon defaults. Changes apply only after a daemon restart.',
-    'referent.mode.inherit_global' => '(inherit global)',
     'referent.field.inbound_routing_mode' => 'Inbound routing override',
     'referent.field.outbound_routing_mode' => 'Outbound routing override',
     'referent.field.outbound_watch_mode' => 'Outbound watch override',
-    'referent.mode.routing.legacy' => 'legacy',
-    'referent.mode.routing.shadow' => 'shadow',
-    'referent.mode.routing.relationship_live' => 'relationship_live',
-    'referent.mode.watch.referent_only' => 'referent_only',
-    'referent.mode.watch.dual' => 'dual',
-    'referent.mode.watch.relationship_only' => 'relationship_only',
 
     // ClientRelationship (PROMPT-56)
     'relationship.list_title' => 'Client relationships',
@@ -332,6 +323,8 @@ return [
 
     // PROMPT-69 — relationship routing observability (read-only)
     'observability.title' => 'Relationship routing status',
+    'observability.stub_title' => 'Observability refresh (PROMPT-79.2)',
+    'observability.stub_body' => 'Legacy shadow-mode stats and per-referent routing overrides were removed in PROMPT-79.1. Live relationship routing observability will return in PROMPT-79.2.',
     'observability.hint' => 'Read-only snapshot: daemon startup modes, per-relationship shadow markers (from log tail), process-wide shadow counters, and watch-path collision warnings. No control actions on this page.',
     'observability.refresh' => 'Refresh',
     'observability.log_tail' => 'Daemon log tail: {lines} lines from {path}',

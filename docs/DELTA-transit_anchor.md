@@ -1,4 +1,4 @@
-# DELTA-transit — Якорный документ v3.9
+# DELTA-transit — Якорный документ v4.0
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-11  
@@ -66,8 +66,8 @@ DELTA-transit/
 │       └── providers_ui.php
 ├── mail-proxy-daemon.py
 ├── relationship_lookup.py           # ClientRelationship lookup (PROMPT-53/54)
-├── relationship_shadow.py           # Stage 1 shadow-mode helpers (PROMPT-58)
-├── relationship_routing.py          # Stage 2a inbound routing modes (PROMPT-63)
+├── relationship_routing.py          # Relationship-centric routing (live-only, PROMPT-79.1)
+├── mail-proxy.service.d/routing.conf  # Production routing Environment= drop-in
 ├── mail-proxy.service
 ├── mail-proxy-setup.sh              # быстрая установка демона (без полного инсталлятора)
 ├── delta-transit-install.sh         # полный инсталлятор v3.1.0
@@ -591,4 +591,19 @@ Locally originated messages are **already single-attachment** by house conventio
 
 ---
 
-*Конец документа · DELTA-transit Anchor v3.9*
+## 20. PROMPT-79.1 — Legacy shadow removal (live-only routing)
+
+**Reports:** [`docs/reports/PROMPT-79-0-inventory.md`](reports/PROMPT-79-0-inventory.md), [`docs/reports/PROMPT-79-1-legacy-shadow-removal.md`](reports/PROMPT-79-1-legacy-shadow-removal.md)
+
+| Field | Value |
+|-------|-------|
+| **Scope** | Remove `relationship_shadow.py`, shadow/legacy/dual routing paths, per-referent mode UI, shadow observability parsing |
+| **Daemon** | `relationship_routing.py` live-only; `mail-proxy-daemon.py` relationship-only watches; override cache removed |
+| **Production modes** | `INBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_WATCH_MODE=relationship_only` via `mail-proxy.service.d/routing.conf` |
+| **Panel** | Referent form no longer edits `inbound_routing_mode` / `outbound_*` columns; `relationship-status.php` stub until PROMPT-79.2 |
+| **Schema** | DB override columns retained (cleanup deferred PROMPT-79.4) |
+| **Verdict** | See closure report |
+
+---
+
+*Конец документа · DELTA-transit Anchor v4.0*
