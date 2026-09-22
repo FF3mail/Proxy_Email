@@ -189,6 +189,10 @@ Dashboard → **«Создать референта»** (`action=referent_form`)
 
 **Комментарий:** мониторинг читает файлы логов напрямую — права `www-data` на логи через группу `mail-proxy-logs`.
 
+### Статус маршрутизации (`relationship-status.php`)
+
+Навигационный пункт сохранён. С **PROMPT-79.1** страница показывает заглушку: shadow-статистика и per-referent overrides удалены; полноценная observability для live routing запланирована в **PROMPT-79.2**.
+
 ---
 
 ## 5.9. CSRF-защита

@@ -29,7 +29,6 @@ sys.path.insert(0, str(ROOT))
 from message_rebuild import rebuild_inbound_fanout
 from relationship_lookup import ClientRelationshipDTO, normalize_email
 from relationship_routing import (
-    OutboundRoutingMode,
     extract_outbound_identity_from_message,
     plan_outbound_delivery,
 )
@@ -196,12 +195,8 @@ class TestRebuildOutboundEchoMechanism(unittest.TestCase):
             return None
 
         raw_plan = plan_outbound_delivery(
-            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
             resolve_outbound=resolve_outbound,
-            load_legacy_account=lambda _r: None,
             from_address=raw_from,
-            referent_id=1,
-            shadow_enabled=False,
         )
         self.assertEqual(raw_plan.skip_reason, 'no_relationship_match')
 
@@ -229,12 +224,8 @@ class TestRebuildOutboundEchoMechanism(unittest.TestCase):
                 normalize_email(dto.local_client_email),
             )
             rebuild_plan = plan_outbound_delivery(
-                mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
                 resolve_outbound=resolve_outbound,
-                load_legacy_account=lambda _r: None,
                 from_address=child_from,
-                referent_id=1,
-                shadow_enabled=False,
             )
             self.assertIsNone(rebuild_plan.skip_reason)
             self.assertEqual(rebuild_plan.relationship_id, 1)

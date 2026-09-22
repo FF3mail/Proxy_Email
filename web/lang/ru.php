@@ -122,18 +122,9 @@ return [
     'referent.mailbox_not_found' => 'Ящик для {email} не найден. Создайте почтовый ящик в iRedMail перед добавлением референта.',
     'referent.storage_unavailable' => 'Не удалось определить расположение почтового хранилища',
     'referent.maildir_invalid' => 'Некорректный путь Maildir',
-    'referent.mode_section' => 'Переопределения режимов routing / watch',
-    'referent.mode_section_hint' => 'Пусто = наследовать глобальные значения демона. Изменения применяются только после перезапуска демона.',
-    'referent.mode.inherit_global' => '(глобальный по умолчанию)',
     'referent.field.inbound_routing_mode' => 'Переопределение inbound routing',
     'referent.field.outbound_routing_mode' => 'Переопределение outbound routing',
     'referent.field.outbound_watch_mode' => 'Переопределение outbound watch',
-    'referent.mode.routing.legacy' => 'legacy',
-    'referent.mode.routing.shadow' => 'shadow',
-    'referent.mode.routing.relationship_live' => 'relationship_live',
-    'referent.mode.watch.referent_only' => 'referent_only',
-    'referent.mode.watch.dual' => 'dual',
-    'referent.mode.watch.relationship_only' => 'relationship_only',
 
     // ClientRelationship (PROMPT-56)
     'relationship.list_title' => 'Связи с клиентами (ClientRelationship)',
@@ -333,6 +324,8 @@ return [
 
     // PROMPT-69 — observability связей (только чтение)
     'observability.title' => 'Статус маршрутизации связей',
+    'observability.stub_title' => 'Обновление observability (PROMPT-79.2)',
+    'observability.stub_body' => 'В PROMPT-79.1 удалены shadow-статистика и per-referent переопределения режимов. Observability для live relationship routing вернётся в PROMPT-79.2.',
     'observability.hint' => 'Снимок только для чтения: режимы демона при старте, shadow-маркеры по связям (из хвоста лога), процессные счётчики shadow и предупреждения о коллизии watch-путей. Без управляющих действий.',
     'observability.refresh' => 'Обновить',
     'observability.log_tail' => 'Хвост лога демона: {lines} строк из {path}',
