@@ -104,6 +104,18 @@ else
     exit 1
 fi
 
+# 5b. Routing mode drop-in (PROMPT-79.1)
+if [[ -f ./mail-proxy.service.d/routing.conf ]]; then
+    install -d -m 0755 /etc/systemd/system/mail-proxy.service.d
+    install -m 0644 -o root -g root \
+        ./mail-proxy.service.d/routing.conf \
+        /etc/systemd/system/mail-proxy.service.d/routing.conf
+    systemctl daemon-reload
+    echo "  [OK] mail-proxy.service.d/routing.conf установлен"
+else
+    echo "  [WARN] mail-proxy.service.d/routing.conf не найден — режимы routing из окружения unit"
+fi
+
 # 6. Увеличение inotify лимита
 if ! grep -q 'fs.inotify.max_user_watches' /etc/sysctl.conf; then
     echo 'fs.inotify.max_user_watches = 65536' >> /etc/sysctl.conf

@@ -2800,6 +2800,19 @@ verify_systemd_unit() {
 
 reload_systemd() { systemctl daemon-reload; }
 
+install_routing_dropin() {
+    local src="./mail-proxy.service.d/routing.conf"
+    local target="/etc/systemd/system/mail-proxy.service.d/routing.conf"
+    if [[ ! -f "$src" ]]
+    then
+        log_warn "mail-proxy.service.d/routing.conf not found — skipping routing drop-in"
+        return 0
+    fi
+    install -d -m 0755 /etc/systemd/system/mail-proxy.service.d
+    install -m 0644 -o root -g root "$src" "$target"
+    log_ok "Installed routing drop-in: $target"
+}
+
 enable_service() { systemctl enable mail-proxy.service; }
 
 verify_unit_paths() {
@@ -2829,6 +2842,7 @@ phase_systemd() {
     validate_service_source
     install_tmpfiles
     install_systemd_unit
+    install_routing_dropin
     verify_unit_paths
     verify_systemd_unit
     install_logrotate
