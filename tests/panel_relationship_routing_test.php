@@ -54,6 +54,6 @@ assert_contains($index, 'Client created for referent', 'legacy client INSERT pat
 assert_contains($index, 'Client updated for referent', 'legacy client UPDATE path retained');
 
 $daemon = file_get_contents($root . '/mail-proxy-daemon.py');
-assert_true($daemon !== false && !str_contains($daemon, 'relationship_lookup'), 'daemon still ignores relationship_lookup');
+assert_true($daemon !== false && str_contains($daemon, 'relationship_lookup'), 'daemon uses relationship_lookup for live routing');
 
 echo "OK: panel relationship routing static checks passed\n";

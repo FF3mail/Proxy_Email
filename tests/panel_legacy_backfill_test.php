@@ -77,8 +77,8 @@ assert_contains($ru, "'backfill.count'", 'RU backfill.count');
 assert_contains($en, "'backfill.count'", 'EN backfill.count');
 assert_contains($en, 'still on the legacy model', 'EN progress sentence');
 
-// Daemon unchanged for this feature
-assert_not_contains($daemon, 'relationship_lookup', 'daemon still ignores relationship_lookup');
+// Daemon: backfill is panel-only; live routing uses relationship_lookup (PROMPT-79.1)
+assert_contains($daemon, 'relationship_lookup', 'daemon uses relationship_lookup');
 assert_not_contains($daemon, 'relationship_backfill', 'daemon has no backfill wiring');
 
 // Predicate before/after (Task 4) — load helper functions directly
