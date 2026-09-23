@@ -34,9 +34,10 @@ Modified: `mail-proxy-daemon.py`, `relationship_lookup.py`, `relationship_routin
 | Phase | Command | Result |
 |-------|---------|--------|
 | **Before** (origin/master) | `py -3 -m unittest discover -s tests -p "test_*.py"` | **67** run, **0** failures, **11** skipped |
-| **After** | same | **90** run, **0** failures, **11** skipped |
+| **After implement** | same | **90** run, **0** failures, **11** skipped |
+| **After deploy-verify-fixups** | same | **95** run, **0** failures, **11** skipped |
 
-**Reconciliation:** +23 tests from `test_attachment_policy` + `test_mail_passage_journal` (+ one extra dispose-flag case in routing). No removals.
+**Reconciliation:** +23 from implement (`test_attachment_policy` + `test_mail_passage_journal` + routing). +5 from deploy-verify-fixups (`test_referent_handler_data` x2 + `test_purge_mail_passage_journal` x3).
 
 **PHP:** `tests/panel_mail_passage_journal_test.php` — **OK** on VPS PHP 8.3.6 (PROMPT-79.2-deploy-verify), together with routing + path-guard panel scripts.
 
@@ -86,7 +87,7 @@ Pre-restart ERROR burst explained by prior `[MESSAGE_REBUILD] zero_attachments` 
 | 4.1 | Outbound zero attachments | journal id **5**: `disposed`/`outbound`/`zero_attachments`/`notified=1`; maildir file deleted; §4 notify delivered to `refloc1` (dovecot hdr.subject «Ошибка доставки — clientint1@frona.ru») |
 | 4.2 | Inbound silent dispose | ids **1–4**: inbound `disposed` with `zero_attachments`/`multiple_attachments`, **`notified=0`** (auto-dispose of prior UNSEEN after restart). Synthetic external SMTP for crafted `no_relationship` sender rejected (`550 User unknown` on frona.ru) — silent inbound dispose still proven; reason `no_relationship` not exercised live |
 | 4.2b | Outbound inactive | id **6** first attempt `notified=0` due to `_referent_handler_data` returning only `{id}` → notify skipped. Fix deployed; id **10** `relationship_inactive`/`notified=1`. Clients.id=1 restored `active=1` |
-| 4.3 | Fan-out N journal rows | Pilot has 1 local_rcpt so full daemon multi-rebuild not available; live writer path wrote **2** `delivered` rows for same Message-ID (ids **8–9**, then **12–13**) — contract confirmed on live DB |
+| 4.3 | Fan-out N journal rows | **Deferred (tracked)** — not verified on real daemon path. See deploy-verify-fixups Task 1. Helper/writer contract only (ids 8-9, 12-13). |
 | 4.4 | Valid `.ZIP` vs subject `.zip` | id **11** (and earlier id **7**): `delivered`/`outbound`, no disposal; file removed from `new/` |
 | 4.5 | Lookup DB fault → no dispose | **Deferred** — unsafe on live pilot (would risk mid-flight mail). Fail-closed covered by unit tests |
 
@@ -109,23 +110,50 @@ Pre-restart ERROR burst explained by prior `[MESSAGE_REBUILD] zero_attachments` 
 
 | Suite | Result |
 |-------|--------|
-| Python (local, post-fixup) | **90** run / **0** fail / **11** skipped |
+| Python (local, post-fixups) | **95** run / **0** fail / **11** skipped |
 | PHP panel (VPS 8.3.6) | **3** scripts / **0** fail |
 
-### Final snapshot
+### Final snapshot (after cleanup)
 
 - Modes: unchanged. clients.id=1 `active=1`. daemon **active**.
-- UNSEEN_R final=**9** (was 6): explained by synthetic notify + fan-out deliveries into refloc1 — not mode drift.
-- UNSEEN_C final=**0** (unchanged).
+- UNSEEN_R restored to **6** (pre-deploy baseline): removed 4 PROMPT-79.2 synthetics (2 notify + 2 helper FANOUT). Remaining 6 are prior PROMPT-77.3/77.4 probe children — left as historical probes, not this pass.
+- Journal rows retained (panel evidence).
+- UNSEEN_C = **0**.
+
+## Deploy-verify-fixups (PROMPT-79.2-deploy-verify-fixups — 2026-09-23)
+
+### Task 1 — Fan-out E2E: deferred with plan
+
+**Not safely feasible on this lab VPS without changing product/pilot semantics:**
+
+1. Only one referent (`id=1`); relationships 1 and 2 each have a single `local_referent_email`.
+2. `plan_inbound_delivery` always builds `local_rcpts=[target]` (length 1).
+3. Attachment policy requires exactly one archive attachment before delivery; multi-attachment inbound is disposed and never reaches the `journal_delivered` fan-out loop.
+4. A disposable second referent would not create multi-rcpt plans without schema/planner changes.
+
+**Close on:** dedicated non-production test host / pre-production test-bed (PROMPT-79 roadmap follow-on). Track as **Step 4.3 deferred to test-bed**. Unit helper contract remains covered (`FanoutJournalRowsTest`).
+
+### Task 2 — Regression tests for live bugs
+
+| Bug | Why suite missed it | New tests |
+|-----|---------------------|-----------|
+| `_referent_handler_data` returned `{id}` only | Fixtures never asserted `local_inbox` on the real loader; notify path not covered | `tests/test_referent_handler_data.py` (2) |
+| Purge ignored `[db]` `db_*` keys | Purge had no unit tests | `tests/test_purge_mail_passage_journal.py` (3) |
+
+**Count:** 90 → **95** (+5), all green.
+
+### Task 3 — Test-data cleanup
+
+Deleted 4 PROMPT792 synthetics from `refloc1/.../new` (UNSEEN 10→6). Retained PROMPT-77.3/77.4 probes. Journal table left intact for panel.
 
 ## Verdict
 
-**ACCEPTED** — migration 004 live; disposal + journal + notify + panel + purge verified on lab VPS; live notify-address fix and purge conf fix included. PR #32 ready for review; **do not merge without operator confirmation**.
+**ACCEPTED with tracked gap** — live verify otherwise clean; bugs fixed and regression-tested; UNSEEN restored; **Step 4.3 fan-out E2E deferred to test-bed** (explicit in PR). Do not merge without operator confirmation.
 
 ## Out of scope (deferred)
 
+- Step 4.3 daemon-path N-recipient journal rows (test-bed)
 - Step 4.5 live DB-fault injection (non-pilot env)
 - Live exercise of disposal_reason=`no_relationship` via external SMTP (provider 550)
-- Full daemon multi-recipient rebuild on a relationship with N>1 local recipients
 - PROMPT-79.4 schema cleanup of override columns
 - Magic-byte archive verification (F6 candidate)
