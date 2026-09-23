@@ -1,4 +1,4 @@
-# DELTA-transit — Якорный документ v4.1
+# DELTA-transit — Якорный документ v4.2
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-23  
@@ -617,7 +617,8 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Storage** | MySQL table `mail_passage_journal` via `migrations/004_mail_passage_journal.sql` (`schema.sql` / `003` untouched) |
 | **Timestamps** | `event_ts` / `received_at` / `action_at` — UTC computed in application code; naive `DATETIME(0)`; never SQL `NOW()` |
 | **One row** | Per delivered recipient/child and per disposal event |
-| **Disposal** | Confirmed `no_relationship`, `relationship_inactive`, or invalid attachment (`zero_attachments`, `multiple_attachments`, `disallowed_extension`, `subject_mismatch`) |
+| **Disposal** | Confirmed `no_relationship`, `relationship_inactive`, or invalid attachment (`zero_attachments`, `disallowed_extension`, `subject_mismatch`; outbound also `multiple_attachments`) |
+| **Inbound multi-attach (79.2c)** | N>=2 approved archives -> split/fan-out (one child per part, Subject=filename); no parent subject check; interim hold removed. Report: `PROMPT-79-2c-inbound-multi-attach-split.md` |
 | **Fail-closed** | Lookup/MIME/DB errors → leave message (UNSEEN / Maildir intact); never dispose on ambiguity |
 | **Write-before-delete** | Journal `INSERT` must succeed before IMAP `\Deleted`+EXPUNGE or Maildir unlink |
 | **Notify** | Outbound disposal → local §4 template to referent; inbound-from-internet → silent; `notified` flipped to 1 only after confirmed send |
@@ -628,4 +629,4 @@ Locally originated messages are **already single-attachment** by house conventio
 
 ---
 
-*Конец документа · DELTA-transit Anchor v4.1*
+*Конец документа · DELTA-transit Anchor v4.2*

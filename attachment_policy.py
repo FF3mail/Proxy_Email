@@ -161,3 +161,118 @@ def validate_single_archive_attachment(
 
     return AttachmentPolicyResult(status='ok', filename=filename)
 
+@dataclass(frozen=True)
+class InboundAttachmentClassification:
+    """PROMPT-79.2c inbound gate: ok_single | split | invalid | error."""
+
+    status: str
+    reason: Optional[str] = None
+    filename: Optional[str] = None
+    approved_filenames: Optional[tuple] = None
+    skipped_filenames: Optional[tuple] = None
+    error: Optional[str] = None
+
+    @property
+    def is_ok_single(self) -> bool:
+        return self.status == 'ok_single'
+
+    @property
+    def is_split(self) -> bool:
+        return self.status == 'split'
+
+    @property
+    def is_invalid(self) -> bool:
+        return self.status == 'invalid'
+
+    @property
+    def is_error(self) -> bool:
+        return self.status == 'error'
+
+    @property
+    def may_deliver(self) -> bool:
+        return self.status in ('ok_single', 'split')
+
+
+def classify_inbound_attachments(
+    raw_bytes: bytes,
+    *,
+    approved_extensions: Optional[Sequence[str]] = None,
+) -> InboundAttachmentClassification:
+    """
+    Inbound attachment classification (PROMPT-79.2c).
+
+    N=0 → invalid zero_attachments
+    N=1 → same rules as validate_single_archive_attachment (ext + subject)
+    N≥2 → split path: no parent subject check; approved-archive parts deliverable;
+          disallowed parts skipped (logged); empty deliverable set →
+          invalid disallowed_extension
+    """
+    allowed = frozenset(
+        e.lower().lstrip('.')
+        for e in (approved_extensions or APPROVED_ARCHIVE_EXTENSIONS)
+    )
+    try:
+        msg = email.message_from_bytes(raw_bytes, policy=policy.default)
+        attachments = enumerate_attachable_parts(msg)
+    except Exception as exc:
+        logger.error('[ATTACHMENT_POLICY] inbound_inspection_error err=%s', exc)
+        return InboundAttachmentClassification(status='error', error=str(exc))
+
+    if not attachments:
+        return InboundAttachmentClassification(
+            status='invalid', reason=DISPOSAL_ZERO
+        )
+
+    if len(attachments) == 1:
+        single = validate_single_archive_attachment(
+            raw_bytes, approved_extensions=approved_extensions
+        )
+        if single.is_error:
+            return InboundAttachmentClassification(
+                status='error', error=single.error
+            )
+        if single.is_invalid:
+            return InboundAttachmentClassification(
+                status='invalid',
+                reason=single.reason,
+                filename=single.filename,
+            )
+        return InboundAttachmentClassification(
+            status='ok_single',
+            filename=single.filename,
+            approved_filenames=(single.filename or '',),
+        )
+
+    # N ≥ 2 — split path (no parent subject_mismatch)
+    approved: List[str] = []
+    skipped: List[str] = []
+    for part in attachments:
+        try:
+            filename = _attachment_filename(part)
+        except Exception as exc:
+            logger.error('[ATTACHMENT_POLICY] inbound_filename_error err=%s', exc)
+            return InboundAttachmentClassification(status='error', error=str(exc))
+        ext = extension_of_filename(filename)
+        if ext not in allowed:
+            skipped.append(filename)
+            logger.warning(
+                '[ATTACHMENT_POLICY] inbound multi-attach skip disallowed '
+                'filename=%s ext=%s',
+                filename,
+                ext or '(none)',
+            )
+            continue
+        approved.append(filename)
+
+    if not approved:
+        return InboundAttachmentClassification(
+            status='invalid',
+            reason=DISPOSAL_EXTENSION,
+            skipped_filenames=tuple(skipped),
+        )
+
+    return InboundAttachmentClassification(
+        status='split',
+        approved_filenames=tuple(approved),
+        skipped_filenames=tuple(skipped),
+    )

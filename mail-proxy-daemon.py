@@ -54,7 +54,7 @@ from relationship_routing import (
 )
 from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
 from attachment_policy import (
-    DISPOSAL_MULTIPLE,
+    classify_inbound_attachments,
     validate_single_archive_attachment,
 )
 from mail_passage_journal import (
@@ -894,42 +894,20 @@ class MailHandler:
                 return finalize_inbound_process_result(plan, False)
 
             raw_bytes = mail_file.read_bytes()
-            policy = validate_single_archive_attachment(raw_bytes)
-            if policy.is_error:
+            # PROMPT-79.2c: N=0/1 use single rules; N≥2 split approved archives
+            inbound_class = classify_inbound_attachments(raw_bytes)
+            if inbound_class.is_error:
                 logger.error(
                     '[ATTACHMENT_POLICY] inbound inspection error — fail closed: %s',
-                    policy.error,
+                    inbound_class.error,
                 )
                 return finalize_inbound_process_result(
-                    plan, False, smtp_error=policy.error or 'attachment_policy_error'
+                    plan,
+                    False,
+                    smtp_error=inbound_class.error or 'attachment_policy_error',
                 )
-            if policy.is_invalid:
-                reason = policy.reason or 'zero_attachments'
-                # PROMPT-79.2-incident-check interim: multi-attach inbound must
-                # NOT be deleted until PROMPT-79.2c splitting ships. Hold with
-                # \Seen only (pre-79.2 style) and log — no journal disposed row
-                # (schema has no "held" state; do not fake delivered either).
-                if reason == DISPOSAL_MULTIPLE:
-                    logger.warning(
-                        '[PROMPT-79.2-INTERIM] inbound multi-attachment message '
-                        'held for manual review, awaiting PROMPT-79.2c splitting: '
-                        'account=%s sender=%s relationship_id=%s message_id=%s '
-                        'referent=%s client=%s local=%s',
-                        account_email,
-                        from_addr or '(empty)',
-                        plan.relationship_id,
-                        source_message_id or '(none)',
-                        plan.referent_name or referent_data.get('username'),
-                        plan.client_name,
-                        plan.local_mailbox or plan.local_target_email,
-                    )
-                    return InboundProcessResult(
-                        mark_imap_seen=True,
-                        local_delivered=False,
-                        plan=plan,
-                        smtp_error='interim_multi_attachment_hold',
-                        dispose_imap=False,
-                    )
+            if inbound_class.is_invalid:
+                reason = inbound_class.reason or 'zero_attachments'
                 logger.info(
                     '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s',
                     reason,
@@ -960,12 +938,16 @@ class MailHandler:
 
             logger.info(
                 'Delivering incoming external mail to local SMTP: %s '
-                '(mode=%s relationship_id=%s target=%s maildir=%s)',
+                '(mode=%s relationship_id=%s target=%s maildir=%s '
+                'inbound_attach=%s approved=%s skipped=%s)',
                 plan.local_rcpts,
                 plan.mode.value,
                 plan.relationship_id,
                 plan.local_target_email,
                 plan.local_client_maildir,
+                inbound_class.status,
+                inbound_class.approved_filenames,
+                inbound_class.skipped_filenames,
             )
             smtp = smtplib.SMTP(
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
@@ -979,6 +961,7 @@ class MailHandler:
                 from_addr=from_addr,
                 received_at=received_at,
                 source_message_id=source_message_id,
+                archive_extensions_only=inbound_class.is_split,
             )
             return finalize_inbound_process_result(
                 plan, delivered, smtp_error=smtp_error
@@ -1013,6 +996,7 @@ class MailHandler:
         from_addr: str,
         received_at=None,
         source_message_id: Optional[str] = None,
+        archive_extensions_only: bool = False,
     ) -> tuple:
         """
         relationship_live inbound: fan-out rebuild then sequential SMTP (RD-13).
@@ -1031,6 +1015,7 @@ class MailHandler:
             mail_file.read_bytes(),
             dto,
             temp_dir=TEMP_DIR,
+            archive_extensions_only=archive_extensions_only,
         )
         if not fanout.success:
             # Rebuild/MIME errors are fail-closed (not disposal).

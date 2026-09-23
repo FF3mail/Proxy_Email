@@ -83,12 +83,18 @@ def rebuild_inbound_fanout(
     dto: ClientRelationshipDTO,
     *,
     temp_dir: str = DEFAULT_TEMP_DIR,
+    archive_extensions_only: bool = False,
+    approved_extensions: Optional[Sequence[str]] = None,
 ) -> FanoutRebuildResult:
     """
     Inbound 1:N fan-out rebuild (spec §1.3, §4.2).
 
     RD-13: all N children rebuild into temp files before returning success.
     Any failure deletes all temps and returns success=False with zero paths.
+
+    When archive_extensions_only=True (PROMPT-79.2c multi-attach), only parts
+    whose filename extension is in the approved archive set are rebuilt;
+    others are skipped (caller already logged them).
     """
     temp_paths: List[Path] = []
     try:
@@ -105,6 +111,42 @@ def rebuild_inbound_fanout(
                 error='zero_attachments',
                 reason='zero_attachments',
             )
+
+        if archive_extensions_only:
+            from attachment_policy import (
+                APPROVED_ARCHIVE_EXTENSIONS,
+                extension_of_filename,
+            )
+
+            allowed = frozenset(
+                e.lower().lstrip('.')
+                for e in (approved_extensions or APPROVED_ARCHIVE_EXTENSIONS)
+            )
+            filtered = []
+            for part in attachments:
+                filename = _attachment_filename(part)
+                ext = extension_of_filename(filename)
+                if ext not in allowed:
+                    logger.warning(
+                        '[MESSAGE_REBUILD] fanout skip disallowed '
+                        'relationship_id=%s filename=%s',
+                        dto.relationship_id,
+                        filename,
+                    )
+                    continue
+                filtered.append(part)
+            attachments = filtered
+            if not attachments:
+                logger.error(
+                    '[MESSAGE_REBUILD] zero_attachments after archive filter '
+                    'relationship_id=%s',
+                    dto.relationship_id,
+                )
+                return FanoutRebuildResult(
+                    success=False,
+                    error='zero_attachments',
+                    reason='zero_attachments',
+                )
 
         children: List[FanoutChildMetadata] = []
         for index, part in enumerate(attachments, start=1):
