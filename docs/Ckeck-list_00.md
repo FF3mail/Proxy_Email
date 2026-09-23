@@ -1,5 +1,8 @@
 # Чек-лист развертывания DELTA-transit v3.3 (Пилотная эксплуатация)
 
+> **ИСТОРИЧЕСКИЙ ДОКУМЕНТ — не использовать для новых развёртываний.**  
+> **Актуальный чек-лист:** [guide/10-deployment-checklist.md](guide/10-deployment-checklist.md).
+
 > Синхронизирован с [DELTA-transit_anchor.md](DELTA-transit_anchor.md) v3.3.
 
 ## 1. Подготовка ОС
