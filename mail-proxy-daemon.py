@@ -31,7 +31,7 @@ from cryptography.hazmat.backends import default_backend
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# PROMPT-58 Stage 1: RelationshipLookup import is additive/shadow-only.
+# PROMPT-58: RelationshipLookup for live relationship resolution (inbound/outbound).
 # relationship_lookup.py has no top-level side effects beyond class/function defs.
 from relationship_lookup import RelationshipLookup
 from relationship_routing import (
@@ -316,7 +316,7 @@ class MailHandler:
         self._cryptor = cryptor
         self._imap_size_skip_tracker: Dict[tuple, int] = {}
         self._imap_size_skip_lock = threading.Lock()
-        # PROMPT-58 Stage 1 — used only for shadow logging, never for delivery.
+        # Live relationship graph lookups (RelationshipLookup).
         self._relationship_lookup = RelationshipLookup(db)
 
     def _plain_auth_login(self, acc: Dict[str, Any]) -> str:
