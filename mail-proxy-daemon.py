@@ -53,7 +53,10 @@ from relationship_routing import (
     plan_outbound_delivery,
 )
 from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
-from attachment_policy import validate_single_archive_attachment
+from attachment_policy import (
+    DISPOSAL_MULTIPLE,
+    validate_single_archive_attachment,
+)
 from mail_passage_journal import (
     DIRECTION_INBOUND,
     DIRECTION_OUTBOUND,
@@ -902,6 +905,31 @@ class MailHandler:
                 )
             if policy.is_invalid:
                 reason = policy.reason or 'zero_attachments'
+                # PROMPT-79.2-incident-check interim: multi-attach inbound must
+                # NOT be deleted until PROMPT-79.2c splitting ships. Hold with
+                # \Seen only (pre-79.2 style) and log — no journal disposed row
+                # (schema has no "held" state; do not fake delivered either).
+                if reason == DISPOSAL_MULTIPLE:
+                    logger.warning(
+                        '[PROMPT-79.2-INTERIM] inbound multi-attachment message '
+                        'held for manual review, awaiting PROMPT-79.2c splitting: '
+                        'account=%s sender=%s relationship_id=%s message_id=%s '
+                        'referent=%s client=%s local=%s',
+                        account_email,
+                        from_addr or '(empty)',
+                        plan.relationship_id,
+                        source_message_id or '(none)',
+                        plan.referent_name or referent_data.get('username'),
+                        plan.client_name,
+                        plan.local_mailbox or plan.local_target_email,
+                    )
+                    return InboundProcessResult(
+                        mark_imap_seen=True,
+                        local_delivered=False,
+                        plan=plan,
+                        smtp_error='interim_multi_attachment_hold',
+                        dispose_imap=False,
+                    )
                 logger.info(
                     '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s',
                     reason,
