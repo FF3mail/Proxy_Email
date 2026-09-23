@@ -25,7 +25,7 @@ Corporate mail proxy gateway between external IMAP/SMTP accounts and local refer
 1. Provision a base virtual-mailbox system (e.g. iRedMail) with test mailboxes.
 2. Run [`delta-transit-install.sh`](delta-transit-install.sh) on the target host.
 3. Apply limits: [`configure_limits.sh`](configure_limits.sh).
-4. Follow the deployment checklist: [`docs/Ckeck-list_00.md`](docs/Ckeck-list_00.md).
+4. Follow the deployment checklist: [guide/10-deployment-checklist.md](docs/guide/10-deployment-checklist.md) (see [docs/README.md](docs/README.md) for the full doc map).
 
 ### Staging / integration host (Ubuntu 24.04, PHP 8.3)
 
@@ -40,13 +40,19 @@ Verified staging baseline: Ubuntu 24.04 LTS, PHP-FPM 8.3, MariaDB 10.11, existin
 
 ## Documentation
 
+Start here: **[docs/README.md](docs/README.md)** — index of operator guide, anchor (SoT), decisions, and historical material.
+
 | Document | Purpose |
 |----------|---------|
+| [docs/README.md](docs/README.md) | Documentation index |
 | [docs/guide/README.md](docs/guide/README.md) | Operator install/ops guide (10 chapters, Markdown) |
+| [docs/guide/10-deployment-checklist.md](docs/guide/10-deployment-checklist.md) | Current deployment / pilot checklist |
 | [docs/DELTA_transit_admin_guide.pdf](docs/DELTA_transit_admin_guide.pdf) | Formal admin reference (PDF) |
-| [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) | Architecture, schema, security, production criteria |
-| [docs/Ckeck-list_00.md](docs/Ckeck-list_00.md) | Pilot deployment verification checklist |
-| [docs/prompts/](docs/prompts/) | Historical prompts (archival; code overrides) |
+| [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) | Architecture, schema, security, production criteria (**SoT**) |
+| [docs/decisions/](docs/decisions/) | ADRs and decision registers |
+| [docs/reports/](docs/reports/) | Historical PROMPT closure reports (**not for ops**) |
+| [docs/prompts/](docs/prompts/) | Historical AI prompts (**not for ops**) |
+| [docs/Ckeck-list_00.md](docs/Ckeck-list_00.md) | Superseded pilot checklist (historical; see guide ch. 10) |
 
 ## Repository
 
