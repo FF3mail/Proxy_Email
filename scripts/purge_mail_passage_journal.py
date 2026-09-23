@@ -8,11 +8,11 @@ uses an application-computed UTC cutoff (not MySQL NOW()).
 Usage:
   python3 scripts/purge_mail_passage_journal.py
 
-Cron example (daily 03:15, after optional mysqldump at 02:00 — see docs/guide/09):
-  15 3 * * * root /usr/bin/python3 /usr/local/bin/purge_mail_passage_journal.py \\
+Cron example (daily 03:15; root crontab matches iRedMail backup style):
+  15 3 * * * /opt/delta-transit/venv/bin/python3 /usr/local/bin/purge_mail_passage_journal.py \\
       >> /var/log/mail-proxy/journal-purge.log 2>&1
 
-Reads DB credentials from /etc/mail-proxy/db.conf (same as the daemon).
+Reads DB credentials from /etc/mail-proxy/db.conf ([db] section, same as the daemon).
 """
 
 from __future__ import annotations
@@ -38,11 +38,22 @@ def utc_now_naive() -> datetime:
 
 
 def load_db_config(path: str) -> dict:
+    """Load /etc/mail-proxy/db.conf ([db] db_host/db_user/db_pass/db_name)."""
     parser = configparser.ConfigParser()
     if not parser.read(path):
         raise FileNotFoundError(f'Cannot read DB conf: {path}')
-    section = 'database' if parser.has_section('database') else parser.sections()[0]
-    cfg = parser[section]
+    if 'db' in parser:
+        section = parser['db']
+        return {
+            'host': section.get('db_host', 'localhost'),
+            'port': int(section.get('db_port', '3306')),
+            'user': section.get('db_user'),
+            'password': section.get('db_pass'),
+            'database': section.get('db_name', 'mail_proxy'),
+        }
+    # Fallback: generic host/user/password/database keys
+    section_name = 'database' if parser.has_section('database') else parser.sections()[0]
+    cfg = parser[section_name]
     return {
         'host': cfg.get('host', 'localhost'),
         'port': int(cfg.get('port', '3306')),

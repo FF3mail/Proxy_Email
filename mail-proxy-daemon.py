@@ -1878,7 +1878,32 @@ class ProxyDaemon:
         self._watch_registered_referent_ids.add(ref_id)
 
     def _referent_handler_data(self, referent_id: int) -> Dict[str, Any]:
-        return {'id': int(referent_id)}
+        """Minimal referent row for Maildir handlers (id + inbox for notify)."""
+        data: Dict[str, Any] = {'id': int(referent_id)}
+        conn = None
+        cursor = None
+        try:
+            conn = self._db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(
+                f"SELECT {_REFERENT_ROW_COLUMNS} FROM referents WHERE id = %s",
+                (int(referent_id),),
+            )
+            row = cursor.fetchone()
+            if row:
+                data.update(dict(row))
+        except Exception as exc:
+            logger.error(
+                'Failed to load referent %s for handler data: %s',
+                referent_id,
+                exc,
+            )
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
+        return data
 
     def _referent_allows_relationship_watch(self, referent_id: int) -> bool:
         return int(referent_id) in self._watch_registered_referent_ids
