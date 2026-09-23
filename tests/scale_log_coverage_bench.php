@@ -8,5 +8,5 @@
  */
 declare(strict_types=1);
 
-fwrite(STDERR, "scale_log_coverage_bench: skipped (PROMPT-79.1 — observability stub)\n");
+fwrite(STDERR, "scale_log_coverage_bench: skipped (PROMPT-79.2 — journal panel uses DB, not log parsing)\n");
 exit(0);

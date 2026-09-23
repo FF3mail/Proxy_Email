@@ -22,7 +22,7 @@ import tempfile
 import mysql.connector
 from mysql.connector import pooling
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
 # Сторонние зависимости, устанавливаемые через mail-proxy-setup.sh
@@ -40,6 +40,9 @@ from relationship_routing import (
     InboundRoutingMode,
     OutboundRoutingMode,
     OutboundWatchMode,
+    SKIP_NO_RELATIONSHIP,
+    SKIP_RELATIONSHIP_INACTIVE,
+    disposal_reason_for_skip,
     extract_message_from_address,
     extract_outbound_identity_from_message,
     finalize_inbound_process_result,
@@ -50,6 +53,19 @@ from relationship_routing import (
     plan_outbound_delivery,
 )
 from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
+from attachment_policy import validate_single_archive_attachment
+from mail_passage_journal import (
+    DIRECTION_INBOUND,
+    DIRECTION_OUTBOUND,
+    MailPassageJournal,
+    utc_now_naive,
+)
+from mail_disposal import (
+    journal_delivered,
+    journal_disposed,
+    maybe_notify_outbound_disposal,
+    unlink_maildir_file,
+)
 
 # Константы конфигурации
 CRYPTO_KEY_FILE = '/etc/mail-proxy/crypto.key'
@@ -318,6 +334,7 @@ class MailHandler:
         self._imap_size_skip_lock = threading.Lock()
         # Live relationship graph lookups (RelationshipLookup).
         self._relationship_lookup = RelationshipLookup(db)
+        self._passage_journal = MailPassageJournal(db)
 
     def _plain_auth_login(self, acc: Dict[str, Any]) -> str:
         """Возвращает логин для plain-аутентификации (username или email)."""
@@ -523,6 +540,41 @@ class MailHandler:
             return status == 'OK'
         except Exception as e:
             logger.error(f"Failed STORE Seen for seq={num!r}: {e}")
+            return False
+
+    def _dispose_imap_message(
+        self, mail: imaplib.IMAP4, uid: Optional[str], num: bytes
+    ) -> bool:
+        """STORE \\Deleted then EXPUNGE. Returns True only if both succeed."""
+        try:
+            if uid:
+                status, _ = mail.uid('STORE', uid, '+FLAGS', '(\\Deleted)')
+            else:
+                status, _ = mail.store(num, '+FLAGS', '(\\Deleted)')
+            if status != 'OK':
+                logger.error(
+                    '[MAIL_DISPOSAL] IMAP STORE Deleted failed uid=%s seq=%r status=%r',
+                    uid,
+                    num,
+                    status,
+                )
+                return False
+            status, _ = mail.expunge()
+            if status != 'OK':
+                logger.error(
+                    '[MAIL_DISPOSAL] IMAP EXPUNGE failed uid=%s status=%r',
+                    uid,
+                    status,
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error(
+                '[MAIL_DISPOSAL] IMAP dispose exception uid=%s seq=%r err=%s',
+                uid,
+                num,
+                e,
+            )
             return False
 
     def _probe_imap_message_size(
@@ -739,7 +791,10 @@ class MailHandler:
                     result = self._deliver_to_local_smtp(
                         temp_path, referent_data, acc
                     )
-                    if result.mark_imap_seen:
+                    if result.dispose_imap:
+                        if self._dispose_imap_message(mail, uid, num):
+                            self._clear_imap_size_skip_entry(account_id, uid, seq)
+                    elif result.mark_imap_seen:
                         mail.store(num, '+FLAGS', '\\Seen')
                         self._clear_imap_size_skip_entry(account_id, uid, seq)
                 finally:
@@ -769,9 +824,15 @@ class MailHandler:
             from_addr = extract_message_from_address(msg)
             account_id = int(account['id']) if account is not None else 0
             account_email = str(account.get('email') or '') if account else ''
+            source_message_id = None
+            try:
+                source_message_id = str(msg.get('Message-ID') or '') or None
+            except Exception:
+                source_message_id = None
+            received_at = utc_now_naive()
 
             plan = plan_inbound_delivery(
-                resolve_inbound=self._relationship_lookup.resolve_inbound,
+                classify_inbound=self._relationship_lookup.classify_inbound,
                 account_id=account_id,
                 account_email=account_email,
                 from_address=from_addr,
@@ -787,14 +848,39 @@ class MailHandler:
                     plan.lookup_error,
                 )
                 return finalize_inbound_process_result(plan, False)
-            if plan.skip_reason == 'no_relationship_match':
+
+            if plan.skip_reason in (SKIP_NO_RELATIONSHIP, SKIP_RELATIONSHIP_INACTIVE):
+                reason = disposal_reason_for_skip(plan.skip_reason)
+                assert reason is not None
                 logger.info(
-                    '[RELATIONSHIP_LIVE] no match account=%s sender=%s '
-                    '— skipped (no legacy fallback)',
+                    '[MAIL_DISPOSAL] inbound dispose reason=%s account=%s sender=%s',
+                    reason,
                     account_email,
                     from_addr or '(empty)',
                 )
-                return finalize_inbound_process_result(plan, False)
+                try:
+                    journal_disposed(
+                        self._passage_journal,
+                        direction=DIRECTION_INBOUND,
+                        disposal_reason=reason,
+                        referent_name=plan.referent_name
+                        or referent_data.get('username'),
+                        client_name=plan.client_name or from_addr or None,
+                        local_mailbox=plan.local_mailbox
+                        or referent_data.get('local_inbox'),
+                        external_mailbox=plan.external_mailbox or from_addr or None,
+                        received_at=received_at,
+                        source_message_id=source_message_id,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
+                        exc,
+                    )
+                    return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, dispose_imap=True
+                )
 
             if not plan.local_rcpts:
                 logger.error(
@@ -803,6 +889,46 @@ class MailHandler:
                     account_email,
                 )
                 return finalize_inbound_process_result(plan, False)
+
+            raw_bytes = mail_file.read_bytes()
+            policy = validate_single_archive_attachment(raw_bytes)
+            if policy.is_error:
+                logger.error(
+                    '[ATTACHMENT_POLICY] inbound inspection error — fail closed: %s',
+                    policy.error,
+                )
+                return finalize_inbound_process_result(
+                    plan, False, smtp_error=policy.error or 'attachment_policy_error'
+                )
+            if policy.is_invalid:
+                reason = policy.reason or 'zero_attachments'
+                logger.info(
+                    '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s',
+                    reason,
+                    account_email,
+                )
+                try:
+                    journal_disposed(
+                        self._passage_journal,
+                        direction=DIRECTION_INBOUND,
+                        disposal_reason=reason,
+                        referent_name=plan.referent_name
+                        or referent_data.get('username'),
+                        client_name=plan.client_name,
+                        local_mailbox=plan.local_mailbox or plan.local_target_email,
+                        external_mailbox=plan.external_mailbox or from_addr or None,
+                        received_at=received_at,
+                        source_message_id=source_message_id,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
+                        exc,
+                    )
+                    return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, dispose_imap=True
+                )
 
             logger.info(
                 'Delivering incoming external mail to local SMTP: %s '
@@ -823,6 +949,8 @@ class MailHandler:
                 plan=plan,
                 account_id=account_id,
                 from_addr=from_addr,
+                received_at=received_at,
+                source_message_id=source_message_id,
             )
             return finalize_inbound_process_result(
                 plan, delivered, smtp_error=smtp_error
@@ -831,7 +959,7 @@ class MailHandler:
             logger.error(f"Local SMTP delivery failed: {e}")
             if plan is None:
                 plan = plan_inbound_delivery(
-                    resolve_inbound=self._relationship_lookup.resolve_inbound,
+                    classify_inbound=self._relationship_lookup.classify_inbound,
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
                     from_address='',
@@ -855,9 +983,12 @@ class MailHandler:
         plan: InboundDeliveryPlan,
         account_id: int,
         from_addr: str,
+        received_at=None,
+        source_message_id: Optional[str] = None,
     ) -> tuple:
         """
         relationship_live inbound: fan-out rebuild then sequential SMTP (RD-13).
+        One journal row per accepted recipient per child (PROMPT-79.2).
         Returns (delivered, smtp_error).
         """
         dto = self._relationship_lookup.resolve_inbound(int(account_id), from_addr)
@@ -874,6 +1005,7 @@ class MailHandler:
             temp_dir=TEMP_DIR,
         )
         if not fanout.success:
+            # Rebuild/MIME errors are fail-closed (not disposal).
             return False, fanout.error or 'rebuild_failed'
 
         rebuild_paths: List[Path] = []
@@ -896,6 +1028,28 @@ class MailHandler:
                         plan.relationship_id,
                     )
                     return False, 'fanout_incomplete'
+                # One journal row per recipient for this child message.
+                for rcpt in plan.local_rcpts:
+                    try:
+                        journal_delivered(
+                            self._passage_journal,
+                            direction=DIRECTION_INBOUND,
+                            referent_name=plan.referent_name
+                            or (dto.referent or {}).get('username'),
+                            client_name=plan.client_name or dto.external_client_email,
+                            local_mailbox=rcpt,
+                            external_mailbox=plan.external_mailbox
+                            or dto.external_client_email,
+                            received_at=received_at,
+                            source_message_id=source_message_id,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            '[MAIL_PASSAGE_JOURNAL] delivered write failed '
+                            'after SMTP — leaving IMAP UNSEEN for retry: %s',
+                            exc,
+                        )
+                        return False, 'journal_write_failed'
                 delivered_count += 1
             return True, None
         finally:
@@ -1001,7 +1155,8 @@ class MailHandler:
     def send_via_external_smtp(self, task: SmtpTask) -> bool:
         """
         Потоковая отправка письма через внешний SMTP.
-        Реализация полностью соответствует патчу PROMPT 02.
+        PROMPT-79.2: attachment policy gate, journal before Maildir delete.
+        Returns True only when the source file may be deleted (sent or disposed).
         """
         acc = task.account
         file_path = task.file_path
@@ -1018,8 +1173,21 @@ class MailHandler:
             )
             return False
         from_address = extract_outbound_identity_from_message(msg)
+        source_message_id = None
         try:
-            dto = self._relationship_lookup.resolve_outbound(from_address)
+            source_message_id = str(msg.get('Message-ID') or '') or None
+        except Exception:
+            source_message_id = None
+        received_at = utc_now_naive()
+        try:
+            received_at = datetime.fromtimestamp(
+                file_path.stat().st_mtime, tz=timezone.utc
+            ).replace(tzinfo=None, microsecond=0)
+        except Exception:
+            pass
+
+        try:
+            classified = self._relationship_lookup.classify_outbound(from_address)
         except Exception as exc:
             logger.error(
                 '[MESSAGE_REBUILD] outbound_lookup_failed file=%s err=%s',
@@ -1027,6 +1195,49 @@ class MailHandler:
                 exc,
             )
             return False
+
+        if classified.status in ('no_match', 'relationship_inactive'):
+            # Race: relationship changed between enqueue and send.
+            reason = (
+                'relationship_inactive'
+                if classified.status == 'relationship_inactive'
+                else 'no_relationship'
+            )
+            try:
+                journal_id = journal_disposed(
+                    self._passage_journal,
+                    direction=DIRECTION_OUTBOUND,
+                    disposal_reason=reason,
+                    referent_name=classified.referent_name
+                    or task.referent_data.get('username'),
+                    client_name=classified.client_name,
+                    local_mailbox=classified.local_mailbox or from_address,
+                    external_mailbox=classified.external_mailbox,
+                    received_at=received_at,
+                    source_message_id=source_message_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
+                )
+                return False
+            notify_to = task.referent_data.get('local_inbox')
+            maybe_notify_outbound_disposal(
+                self._passage_journal,
+                journal_id,
+                direction=DIRECTION_OUTBOUND,
+                referent_name=classified.referent_name
+                or task.referent_data.get('username'),
+                client_name=classified.client_name,
+                notify_to=notify_to,
+                mail_from=notify_to,
+                received_at=received_at,
+                smtp_host=LOCAL_SMTP_HOST,
+                smtp_port=LOCAL_SMTP_PORT,
+            )
+            return True  # worker unlinks
+
+        dto = classified.dto
         if dto is None:
             logger.error(
                 '[MESSAGE_REBUILD] outbound_missing_dto file=%s identity=%s',
@@ -1034,19 +1245,67 @@ class MailHandler:
                 from_address or '(empty)',
             )
             return False
+
+        raw_bytes = file_path.read_bytes()
+        policy = validate_single_archive_attachment(raw_bytes)
+        if policy.is_error:
+            logger.error(
+                '[ATTACHMENT_POLICY] outbound inspection error — fail closed: %s',
+                policy.error,
+            )
+            return False
+        if policy.is_invalid:
+            reason = policy.reason or 'zero_attachments'
+            try:
+                journal_id = journal_disposed(
+                    self._passage_journal,
+                    direction=DIRECTION_OUTBOUND,
+                    disposal_reason=reason,
+                    referent_name=(dto.referent or {}).get('username')
+                    or task.referent_data.get('username'),
+                    client_name=dto.external_client_email or dto.local_client_email,
+                    local_mailbox=dto.local_client_email,
+                    external_mailbox=dto.external_client_email,
+                    received_at=received_at,
+                    source_message_id=source_message_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
+                )
+                return False
+            notify_to = (
+                dto.local_referent_email
+                or task.referent_data.get('local_inbox')
+            )
+            maybe_notify_outbound_disposal(
+                self._passage_journal,
+                journal_id,
+                direction=DIRECTION_OUTBOUND,
+                referent_name=(dto.referent or {}).get('username')
+                or task.referent_data.get('username'),
+                client_name=dto.external_client_email or dto.local_client_email,
+                notify_to=notify_to,
+                mail_from=notify_to,
+                received_at=received_at,
+                smtp_host=LOCAL_SMTP_HOST,
+                smtp_port=LOCAL_SMTP_PORT,
+            )
+            return True  # worker unlinks after dispose
+
         rebuild_result = rebuild_outbound_message(
-            file_path.read_bytes(),
+            raw_bytes,
             dto,
             temp_dir=TEMP_DIR,
         )
         if not rebuild_result.success or rebuild_result.temp_path is None:
             return False
         rebuild_temp = rebuild_result.temp_path
-        file_path = rebuild_temp
+        file_path_send = rebuild_temp
         recipients = [dto.external_client_email]
+        server = None
 
         try:
-            server = None
             if not self._validate_account_settings(acc, 'smtp_encryption', 'SMTP'):
                 return False
             logger.info(
@@ -1134,7 +1393,7 @@ class MailHandler:
                     accepted_rcpts += 1
             if accepted_rcpts == 0:
                 logger.error(
-                    f"All RCPT TO rejected for {file_path.name}, aborting "
+                    f"All RCPT TO rejected for {file_path_send.name}, aborting "
                     f"DATA (no recipients accepted): {rejected_rcpts}"
                 )
                 server.rset()
@@ -1147,10 +1406,10 @@ class MailHandler:
                 server.rset()
                 server.quit()
                 return False
-            file_size = file_path.stat().st_size
+            file_size = file_path_send.stat().st_size
             sent_bytes = 0
 
-            with open(file_path, 'rb') as f:
+            with open(file_path_send, 'rb') as f:
                 carry = b''
                 while True:
                     chunk = f.read(CHUNK_SIZE)
@@ -1183,9 +1442,29 @@ class MailHandler:
                 return False
             server.quit()
             logger.info(
-                f"Email {file_path.name} sent via external SMTP "
+                f"Email {file_path_send.name} sent via external SMTP "
                 f"({sent_bytes} bytes)"
             )
+            # Journal before Maildir unlink (worker deletes source on True).
+            try:
+                journal_delivered(
+                    self._passage_journal,
+                    direction=DIRECTION_OUTBOUND,
+                    referent_name=(dto.referent or {}).get('username')
+                    or task.referent_data.get('username'),
+                    client_name=dto.external_client_email or dto.local_client_email,
+                    local_mailbox=dto.local_client_email,
+                    external_mailbox=dto.external_client_email,
+                    received_at=received_at,
+                    source_message_id=source_message_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_PASSAGE_JOURNAL] delivered write failed after SMTP '
+                    '— not deleting source (retry risk): %s',
+                    exc,
+                )
+                return False
             return True
         except Exception as e:
             logger.error(f"SMTP delivery error for {acc['email']}: {e}")
@@ -1788,7 +2067,7 @@ class ProxyDaemon:
 
         from_address = extract_outbound_identity_from_message(msg)
         plan = plan_outbound_delivery(
-            resolve_outbound=relationship_lookup.resolve_outbound,
+            classify_outbound=relationship_lookup.classify_outbound,
             from_address=from_address,
         )
 
@@ -1804,15 +2083,62 @@ class ProxyDaemon:
             )
             return
 
-        if plan.skip_reason == 'no_relationship_match':
-            logger.warning(
-                '[OUTBOUND_ROUTING] %s referent=%s file=%s identity=%s '
-                'no_relationship_match — not enqueued (retryable)',
-                source,
+        if plan.skip_reason in (SKIP_NO_RELATIONSHIP, SKIP_RELATIONSHIP_INACTIVE):
+            reason = disposal_reason_for_skip(plan.skip_reason)
+            assert reason is not None
+            logger.info(
+                '[MAIL_DISPOSAL] outbound dispose reason=%s referent=%s file=%s',
+                reason,
                 referent_data['id'],
                 file_path.name,
-                plan.outbound_identity or '(empty)',
             )
+            received_at = utc_now_naive()
+            try:
+                mtime = datetime.fromtimestamp(
+                    file_path.stat().st_mtime, tz=timezone.utc
+                ).replace(tzinfo=None, microsecond=0)
+                received_at = mtime
+            except Exception:
+                pass
+            source_message_id = None
+            try:
+                source_message_id = str(msg.get('Message-ID') or '') or None
+            except Exception:
+                pass
+            try:
+                journal_id = journal_disposed(
+                    self._mail_handler._passage_journal,
+                    direction=DIRECTION_OUTBOUND,
+                    disposal_reason=reason,
+                    referent_name=plan.referent_name
+                    or referent_data.get('username'),
+                    client_name=plan.client_name,
+                    local_mailbox=plan.local_mailbox or plan.outbound_identity,
+                    external_mailbox=plan.external_mailbox,
+                    received_at=received_at,
+                    source_message_id=source_message_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_DISPOSAL] journal write failed — not deleting file: %s',
+                    exc,
+                )
+                return
+            notify_to = referent_data.get('local_inbox')
+            mail_from = referent_data.get('local_inbox') or notify_to
+            maybe_notify_outbound_disposal(
+                self._mail_handler._passage_journal,
+                journal_id,
+                direction=DIRECTION_OUTBOUND,
+                referent_name=plan.referent_name or referent_data.get('username'),
+                client_name=plan.client_name,
+                notify_to=notify_to,
+                mail_from=mail_from,
+                received_at=received_at,
+                smtp_host=LOCAL_SMTP_HOST,
+                smtp_port=LOCAL_SMTP_PORT,
+            )
+            unlink_maildir_file(file_path)
             return
 
         if plan.account is None:

@@ -9,6 +9,7 @@
 | Мониторинг диска | Ежедневно | `df -h /var/vmail /var/log` |
 | Проверка панели | По необходимости | `monitor.php` |
 | Ротация логов | Автоматически | logrotate (ежедневно) |
+| Очистка журнала прохождения (>1 год) | Ежедневно (cron) | `scripts/purge_mail_passage_journal.py` |
 
 ---
 
@@ -123,6 +124,21 @@ mysqlcheck -u mail_proxy -p mail_proxy
 ```
 
 Перед major-обновлением MariaDB — полный бэкап (см. [09-backup-restore.md](09-backup-restore.md)).
+
+---
+
+## 6.8a. Журнал прохождения писем (retention)
+
+Таблица `mail_passage_journal` хранит записи **1 год** (ADR-001). Debug-лог демона ротируется отдельно (`logrotate-mail-proxy`, 30 дней) и **не** является источником аудита.
+
+Ежедневный cron (см. также [09-backup-restore.md](09-backup-restore.md)):
+
+```bash
+15 3 * * * root /usr/bin/python3 /path/to/scripts/purge_mail_passage_journal.py \
+  >> /var/log/mail-proxy/journal-purge.log 2>&1
+```
+
+Проверка панели: `/relationship-status.php` (прохождение + нестандартные события).
 
 ---
 
