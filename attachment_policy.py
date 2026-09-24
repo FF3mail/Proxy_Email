@@ -49,6 +49,13 @@ DISPOSAL_EXTENSION = 'disallowed_extension'
 DISPOSAL_SUBJECT = 'subject_mismatch'
 DISPOSAL_TOO_MANY = 'too_many_attachments'
 DISPOSAL_MISSING_FILENAME = 'missing_filename'
+DISPOSAL_NESTED_MESSAGE = 'nested_message'
+
+NESTED_POLICY_ERROR = 'error'
+NESTED_POLICY_OPAQUE = 'opaque'
+
+NESTED_MESSAGE_DISPLAY = '(message/rfc822)'
+KIND_NESTED_MESSAGE = 'nested_message'
 
 CATEGORY_ARCHIVE = 'archive'
 CATEGORY_IMAGE = 'image'
@@ -90,6 +97,7 @@ class PartClassification:
     verdict: str
     missing_filename: bool = False
     content_type: str = ''
+    skip_kind: str = ''
 
 
 @dataclass(frozen=True)
@@ -240,9 +248,23 @@ def _content_disposition_is_attachment(part: Message) -> bool:
     return (disp or '').lower() == 'attachment'
 
 
-def _walk_attachments(part: Message, found: List[Message]) -> None:
-    if (part.get_content_type() or '').lower() == 'message/rfc822':
-        raise ValueError('nested_rfc822')
+def _is_nested_rfc822(part: Message) -> bool:
+    return (part.get_content_type() or '').lower() == 'message/rfc822'
+
+
+def _walk_attachments(
+    part: Message,
+    found: List[Message],
+    *,
+    nested_policy: str = NESTED_POLICY_ERROR,
+) -> None:
+    if _is_nested_rfc822(part):
+        if nested_policy == NESTED_POLICY_ERROR:
+            raise ValueError('nested_rfc822')
+        if nested_policy == NESTED_POLICY_OPAQUE:
+            if _content_disposition_is_attachment(part):
+                found.append(part)
+            return
     if part.is_multipart():
         payload = part.get_payload()
         if not isinstance(payload, list):
@@ -250,28 +272,81 @@ def _walk_attachments(part: Message, found: List[Message]) -> None:
         for subpart in payload:
             if isinstance(subpart, str):
                 raise ValueError('malformed_multipart')
-            _walk_attachments(subpart, found)
+            _walk_attachments(subpart, found, nested_policy=nested_policy)
         return
     if _content_disposition_is_attachment(part):
         found.append(part)
 
 
-def enumerate_attachable_parts(msg: Message) -> List[Message]:
+def enumerate_attachable_parts(
+    msg: Message,
+    *,
+    nested_policy: str = NESTED_POLICY_ERROR,
+) -> List[Message]:
     """
     Single shared enumerator (E5 / E1 / 79.2f): get_content_disposition() == attachment.
     Inline / cid / no-disposition parts are NOT attachments (filename ignored).
+    Outbound uses nested_policy='error'; inbound classification uses 'opaque'.
     """
     found: List[Message] = []
-    _walk_attachments(msg, found)
+    _walk_attachments(msg, found, nested_policy=nested_policy)
     return found
 
 
+def part_skip_disposal_reason(part: PartClassification) -> str:
+    if part.skip_kind == KIND_NESTED_MESSAGE:
+        return DISPOSAL_NESTED_MESSAGE
+    if part.missing_filename:
+        return DISPOSAL_MISSING_FILENAME
+    return DISPOSAL_EXTENSION
+
+
+def part_skip_journal_detail(part: PartClassification) -> str:
+    if part.skip_kind == KIND_NESTED_MESSAGE:
+        return 'nested message/rfc822 filename=%s' % part.filename
+    if part.missing_filename:
+        return 'no filename; content_type=%s' % (part.content_type or '(none)',)
+    return 'filename=%s ext=%s' % (part.filename, part.ext or '(none)')
+
+
+def inbound_disposal_reason_when_all_skipped(
+    parts: Sequence[PartClassification],
+) -> str:
+    skipped = [p for p in parts if p.verdict == VERDICT_SKIP]
+    if not skipped:
+        return DISPOSAL_EXTENSION
+    reasons = {part_skip_disposal_reason(p) for p in skipped}
+    if len(reasons) == 1:
+        return reasons.pop()
+    return DISPOSAL_EXTENSION
+
+
+def inbound_invalid_writes_skipped_rows(reason: str) -> bool:
+    return reason in (
+        DISPOSAL_EXTENSION,
+        DISPOSAL_MISSING_FILENAME,
+        DISPOSAL_NESTED_MESSAGE,
+    )
+
+
 def _walk_non_attachment_named(
-    part: Message, found: List[Tuple[str, str]]
+    part: Message,
+    found: List[Tuple[str, str]],
+    *,
+    nested_policy: str = NESTED_POLICY_ERROR,
 ) -> None:
     """Collect leaf non-attachment parts that have a filename (for detail/DEBUG)."""
-    if (part.get_content_type() or '').lower() == 'message/rfc822':
-        raise ValueError('nested_rfc822')
+    if _is_nested_rfc822(part):
+        if nested_policy == NESTED_POLICY_ERROR:
+            raise ValueError('nested_rfc822')
+        if not _content_disposition_is_attachment(part):
+            raw_name = part.get_filename()
+            if raw_name and str(raw_name).strip():
+                name = decode_mime_filename(str(raw_name))
+                if name:
+                    disposition = (part.get('Content-Disposition') or '').lower()
+                    found.append((name, disposition or '(none)'))
+        return
     if part.is_multipart():
         payload = part.get_payload()
         if not isinstance(payload, list):
@@ -279,7 +354,9 @@ def _walk_non_attachment_named(
         for subpart in payload:
             if isinstance(subpart, str):
                 raise ValueError('malformed_multipart')
-            _walk_non_attachment_named(subpart, found)
+            _walk_non_attachment_named(
+                subpart, found, nested_policy=nested_policy
+            )
         return
     if _content_disposition_is_attachment(part):
         return
@@ -292,9 +369,13 @@ def _walk_non_attachment_named(
         found.append((name, disposition or '(none)'))
 
 
-def collect_non_attachment_named_parts(msg: Message) -> List[Tuple[str, str]]:
+def collect_non_attachment_named_parts(
+    msg: Message,
+    *,
+    nested_policy: str = NESTED_POLICY_ERROR,
+) -> List[Tuple[str, str]]:
     found: List[Tuple[str, str]] = []
-    _walk_non_attachment_named(msg, found)
+    _walk_non_attachment_named(msg, found, nested_policy=nested_policy)
     return found
 
 
@@ -443,8 +524,12 @@ def classify_inbound_attachments(
     )
     try:
         msg = email.message_from_bytes(raw_bytes, policy=policy.default)
-        attachments = enumerate_attachable_parts(msg)
-        non_attach = collect_non_attachment_named_parts(msg)
+        attachments = enumerate_attachable_parts(
+            msg, nested_policy=NESTED_POLICY_OPAQUE
+        )
+        non_attach = collect_non_attachment_named_parts(
+            msg, nested_policy=NESTED_POLICY_OPAQUE
+        )
     except Exception as exc:
         logger.error('[ATTACHMENT_POLICY] inbound_inspection_error err=%s', exc)
         return InboundAttachmentClassification(status='error', error=str(exc))
@@ -476,6 +561,26 @@ def classify_inbound_attachments(
     parts: List[PartClassification] = []
     for idx, part in enumerate(attachments):
         ctype = (part.get_content_type() or '').lower()
+        if _is_nested_rfc822(part) and _content_disposition_is_attachment(part):
+            filename = try_attachment_filename(part) or NESTED_MESSAGE_DISPLAY
+            parts.append(
+                PartClassification(
+                    index=idx,
+                    filename=filename,
+                    ext=extension_of_filename(filename),
+                    category=CATEGORY_OTHER,
+                    verdict=VERDICT_SKIP,
+                    missing_filename=False,
+                    content_type=ctype,
+                    skip_kind=KIND_NESTED_MESSAGE,
+                )
+            )
+            logger.warning(
+                '[ATTACHMENT_POLICY] inbound skip nested_message filename=%s index=%s',
+                filename,
+                idx,
+            )
+            continue
         filename = try_attachment_filename(part)
         if filename is None:
             parts.append(
@@ -587,11 +692,7 @@ def classify_inbound_attachments(
     approved_names = tuple(p.filename for p in parts if p.verdict == VERDICT_DELIVER)
 
     if not deliver_indexes:
-        skipped_parts = [p for p in parts if p.verdict == VERDICT_SKIP]
-        if skipped_parts and all(p.missing_filename for p in skipped_parts):
-            reason = DISPOSAL_MISSING_FILENAME
-        else:
-            reason = DISPOSAL_EXTENSION
+        reason = inbound_disposal_reason_when_all_skipped(parts)
         return InboundAttachmentClassification(
             status='invalid',
             reason=reason,

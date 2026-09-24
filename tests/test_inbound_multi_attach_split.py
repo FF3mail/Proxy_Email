@@ -11,6 +11,7 @@ import unittest
 from email import encoders, header as email_header, policy
 from email.header import Header, decode_header
 from email.mime.base import MIMEBase
+from email.mime.message import MIMEMessage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -27,7 +28,9 @@ from attachment_policy import (
     DISPOSAL_SUBJECT,
     DISPOSAL_TOO_MANY,
     DISPOSAL_MISSING_FILENAME,
+    DISPOSAL_NESTED_MESSAGE,
     DISPOSAL_ZERO,
+    NESTED_MESSAGE_DISPLAY,
     IMAGE_EXTENSIONS,
     MAX_INBOUND_ATTACHMENTS,
     check_inbound_subject,
@@ -585,6 +588,25 @@ def _mixed(parts, subject='x'):
     return mixed.as_bytes(policy=policy.SMTP)
 
 
+def _nested_rfc822_attachment(
+    inner_parts,
+    *,
+    filename='fwd.eml',
+    disposition='attachment',
+):
+    inner = MIMEMultipart('mixed', policy=policy.SMTP)
+    inner.attach(MIMEText('', 'plain', 'utf-8', policy=policy.SMTP))
+    for p in inner_parts:
+        inner.attach(p)
+    wrapper = MIMEMessage(inner, policy=policy.SMTP)
+    if disposition:
+        if filename:
+            wrapper.add_header('Content-Disposition', disposition, filename=filename)
+        else:
+            wrapper.add_header('Content-Disposition', disposition)
+    return wrapper
+
+
 class InlinePolicyE1Test(unittest.TestCase):
     def test_inline_only_png_zero_attachments(self) -> None:
         raw = _mixed([_part('logo.png', disposition='inline', maintype='image', subtype='png')])
@@ -830,6 +852,72 @@ class EnumeratorAlignE5Test(unittest.TestCase):
                     child.temp_path.read_bytes(), policy=policy.default
                 )
                 self.assertEqual(str(msg2['Subject']), 'a.zip')
+
+
+class NestedRfc822InboundTest(unittest.TestCase):
+    def test_nested_attachment_only_disposed(self) -> None:
+        raw = _mixed([_nested_rfc822_attachment([], filename='fwd.eml')], subject='fwd.eml')
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.is_invalid)
+        self.assertEqual(c.reason, DISPOSAL_NESTED_MESSAGE)
+        self.assertEqual(c.parts[0].skip_kind, 'nested_message')
+        self.assertFalse(classify_inbound_attachments(raw).is_error)
+
+    def test_nested_without_filename_display(self) -> None:
+        raw = _mixed([_nested_rfc822_attachment([], filename=None)])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.parts[0].filename, NESTED_MESSAGE_DISPLAY)
+
+    def test_inline_nested_zero_attachments(self) -> None:
+        raw = _mixed([_nested_rfc822_attachment([], disposition='inline')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+
+    def test_zip_plus_nested_delivers_zip_only(self) -> None:
+        raw = _mixed(
+            [_part('pack.zip'), _nested_rfc822_attachment([], filename='fwd.eml')],
+            subject='pack.zip',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (0,))
+        self.assertEqual(c.parts[1].skip_kind, 'nested_message')
+
+    def test_inner_zip_not_enumerated(self) -> None:
+        inner_zip = _part('secret.zip')
+        raw = _mixed([_nested_rfc822_attachment([inner_zip], filename='fwd.eml')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.total_count, 1)
+        self.assertEqual(c.reason, DISPOSAL_NESTED_MESSAGE)
+
+    def test_twenty_with_nested_ok(self) -> None:
+        parts = [_part(f'a{i}.png', maintype='image', subtype='png') for i in range(19)]
+        parts.append(_nested_rfc822_attachment([], filename='fwd.eml'))
+        c = classify_inbound_attachments(_mixed(parts))
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.total_count, 20)
+
+    def test_twenty_one_with_nested_too_many(self) -> None:
+        parts = [_part(f'a{i}.png', maintype='image', subtype='png') for i in range(20)]
+        parts.append(_nested_rfc822_attachment([], filename='fwd.eml'))
+        c = classify_inbound_attachments(_mixed(parts))
+        self.assertEqual(c.reason, DISPOSAL_TOO_MANY)
+
+    def test_mixed_exe_and_nested_disallowed(self) -> None:
+        raw = _mixed(
+            [_part('evil.exe'), _nested_rfc822_attachment([], filename='fwd.eml')]
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_EXTENSION)
+
+    def test_outbound_nested_still_error(self) -> None:
+        inner = MIMEText('nested', 'plain', 'utf-8', policy=policy.SMTP)
+        wrapper = MIMEMessage(inner, policy=policy.SMTP)
+        wrapper.add_header('Content-Disposition', 'attachment', filename='fwd.eml')
+        outer = MIMEMultipart('mixed', policy=policy.SMTP)
+        outer.attach(wrapper)
+        r = validate_single_archive_attachment(outer.as_bytes(policy=policy.SMTP))
+        self.assertTrue(r.is_error)
 
 
 class DisposeImapE4Test(unittest.TestCase):

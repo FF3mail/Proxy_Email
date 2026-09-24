@@ -964,28 +964,21 @@ class MailHandler:
                 try:
                     # Skipped rows before disposed (disallowed_extension / missing_filename).
                     # too_many / subject_mismatch carry lists in disposed.detail.
-                    if reason in (
-                        'disallowed_extension',
-                        'missing_filename',
-                    ) and inbound_class.parts:
-                        from attachment_policy import VERDICT_SKIP
+                    from attachment_policy import (
+                        VERDICT_SKIP,
+                        inbound_invalid_writes_skipped_rows,
+                        part_skip_disposal_reason,
+                        part_skip_journal_detail,
+                    )
+                    if (
+                        inbound_invalid_writes_skipped_rows(reason)
+                        and inbound_class.parts
+                    ):
                         for part in inbound_class.parts:
                             if part.verdict != VERDICT_SKIP:
                                 continue
-                            skip_reason = (
-                                'missing_filename'
-                                if part.missing_filename
-                                else 'disallowed_extension'
-                            )
-                            if part.missing_filename:
-                                detail = 'no filename; content_type=%s' % (
-                                    part.content_type or '(none)',
-                                )
-                            else:
-                                detail = 'filename=%s ext=%s' % (
-                                    part.filename,
-                                    part.ext,
-                                )
+                            skip_reason = part_skip_disposal_reason(part)
+                            detail = part_skip_journal_detail(part)
                             journal_skipped(
                                 self._passage_journal,
                                 direction=DIRECTION_INBOUND,
@@ -1037,21 +1030,16 @@ class MailHandler:
             # later source dispose still has them — write them now; on failure
             # fail-closed without SMTP.
             try:
-                from attachment_policy import VERDICT_SKIP
+                from attachment_policy import (
+                    VERDICT_SKIP,
+                    part_skip_disposal_reason,
+                    part_skip_journal_detail,
+                )
                 for part in inbound_class.parts:
                     if part.verdict != VERDICT_SKIP:
                         continue
-                    skip_reason = (
-                        'missing_filename'
-                        if part.missing_filename
-                        else 'disallowed_extension'
-                    )
-                    if part.missing_filename:
-                        detail = 'no filename; content_type=%s' % (
-                            part.content_type or '(none)',
-                        )
-                    else:
-                        detail = 'filename=%s ext=%s' % (part.filename, part.ext)
+                    skip_reason = part_skip_disposal_reason(part)
+                    detail = part_skip_journal_detail(part)
                     journal_skipped(
                         self._passage_journal,
                         direction=DIRECTION_INBOUND,

@@ -22,9 +22,9 @@ restarting the daemon: INSERTs always include `detail`. Without 005, journal
 writes fail → fail-closed stall (messages stay UNSEEN). Rollback: an older
 daemon still works against the 005 schema.
 
-## Known poison-message case (unchanged)
+## Known fail-closed parse cases (unchanged)
 
-`message/rfc822` nested parts and malformed multipart still return
+Malformed multipart still return
 `status=error` (fail-closed): message stays UNSEEN and is retried each poll.
 Out of scope for 79.2e.
 

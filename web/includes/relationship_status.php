@@ -18,6 +18,7 @@ const DISPOSAL_REASON_LABELS = [
     'subject_mismatch' => 'Тема не совпадает с именами архивов',
     'too_many_attachments' => 'Слишком много вложений (>20)',
     'missing_filename' => 'Вложение без имени файла',
+    'nested_message' => 'Вложенное письмо (message/rfc822) не принимается',
 ];
 
 function normalizePanelPassageJournalLimit(int $limit): int

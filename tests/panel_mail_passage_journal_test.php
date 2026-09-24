@@ -204,6 +204,10 @@ assert_true(
     'no_relationship label'
 );
 assert_true(
+    disposalReasonLabel('nested_message') === 'Вложенное письмо (message/rfc822) не принимается',
+    'nested_message label'
+);
+assert_true(
     ($page['nonstandard_rows'][0]['notified_label'] ?? '') === 'референт не уведомлён',
     'inbound disposed not notified'
 );
