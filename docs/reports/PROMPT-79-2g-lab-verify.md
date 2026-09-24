@@ -182,3 +182,108 @@ Post-run journal event counts (this RUNID only): see VPS query in appendix; inbo
 **Blocked — not ready to merge** until D1, D3, and D4 are understood/fixed (and L18/L21 re-verified). L20 remains NOT VERIFIED by design. Panel browser i18n/filter NOT VERIFIED.
 
 **Recommended next steps:** fix or clarify poison (`message/rfc822`) path; investigate outbound double-journal; re-run L18 with RFC2231 filename lab MIME; optional G2 for L20; operator Sent-folder cleanup for RUNID tag.
+
+---
+
+## Addendum 79.2h (2026-09-24)
+
+**RUNID:** `20260924T110500Z` — `X-Lab-Test: 79-2g-20260924T110500Z`  
+**Evidence log (VPS):** `/root/prompt79-2h-evidence-20260924T105545Z.log` (+ `/tmp/prompt79_2h_*.log`)  
+**Daemon still @:** `5cd6c23` on lab (no code/deploy change in this addendum).
+
+### Defect reclassification (accepted)
+
+| ID | 79.2g | 79.2h disposition |
+|----|-------|-------------------|
+| **D1** (L18) | Product FAIL | **Harness defect** — raw/invalid `Content-Disposition` construction; real vectors need RFC2231 APPEND + subject/archive alignment (see H2). |
+| **D2** (L06 detail NULL) | FAIL | **By design** — inline part without filename has nothing to list in `inline_parts=… names=…` (L07 shows named inline). |
+| **D3** (L21) | Product FAIL | **Harness defect** — `MIMEApplication(_subtype='rfc822')` is `application/rfc822`, not `message/rfc822`; see H3. |
+
+### H5 — Audit evidence
+
+| Item | Result |
+|------|--------|
+| `prompt79_2g_final_audit.sh` output | Re-run embedded in evidence log (O01–O03 journal ids 62–67; daemon errors **none**). |
+| ERROR window anchor | `PROMPT79-2g_RESTART=2026-09-24T09:36:30Z` (line 3009 in daemon log); grep from that marker → **no ERROR/CRITICAL/Traceback** |
+
+### H4 — L04 byte check
+
+**PASS** — 79.2g L04 child located in `refloc1/.../Maildir/new` (`1790242918.M161496P608305.mail,…`):
+
+- Decoded Subject bytes: `b'\xd0\x9e\xd1\x82\xd1\x87\xd0\xb5\xcc\x88\xd1\x82 \xd0\xb7\xd0\xb0 \xd0\xbc\xd0\xb0\xd0\xb8\xcc\x86.zip'` (**NFD**, matches source attachment filename).
+- Child attachment filename bytes: same NFD form.
+- Source NFC reference bytes: `b'\xd0\x9e\xd1\x82\xd1\x87\xd1\x91\xd1\x82 \xd0\xb7\xd0\xb0 \xd0\xbc\xd0\xb0\xd0\xb9.zip'`.
+
+### H1 — D4 outbound duplicate journal (root cause)
+
+**a) Full duplicate rows (79.2g RUNID `093629`)** — all columns captured in evidence log; pairs:
+
+| Case | id / action_at (1st) | id / action_at (2nd) | Δ seconds |
+|------|----------------------|----------------------|-----------|
+| O01 | 62 / 10:04:07 | 65 / 10:08:59 | **292** |
+| O02 | 63 / 10:05:37 | 66 / 10:10:28 | **291** |
+| O03 | 64 / 10:07:07 | 67 / 10:11:58 | **291** |
+
+(79.2g prose “~90 s” was wrong; spacing between duplicate processing passes is **~4m51s**.)
+
+**b) Effects (79.2g):** `clientint1@frona.ru` INBOX copies with `Message-ID` `79-2g-20260924T093629-O01@lab.test` → **0** (delivery may use different IDs or copies already expunged). Referent local maildir messages mentioning O02/O03 MIDs → **0** (notifications use template text without MID).
+
+**c) Injection method (79.2g):** `/tmp/prompt79_2g_outbound.sh` — **one** `write_bytes` per case to `clientloc1/.../Maildir/new/{O01,O02,O03}.eml` (no SMTP, no second copy). **One file per scenario** in `new/` at inject time.
+
+**d) Daemon (per stable filename):** each of `O01.eml`, `O02.eml`, `O03.eml` logged **two** `Watchdog: new email file` + **two** `[OUTBOUND_ROUTING]` lines at the timestamps above (~291s apart). `sent via external SMTP` grep for `O01.eml` in this log window returned **no lines** (outbound may log under a different pattern for these dispositions).
+
+**e) Re-run (RUNID `110500Z`, unique filenames `O01-20260924T110500Z.eml` etc., single drop each):**
+
+| Case | Journal rows | Watchdog | Routing |
+|------|--------------|----------|---------|
+| O01 | **1** (`id=70`, subject_mismatch — harness Subject ≠ `o.zip`) | 1 | 1 |
+| O02 | **1** (`id=71`, disallowed_extension) | 1 | 1 |
+| O03 | **1** (`id=72`, multiple_attachments) | 1 | 1 |
+
+**f) Rollback A/B on previous release:** **NOT RUN** — duplicates did not reproduce with unique inject filenames; rollback unnecessary.
+
+**D4 root cause:** **Test artifact** — re-processing the **same** stable `O*.eml` basenames in the watched Maildir ~291s after the first pass (second watchdog cycle on the same file), not a second inject. **Not a product regression** at `5cd6c23` under single atomic inject.
+
+### H2 — L18 real vectors
+
+| Variant | Result |
+|---------|--------|
+| RFC2231 `filename*=utf-8''safe%0D%0ABcc%3A%20x%40example.com.zip` (L18A2, subject aligned to sanitized name) | **PARTIAL** — disposed `subject_mismatch` (decoded filename still contains embedded newline in attachment list); **no child Bcc injection** |
+| RFC2047 filename in raw MIME (L18B2) | **PASS** — `delivered` (`id=75`); no injected headers in children |
+| IMAP fetch stored form | `filename*` **not** present on stored copy after server normalization (L18A2) |
+
+### H3 — L21 genuine `message/rfc822`
+
+| Variant | `Content-Type: message/rfc822` on IMAP fetch | 2× poll (~130s) | Journal |
+|---------|-----------------------------------------------|-----------------|---------|
+| L21A (attachment + `filename="fwd.eml"`) | **Yes** | Source **UNSEEN**, present | **0 rows** |
+| L21B (no Content-Disposition) | **Yes** | Source **UNSEEN**, present | **0 rows** |
+
+Test messages **deleted** from referent INBOX after observation. **PASS** — matches documented fail-closed / re-poll path when `nested_rfc822` is actually exercised.
+
+### H6 — Cleanup
+
+**IMAP LIST:** both `clientint1@frona.ru` and `refint1@frona.ru` — `INBOX`, `Sent`, `Drafts`, `Trash`, `Junk` (no localized Sent alias beyond `\Sent`).  
+**Removed:** **11** messages from `refint1` INBOX with `X-Lab-Test: 79-2g-*` (ids 45–55). **Remaining:** 79.2g journal rows preserved; fan-out files in `refloc1/.../Maildir/new` not bulk-deleted.
+
+### H7 — Panel
+
+| Item | Result |
+|------|--------|
+| Playwright/Chromium on VPS | **NOT available** |
+| Operator URLs | `https://panel.testvps.loc/relationship-status.php` (journal / nonstandard views) |
+| Sample journal row ids for UI check | `skipped`: 23–24, 28, 30; `subject_mismatch`: 15; `too_many_attachments`: 52; `missing_filename`: 28–30; `disallowed_extension`: 27, 63; `zero_attachments`: 20–21, 53 |
+
+### H8 — L20
+
+**NOT VERIFIED** (G2 not exercised).
+
+### Revised verdict proposal (G3)
+
+**Ready to merge PR #33 @ `5cd6c23`** for lab purposes, with documentation caveats:
+
+- Outbound harness must use **unique Maildir filenames** (or ensure processed files are removed) to avoid duplicate journal rows.
+- L18 injection testing requires harness discipline (RFC2231 + subject/archive rules); product sanitization observed on RFC2047 path (L18B2).
+- L20 and panel browser screenshots remain **NOT VERIFIED**.
+
+*Operator: confirm or reject this G3 proposal.*
