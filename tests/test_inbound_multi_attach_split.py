@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import unicodedata
 import tempfile
 import types
 import unittest
@@ -25,6 +26,7 @@ from attachment_policy import (
     DISPOSAL_MULTIPLE,
     DISPOSAL_SUBJECT,
     DISPOSAL_TOO_MANY,
+    DISPOSAL_MISSING_FILENAME,
     DISPOSAL_ZERO,
     IMAGE_EXTENSIONS,
     MAX_INBOUND_ATTACHMENTS,
@@ -33,6 +35,8 @@ from attachment_policy import (
     enumerate_attachable_parts,
     sanitize_header_filename,
     validate_single_archive_attachment,
+    normalize_for_compare,
+    normalize_for_display,
 )
 from message_rebuild import rebuild_inbound_fanout
 from relationship_lookup import (
@@ -556,6 +560,272 @@ class DaemonInbound792dTest(unittest.TestCase):
         rebuild = (ROOT / 'message_rebuild.py').read_text(encoding='utf-8')
         self.assertNotIn('archive_extensions_only', rebuild)
 
+
+
+
+def _part(name=None, *, disposition='attachment', payload=b'data', maintype='application', subtype='octet-stream'):
+    part = MIMEBase(maintype, subtype, policy=policy.SMTP)
+    part.set_payload(payload)
+    encoders.encode_base64(part)
+    if name is None:
+        part.add_header('Content-Disposition', disposition)
+    else:
+        part.add_header('Content-Disposition', disposition, filename=name)
+    return part
+
+
+def _mixed(parts, subject='x'):
+    mixed = MIMEMultipart('mixed', policy=policy.SMTP)
+    mixed['From'] = 'clientint1@frona.ru'
+    mixed['To'] = 'refint1@frona.ru'
+    mixed['Subject'] = subject
+    mixed.attach(MIMEText('', 'plain', 'utf-8', policy=policy.SMTP))
+    for p in parts:
+        mixed.attach(p)
+    return mixed.as_bytes(policy=policy.SMTP)
+
+
+class InlinePolicyE1Test(unittest.TestCase):
+    def test_inline_only_png_zero_attachments(self) -> None:
+        raw = _mixed([_part('logo.png', disposition='inline', maintype='image', subtype='png')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+        self.assertIn('inline_parts=1', c.detail or '')
+        self.assertIn('logo.png', c.detail or '')
+
+    def test_zip_plus_inline_logo(self) -> None:
+        raw = _mixed(
+            [
+                _part('doc.zip'),
+                _part('logo.png', disposition='inline', maintype='image', subtype='png'),
+            ],
+            subject='doc.zip',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (0,))
+        self.assertEqual(c.approved_filenames, ('doc.zip',))
+
+    def test_inline_zip_is_zero(self) -> None:
+        raw = _mixed([_part('secret.zip', disposition='inline')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+
+    def test_no_disposition_not_counted(self) -> None:
+        # Leaf part without Content-Disposition is not an attachment
+        part = MIMEBase('image', 'png', policy=policy.SMTP)
+        part.set_payload(b'png')
+        encoders.encode_base64(part)
+        # filename param without attachment disposition must not count
+        part.set_param('name', 'x.png', header='Content-Type')
+        raw = _mixed([part])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+
+    def test_attachment_image_delivered(self) -> None:
+        raw = _mixed([_part('Photo.PNG', maintype='image', subtype='png')], subject='anything')
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertFalse(c.subject.required)
+        with tempfile.TemporaryDirectory() as tmp:
+            fan = rebuild_inbound_fanout(
+                raw, _dto(tmp), temp_dir=tmp, approved_part_indexes=c.deliver_indexes
+            )
+            self.assertTrue(fan.success)
+            msg = __import__('email').message_from_bytes(
+                fan.children[0].temp_path.read_bytes(), policy=policy.default
+            )
+            self.assertEqual(str(msg['Subject']), 'Photo.PNG')
+
+    def test_several_attachment_images(self) -> None:
+        raw = _mixed(
+            [
+                _part('a.png', maintype='image', subtype='png'),
+                _part('b.jpg', maintype='image', subtype='jpeg'),
+            ],
+            subject='ignored',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (0, 1))
+
+    def test_same_png_inline_blocked(self) -> None:
+        raw = _mixed([_part('same.png', disposition='inline', maintype='image', subtype='png')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+        self.assertIn('inline_parts=1', c.detail or '')
+        self.assertIn('same.png', c.detail or '')
+
+
+class MissingFilenameE3Test(unittest.TestCase):
+    def test_nameless_attachment_skipped(self) -> None:
+        raw = _mixed([_part(None), _part('ok.zip')], subject='ok.zip')
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (1,))
+        self.assertTrue(c.parts[0].missing_filename)
+        self.assertEqual(c.parts[0].verdict, 'skip')
+
+    def test_all_nameless_missing_filename_dispose(self) -> None:
+        raw = _mixed([_part(None), _part(None)])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_MISSING_FILENAME)
+
+    def test_nameless_counts_toward_limit(self) -> None:
+        parts = [_part(None) for _ in range(21)]
+        raw = _mixed(parts)
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_TOO_MANY)
+        self.assertEqual(c.total_count, 21)
+
+    def test_mixed_nameless_and_exe_is_disallowed(self) -> None:
+        raw = _mixed([_part(None), _part('evil.exe')])
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_EXTENSION)
+
+
+class SubjectNormalizeE2Test(unittest.TestCase):
+    def test_nfd_filename_nfc_subject(self) -> None:
+        base = 'cafe\u0301.zip'  # NFD
+        nfc = unicodedata.normalize('NFC', base)
+        self.assertNotEqual(base, nfc)
+        ok, exp, act = check_inbound_subject(nfc, [base])
+        self.assertTrue(ok)
+        self.assertEqual(exp, nfc)
+        self.assertEqual(act, nfc)
+
+    def test_nfc_filename_nfd_subject(self) -> None:
+        nfc = unicodedata.normalize('NFC', 'cafe\u0301.zip')
+        nfd = unicodedata.normalize('NFD', nfc)
+        ok, _, _ = check_inbound_subject(nfd, [nfc])
+        self.assertTrue(ok)
+
+    def test_double_spaces_and_tab(self) -> None:
+        ok, _, _ = check_inbound_subject('a.zip\tb.zip', ['a.zip', 'b.zip'])
+        self.assertTrue(ok)
+        ok2, _, _ = check_inbound_subject('a.zip  b.zip', ['a.zip', 'b.zip'])
+        self.assertTrue(ok2)
+        # filename with two spaces matches collapsed subject
+        ok3, exp, _ = check_inbound_subject('report.zip', ['report  .zip'.replace('  ', '  ')])
+        # archive name with internal double space collapses for compare
+        ok3, _, _ = check_inbound_subject('my  file.zip', ['my  file.zip'])
+        self.assertTrue(ok3)
+        self.assertEqual(normalize_for_display('my  file.zip'), 'my file.zip')
+
+    def test_rfc2047_cyrillic_subject(self) -> None:
+        from email.header import Header
+        name = 'Отчёт.zip'
+        enc = Header(name, 'utf-8').encode()
+        ok, exp, act = check_inbound_subject(enc, [name])
+        self.assertTrue(ok)
+        self.assertEqual(exp, name)
+        self.assertEqual(act, name)
+
+    def test_display_not_casefolded(self) -> None:
+        ok, exp, act = check_inbound_subject('Report.ZIP', ['Report.zip'])
+        self.assertTrue(ok)
+        self.assertEqual(exp, 'Report.zip')
+        self.assertEqual(act, 'Report.ZIP')  # display keeps case after NFC/collapse
+
+
+class EnumeratorAlignE5Test(unittest.TestCase):
+    def test_index_alignment_mixed(self) -> None:
+        raw = _mixed(
+            [
+                _part('logo.png', disposition='inline', maintype='image', subtype='png'),
+                _part('a.zip'),
+                _part(None),
+                _part('a.zip'),
+                _part('sig.png', disposition='inline', maintype='image', subtype='png'),
+            ],
+            subject='a.zip a.zip',
+        )
+        msg = __import__('email').message_from_bytes(raw, policy=policy.default)
+        enumerated = enumerate_attachable_parts(msg)
+        self.assertEqual(len(enumerated), 3)  # two a.zip + nameless
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.total_count, 3)
+        self.assertEqual(c.deliver_indexes, (0, 2))
+        with tempfile.TemporaryDirectory() as tmp:
+            fan = rebuild_inbound_fanout(
+                raw, _dto(tmp), temp_dir=tmp, approved_part_indexes=c.deliver_indexes
+            )
+            self.assertTrue(fan.success)
+            self.assertEqual(len(fan.children), 2)
+            for child in fan.children:
+                msg2 = __import__('email').message_from_bytes(
+                    child.temp_path.read_bytes(), policy=policy.default
+                )
+                self.assertEqual(str(msg2['Subject']), 'a.zip')
+
+
+class DisposeImapE4Test(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        import importlib.util
+        import types
+        from unittest.mock import MagicMock
+
+        watchdog_mod = types.ModuleType('watchdog')
+        watchdog_events = types.ModuleType('watchdog.events')
+        watchdog_events.FileSystemEventHandler = object
+        watchdog_observers = types.ModuleType('watchdog.observers')
+        watchdog_observers.Observer = MagicMock
+        sys.modules.setdefault('watchdog', watchdog_mod)
+        sys.modules.setdefault('watchdog.events', watchdog_events)
+        sys.modules.setdefault('watchdog.observers', watchdog_observers)
+        spec = importlib.util.spec_from_file_location(
+            'mail_proxy_daemon_792e_dispose',
+            str(ROOT / 'mail-proxy-daemon.py'),
+        )
+        cls.mpd = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(cls.mpd)
+
+    def _handler(self):
+        from unittest.mock import MagicMock
+        return self.mpd.MailHandler(MagicMock(), MagicMock())
+
+    def test_order_seen_then_deleted_then_expunge(self) -> None:
+        from unittest.mock import MagicMock, call
+        handler = self._handler()
+        mail = MagicMock()
+        mail.uid = MagicMock(return_value=('OK', [b'']))
+        mail.expunge = MagicMock(return_value=('OK', [b'']))
+        ok = handler._dispose_imap_message(
+            mail, '42', b'1', account_email='a@x', source_message_id='<m@x>'
+        )
+        self.assertTrue(ok)
+        calls = mail.uid.call_args_list
+        self.assertEqual(calls[0], call('STORE', '42', '+FLAGS', '\\Seen'))
+        self.assertEqual(calls[1], call('STORE', '42', '+FLAGS', '(\\Deleted)'))
+        mail.expunge.assert_called_once()
+
+    def test_seen_failure_still_deletes(self) -> None:
+        from unittest.mock import MagicMock
+        handler = self._handler()
+        mail = MagicMock()
+        # first uid STORE (Seen) fails, second (Deleted) ok
+        mail.uid = MagicMock(side_effect=[('NO', []), ('OK', [b''])])
+        mail.expunge = MagicMock(return_value=('OK', [b'']))
+        ok = handler._dispose_imap_message(
+            mail, '7', b'1', account_email='a@x', source_message_id='<id>'
+        )
+        self.assertTrue(ok)
+        self.assertEqual(mail.uid.call_count, 2)
+        mail.expunge.assert_called_once()
+
+    def test_delete_failure_after_seen(self) -> None:
+        from unittest.mock import MagicMock
+        handler = self._handler()
+        mail = MagicMock()
+        mail.uid = MagicMock(side_effect=[('OK', [b'']), ('NO', [])])
+        mail.expunge = MagicMock()
+        ok = handler._dispose_imap_message(
+            mail, '9', b'1', account_email='a@x', source_message_id='<id>'
+        )
+        self.assertFalse(ok)
+        mail.expunge.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

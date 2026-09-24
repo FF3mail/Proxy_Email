@@ -98,7 +98,7 @@ def rebuild_inbound_fanout(
     try:
         msg = _parse_message(raw_bytes)
         _reject_signed_or_encrypted(msg)
-        attachments = _enumerate_attachable_parts(msg)
+        attachments = _enumerate_attachable_parts_shared(msg)
         if not attachments:
             logger.error(
                 '[MESSAGE_REBUILD] zero_attachments relationship_id=%s',
@@ -182,7 +182,7 @@ def rebuild_outbound_message(
     try:
         msg = _parse_message(raw_bytes)
         _reject_signed_or_encrypted(msg)
-        attachments = _enumerate_attachable_parts(msg)
+        attachments = _enumerate_attachable_parts_shared(msg)
         if not attachments:
             logger.error(
                 '[MESSAGE_REBUILD] zero_attachments relationship_id=%s',
@@ -261,30 +261,20 @@ def _reject_signed_or_encrypted(msg: Message) -> None:
                     raise MessageRebuildError('signed_or_encrypted')
 
 
-def _enumerate_attachable_parts(msg: Message) -> List[Message]:
-    """Collect Content-Disposition: attachment parts; discard inline (spec §4.2/§4.3)."""
-    found: List[Message] = []
-    _walk_for_attachments(msg, found)
-    return found
+def _enumerate_attachable_parts_shared(msg: Message) -> List[Message]:
+    """
+    PROMPT-79.2e E5: one enumerator shared with attachment_policy so classify
+    indexes always match rebuild. Maps policy ValueError → MessageRebuildError.
+    """
+    from attachment_policy import enumerate_attachable_parts
 
-
-def _walk_for_attachments(part: Message, found: List[Message]) -> None:
-    if (part.get_content_type() or '').lower() == 'message/rfc822':
-        raise MessageRebuildError('malformed_mime')
-
-    if part.is_multipart():
-        payload = part.get_payload()
-        if not isinstance(payload, list):
-            raise MessageRebuildError('malformed_mime')
-        for subpart in payload:
-            if isinstance(subpart, str):
-                raise MessageRebuildError('malformed_mime')
-            _walk_for_attachments(subpart, found)
-        return
-
-    disposition = (part.get('Content-Disposition') or '').lower()
-    if 'attachment' in disposition:
-        found.append(part)
+    try:
+        return enumerate_attachable_parts(msg)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason in ('nested_rfc822', 'malformed_multipart'):
+            raise MessageRebuildError('malformed_mime') from exc
+        raise MessageRebuildError('malformed_mime') from exc
 
 
 def _attachment_filename(part: Message) -> str:

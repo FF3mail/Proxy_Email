@@ -92,6 +92,25 @@ Interim-hold PROMPT-79.2-incident-check снят этим промптом.
 - **Валидация только по расширению** (без magic bytes) — осознанный риск F6.
 
 
+
+**Поправка 2026-09-24 (PROMPT-79.2e):**
+
+- **Inline (E1):** вложением считается только часть с `Content-Disposition`,
+  содержащим `attachment`. Inline/cid/без disposition — не вложения: не
+  доставляются, не журналируются, не входят в лимит 20 и Subject. Письмо
+  только с inline (логотип без документа) → `zero_attachments` (в `detail`
+  имена inline при наличии). Картинки с disposition=attachment принимаются;
+  те же файлы как inline — блокируются. Риск: клиенты, шлющие PDF/картинки
+  только inline без архива-вложения, блокируются намеренно.
+- **missing_filename (E3):** attachment без имени → skip + journal
+  `missing_filename` (не fail-closed UNSEEN loop). Если все части безымянные
+  → dispose `missing_filename`.
+- **Seen → journal → delete (E4):** для любого inbound dispose: сначала
+  успешный journal INSERT, затем STORE Seen, затем Deleted+EXPUNGE. Сбой
+  journal → UNSEEN. Сбой Seen → WARNING, delete всё равно. Сбой delete после
+  Seen → WARNING, письмо остаётся Seen (без повторного poll/journal).
+
+
 Регистр при сравнении темы письма и расширений вложений — см. Issue
 #26 (https://github.com/FF3mail/Proxy_Email/issues/26).
 

@@ -17,6 +17,7 @@ const DISPOSAL_REASON_LABELS = [
     'disallowed_extension' => 'Недопустимое расширение вложения',
     'subject_mismatch' => 'Тема не совпадает с именами архивов',
     'too_many_attachments' => 'Слишком много вложений (>20)',
+    'missing_filename' => 'Вложение без имени файла',
 ];
 
 function normalizePanelPassageJournalLimit(int $limit): int

@@ -1,4 +1,4 @@
-# DELTA-transit — Якорный документ v4.3
+# DELTA-transit — Якорный документ v4.4
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
 **Дата:** 2026-09-24  
@@ -617,8 +617,8 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Storage** | MySQL `mail_passage_journal` via `004` + `005` (`skipped` event + `detail` VARCHAR(1024); `schema.sql` / `003` untouched) |
 | **Timestamps** | `event_ts` / `received_at` / `action_at` — UTC computed in application code; naive `DATETIME(0)`; never SQL `NOW()` |
 | **One row** | Per delivered recipient/child and per disposal event |
-| **Disposal** | Confirmed `no_relationship`, `relationship_inactive`, or invalid attachment (`zero_attachments`, `disallowed_extension`, `subject_mismatch`, `too_many_attachments`; outbound also `multiple_attachments`). Skipped parts → `event_type=skipped` |
-| **Inbound attach gate (79.2d)** | One path for N≥1: `classify_inbound_attachments` (limit→subject→extension). Archives ∪ images (no SVG); MAX=20; archive-based Subject (D7); child Subject=filename (D8); skipped journal rows. Report: `PROMPT-79-2d-inbound-extension-subject.md` |
+| **Disposal** | `no_relationship` / `relationship_inactive` / attachment gates (`zero_attachments`, `disallowed_extension`, `subject_mismatch`, `too_many_attachments`, `missing_filename`; outbound `multiple_attachments`). Skipped → `event_type=skipped`. Inbound IMAP: journal → Seen → Deleted+EXPUNGE |
+| **Inbound attach gate (79.2d/e)** | One path for N≥1; attachment = Disposition contains `attachment` only (inline ignored). Archives ∪ images (no SVG); MAX=20; archive Subject (E2 NFC); `missing_filename` skip; dispose order Seen→delete (E4); shared enumerator (E5). Reports: `PROMPT-79-2d-…`, `PROMPT-79-2e-…` |
 | **Fail-closed** | Lookup/MIME/DB errors → leave message (UNSEEN / Maildir intact); never dispose on ambiguity |
 | **Write-before-delete** | Journal `INSERT` must succeed before IMAP `\Deleted`+EXPUNGE or Maildir unlink |
 | **Notify** | Outbound disposal → local §4 template to referent; inbound-from-internet → silent; `notified` flipped to 1 only after confirmed send |
@@ -629,4 +629,4 @@ Locally originated messages are **already single-attachment** by house conventio
 
 ---
 
-*Конец документа · DELTA-transit Anchor v4.3*
+*Конец документа · DELTA-transit Anchor v4.4*

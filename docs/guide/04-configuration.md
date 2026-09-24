@@ -223,3 +223,6 @@ fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
 `deliver_indexes` через `rebuild_inbound_fanout` (без собственной
 фильтрации расширений). Дочерний Subject = sanitized filename (D8).
 
+`DISPOSAL_MISSING_FILENAME` / inline policy (PROMPT-79.2e): see decisions log
+and `docs/reports/PROMPT-79-2e-inline-missing-filename-dispose.md`. Shared
+enumerator: rebuild imports `enumerate_attachable_parts` from this module.

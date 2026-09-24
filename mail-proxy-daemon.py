@@ -547,37 +547,66 @@ class MailHandler:
             return False
 
     def _dispose_imap_message(
-        self, mail: imaplib.IMAP4, uid: Optional[str], num: bytes
+        self,
+        mail: imaplib.IMAP4,
+        uid: Optional[str],
+        num: bytes,
+        *,
+        account_email: Optional[str] = None,
+        source_message_id: Optional[str] = None,
     ) -> bool:
-        """STORE \\Deleted then EXPUNGE. Returns True only if both succeed."""
+        """
+        PROMPT-79.2e E4: Seen → Deleted → EXPUNGE.
+
+        Journal INSERTs must already have succeeded before this is called.
+        Seen STORE failure → WARNING, still proceed to delete.
+        Delete/EXPUNGE failure after Seen → WARNING (message stays Seen, not re-polled).
+        """
+        if not self._mark_imap_message_seen(mail, uid, num):
+            logger.warning(
+                '[MAIL_DISPOSAL] IMAP STORE Seen failed before delete '
+                'account=%s uid=%s source_message_id=%s — proceeding to delete',
+                account_email or '(unknown)',
+                uid,
+                source_message_id or '(none)',
+            )
         try:
             if uid:
                 status, _ = mail.uid('STORE', uid, '+FLAGS', '(\\Deleted)')
             else:
                 status, _ = mail.store(num, '+FLAGS', '(\\Deleted)')
             if status != 'OK':
-                logger.error(
-                    '[MAIL_DISPOSAL] IMAP STORE Deleted failed uid=%s seq=%r status=%r',
+                logger.warning(
+                    '[MAIL_DISPOSAL] IMAP STORE Deleted failed after Seen '
+                    'account=%s uid=%s seq=%r status=%r source_message_id=%s',
+                    account_email or '(unknown)',
                     uid,
                     num,
                     status,
+                    source_message_id or '(none)',
                 )
                 return False
             status, _ = mail.expunge()
             if status != 'OK':
-                logger.error(
-                    '[MAIL_DISPOSAL] IMAP EXPUNGE failed uid=%s status=%r',
+                logger.warning(
+                    '[MAIL_DISPOSAL] IMAP EXPUNGE failed after Seen '
+                    'account=%s uid=%s status=%r source_message_id=%s',
+                    account_email or '(unknown)',
                     uid,
                     status,
+                    source_message_id or '(none)',
                 )
                 return False
             return True
         except Exception as e:
-            logger.error(
-                '[MAIL_DISPOSAL] IMAP dispose exception uid=%s seq=%r err=%s',
+            logger.warning(
+                '[MAIL_DISPOSAL] IMAP dispose exception after Seen '
+                'account=%s uid=%s seq=%r err=%s source_message_id=%s',
+                account_email or '(unknown)',
                 uid,
                 num,
                 e,
+                source_message_id or '(none)',
             )
             return False
 
@@ -796,7 +825,13 @@ class MailHandler:
                         temp_path, referent_data, acc
                     )
                     if result.dispose_imap:
-                        if self._dispose_imap_message(mail, uid, num):
+                        if self._dispose_imap_message(
+                            mail,
+                            uid,
+                            num,
+                            account_email=str(acc.get('email') or ''),
+                            source_message_id=result.source_message_id,
+                        ):
                             self._clear_imap_size_skip_entry(account_id, uid, seq)
                     elif result.mark_imap_seen:
                         mail.store(num, '+FLAGS', '\\Seen')
@@ -851,7 +886,9 @@ class MailHandler:
                     from_addr or '(empty)',
                     plan.lookup_error,
                 )
-                return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
+                )
 
             if plan.skip_reason in (SKIP_NO_RELATIONSHIP, SKIP_RELATIONSHIP_INACTIVE):
                 reason = disposal_reason_for_skip(plan.skip_reason)
@@ -881,9 +918,14 @@ class MailHandler:
                         '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
                         exc,
                     )
-                    return finalize_inbound_process_result(plan, False)
+                    return finalize_inbound_process_result(
+                        plan, False, source_message_id=source_message_id
+                    )
                 return finalize_inbound_process_result(
-                    plan, False, dispose_imap=True
+                    plan,
+                    False,
+                    dispose_imap=True,
+                    source_message_id=source_message_id,
                 )
 
             if not plan.local_rcpts:
@@ -892,7 +934,9 @@ class MailHandler:
                     plan.mode.value,
                     account_email,
                 )
-                return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
+                )
 
             raw_bytes = mail_file.read_bytes()
             # PROMPT-79.2d: single decision point (limit → subject → extension filter)
@@ -906,6 +950,7 @@ class MailHandler:
                     plan,
                     False,
                     smtp_error=inbound_class.error or 'attachment_policy_error',
+                    source_message_id=source_message_id,
                 )
             if inbound_class.is_invalid:
                 reason = inbound_class.reason or 'zero_attachments'
@@ -917,18 +962,34 @@ class MailHandler:
                     inbound_class.detail,
                 )
                 try:
-                    # Write skipped rows first when disposing for disallowed_extension
-                    # after per-part filter (informative); for too_many/subject_mismatch
-                    # the disposed row carries the filename list in detail.
-                    if reason == 'disallowed_extension' and inbound_class.parts:
+                    # Skipped rows before disposed (disallowed_extension / missing_filename).
+                    # too_many / subject_mismatch carry lists in disposed.detail.
+                    if reason in (
+                        'disallowed_extension',
+                        'missing_filename',
+                    ) and inbound_class.parts:
                         from attachment_policy import VERDICT_SKIP
                         for part in inbound_class.parts:
                             if part.verdict != VERDICT_SKIP:
                                 continue
+                            skip_reason = (
+                                'missing_filename'
+                                if part.missing_filename
+                                else 'disallowed_extension'
+                            )
+                            if part.missing_filename:
+                                detail = 'no filename; content_type=%s' % (
+                                    part.content_type or '(none)',
+                                )
+                            else:
+                                detail = 'filename=%s ext=%s' % (
+                                    part.filename,
+                                    part.ext,
+                                )
                             journal_skipped(
                                 self._passage_journal,
                                 direction=DIRECTION_INBOUND,
-                                disposal_reason='disallowed_extension',
+                                disposal_reason=skip_reason,
                                 filename=part.filename,
                                 referent_name=plan.referent_name
                                 or referent_data.get('username'),
@@ -940,7 +1001,7 @@ class MailHandler:
                                 or None,
                                 received_at=received_at,
                                 source_message_id=source_message_id,
-                                detail='filename=%s ext=%s' % (part.filename, part.ext),
+                                detail=detail,
                             )
                     journal_disposed(
                         self._passage_journal,
@@ -960,9 +1021,14 @@ class MailHandler:
                         '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
                         exc,
                     )
-                    return finalize_inbound_process_result(plan, False)
+                    return finalize_inbound_process_result(
+                        plan, False, source_message_id=source_message_id
+                    )
                 return finalize_inbound_process_result(
-                    plan, False, dispose_imap=True
+                    plan,
+                    False,
+                    dispose_imap=True,
+                    source_message_id=source_message_id,
                 )
 
             # Deliver path: journal skipped parts BEFORE SMTP (write-before-delete
@@ -975,10 +1041,21 @@ class MailHandler:
                 for part in inbound_class.parts:
                     if part.verdict != VERDICT_SKIP:
                         continue
+                    skip_reason = (
+                        'missing_filename'
+                        if part.missing_filename
+                        else 'disallowed_extension'
+                    )
+                    if part.missing_filename:
+                        detail = 'no filename; content_type=%s' % (
+                            part.content_type or '(none)',
+                        )
+                    else:
+                        detail = 'filename=%s ext=%s' % (part.filename, part.ext)
                     journal_skipped(
                         self._passage_journal,
                         direction=DIRECTION_INBOUND,
-                        disposal_reason='disallowed_extension',
+                        disposal_reason=skip_reason,
                         filename=part.filename,
                         referent_name=plan.referent_name
                         or referent_data.get('username'),
@@ -987,14 +1064,16 @@ class MailHandler:
                         external_mailbox=plan.external_mailbox or from_addr or None,
                         received_at=received_at,
                         source_message_id=source_message_id,
-                        detail='filename=%s ext=%s' % (part.filename, part.ext),
+                        detail=detail,
                     )
             except Exception as exc:
                 logger.error(
                     '[MAIL_DISPOSAL] skipped journal write failed — fail closed: %s',
                     exc,
                 )
-                return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
+                )
 
             logger.info(
                 'Delivering incoming external mail to local SMTP: %s '
@@ -1024,7 +1103,10 @@ class MailHandler:
                 approved_part_indexes=inbound_class.deliver_indexes,
             )
             return finalize_inbound_process_result(
-                plan, delivered, smtp_error=smtp_error
+                plan,
+                delivered,
+                smtp_error=smtp_error,
+                source_message_id=source_message_id,
             )
         except Exception as e:
             logger.error(f"Local SMTP delivery failed: {e}")
@@ -1037,7 +1119,10 @@ class MailHandler:
                     referent_local_inbox=referent_data['local_inbox'],
                 )
             return finalize_inbound_process_result(
-                plan, False, smtp_error=str(e)
+                plan,
+                False,
+                smtp_error=str(e),
+                source_message_id=source_message_id,
             )
         finally:
             if smtp is not None:

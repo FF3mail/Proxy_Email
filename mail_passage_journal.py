@@ -28,6 +28,7 @@ DISPOSAL_MULTIPLE_ATTACHMENTS = 'multiple_attachments'
 DISPOSAL_DISALLOWED_EXTENSION = 'disallowed_extension'
 DISPOSAL_SUBJECT_MISMATCH = 'subject_mismatch'
 DISPOSAL_TOO_MANY_ATTACHMENTS = 'too_many_attachments'
+DISPOSAL_MISSING_FILENAME = 'missing_filename'
 
 
 def utc_now_naive() -> datetime:

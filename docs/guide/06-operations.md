@@ -210,8 +210,27 @@ mailq
 | `too_many_attachments` | Не более 20 вложений в одном письме |
 | `subject_mismatch` | Тема должна состоять только из имён архивов через пробел |
 | `disallowed_extension` | Неподдерживаемый тип файла (или все части запрещены) |
+| `missing_filename` | Вложению нужно имя файла |
 
 Миграция журнала: `migrations/005_mail_passage_journal_skipped.sql`
 (событие `skipped`, колонка `detail` до 1024 символов; длинные списки
 имён обрезаются приложением с суффиксом `...`).
+
+
+### PROMPT-79.2e — inline, missing_filename, порядок dispose
+
+- **Картинки-вложения** (`Content-Disposition: attachment`) принимаются;
+  **inline**-картинки/логотипы без attachment-вложения → письмо бракуется
+  (`zero_attachments`). Клиенты, отправляющие файлы только как inline,
+  блокируются намеренно.
+- **`missing_filename`:** вложение без имени файла не доставляется; в панели
+  — skipped/disposed с этой причиной. Сказать клиенту: задать имя файла
+  вложению.
+- **Порядок IMAP при утилизации:** journal INSERT → STORE `\Seen` →
+  `\Deleted`+EXPUNGE (единый helper).
+- **Миграция 005 до деплоя:** колонка `detail` обязательна для INSERT
+  демона. Применять `migrations/005_mail_passage_journal_skipped.sql`
+  **до** обновления/рестарта демона, иначе все записи журнала падают и
+  письма зависают UNSEEN (fail-closed). Откат: старый демон совместим со
+  схемой после 005.
 
