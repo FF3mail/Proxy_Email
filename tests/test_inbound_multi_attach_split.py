@@ -657,6 +657,79 @@ class InlinePolicyE1Test(unittest.TestCase):
         self.assertIn('same.png', c.detail or '')
 
 
+class ContentDispositionFilenameTrap79_2fTest(unittest.TestCase):
+    """PROMPT-79.2f: disposition value only — filenames must not match 'attachment'."""
+
+    def test_inline_attachment_png_filename_zero_attachments(self) -> None:
+        raw = _mixed(
+            [_part('attachment.png', disposition='inline', maintype='image', subtype='png')]
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+        self.assertIn('attachment.png', c.detail or '')
+
+    def test_zip_plus_inline_attachment_jpg_filename(self) -> None:
+        raw = _mixed(
+            [
+                _part('report.zip'),
+                _part(
+                    'Attachment-1.jpg',
+                    disposition='inline',
+                    maintype='image',
+                    subtype='jpeg',
+                ),
+            ],
+            subject='report.zip',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (0,))
+        self.assertEqual(c.approved_filenames, ('report.zip',))
+        self.assertTrue(c.subject.required)
+        self.assertTrue(c.subject.ok)
+
+    def test_uppercase_attachment_disposition_counted(self) -> None:
+        raw = _mixed([_part('a.zip', disposition='ATTACHMENT')], subject='a.zip')
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.total_count, 1)
+
+    def test_attachment_disposition_inline_zip_filename_counted(self) -> None:
+        raw = _mixed([_part('inline.zip')], subject='inline.zip')
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.approved_filenames, ('inline.zip',))
+
+    def test_classify_rebuild_index_alignment_trap_filenames(self) -> None:
+        raw = _mixed(
+            [
+                _part('attachment.png', disposition='inline', maintype='image', subtype='png'),
+                _part('real.zip'),
+                _part(
+                    'Attachment-1.jpg',
+                    disposition='inline',
+                    maintype='image',
+                    subtype='jpeg',
+                ),
+            ],
+            subject='real.zip',
+        )
+        msg = __import__('email').message_from_bytes(raw, policy=policy.default)
+        self.assertEqual(len(enumerate_attachable_parts(msg)), 1)
+        c = classify_inbound_attachments(raw)
+        self.assertEqual(c.deliver_indexes, (0,))
+        with tempfile.TemporaryDirectory() as tmp:
+            fan = rebuild_inbound_fanout(
+                raw, _dto(tmp), temp_dir=tmp, approved_part_indexes=c.deliver_indexes
+            )
+            self.assertTrue(fan.success)
+            self.assertEqual(len(fan.children), 1)
+            child = __import__('email').message_from_bytes(
+                fan.children[0].temp_path.read_bytes(), policy=policy.default
+            )
+            self.assertEqual(str(child['Subject']), 'real.zip')
+
+
 class MissingFilenameE3Test(unittest.TestCase):
     def test_nameless_attachment_skipped(self) -> None:
         raw = _mixed([_part(None), _part('ok.zip')], subject='ok.zip')

@@ -234,6 +234,12 @@ def try_attachment_filename(part: Message) -> Optional[str]:
     return decoded
 
 
+def _content_disposition_is_attachment(part: Message) -> bool:
+    """Disposition value only (PROMPT-79.2f) — not filename substring match."""
+    disp = part.get_content_disposition()
+    return (disp or '').lower() == 'attachment'
+
+
 def _walk_attachments(part: Message, found: List[Message]) -> None:
     if (part.get_content_type() or '').lower() == 'message/rfc822':
         raise ValueError('nested_rfc822')
@@ -246,15 +252,14 @@ def _walk_attachments(part: Message, found: List[Message]) -> None:
                 raise ValueError('malformed_multipart')
             _walk_attachments(subpart, found)
         return
-    disposition = (part.get('Content-Disposition') or '').lower()
-    if 'attachment' in disposition:
+    if _content_disposition_is_attachment(part):
         found.append(part)
 
 
 def enumerate_attachable_parts(msg: Message) -> List[Message]:
     """
-    Single shared enumerator (E5 / E1): Content-Disposition contains
-    "attachment" only. Inline / cid / no-disposition parts are NOT attachments.
+    Single shared enumerator (E5 / E1 / 79.2f): get_content_disposition() == attachment.
+    Inline / cid / no-disposition parts are NOT attachments (filename ignored).
     """
     found: List[Message] = []
     _walk_attachments(msg, found)
@@ -276,9 +281,9 @@ def _walk_non_attachment_named(
                 raise ValueError('malformed_multipart')
             _walk_non_attachment_named(subpart, found)
         return
-    disposition = (part.get('Content-Disposition') or '').lower()
-    if 'attachment' in disposition:
+    if _content_disposition_is_attachment(part):
         return
+    disposition = (part.get('Content-Disposition') or '').lower()
     raw_name = part.get_filename()
     if not raw_name or not str(raw_name).strip():
         return

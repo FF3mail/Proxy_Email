@@ -38,3 +38,5 @@ Out of scope for 79.2e.
 
 SMTP-retry skipped-row noise, legacy alias cleanup, nested rfc822 handling,
 content inspection, outbound path, lab deploy.
+
+**PROMPT-79.2f (2026-09-24):** attachment detection uses `get_content_disposition() == 'attachment'` instead of substring on the raw header (fixes inline parts whose filename contains “attachment”).

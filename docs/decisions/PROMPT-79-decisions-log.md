@@ -110,6 +110,9 @@ Interim-hold PROMPT-79.2-incident-check снят этим промптом.
   journal → UNSEEN. Сбой Seen → WARNING, delete всё равно. Сбой delete после
   Seen → WARNING, письмо остаётся Seen (без повторного poll/journal).
 
+**Поправка 2026-09-24 (PROMPT-79.2f):** признак вложения — только
+`get_content_disposition() == 'attachment'`, не подстрока в заголовке
+(имя файла `attachment.png` при `inline` не считается вложением).
 
 Регистр при сравнении темы письма и расширений вложений — см. Issue
 #26 (https://github.com/FF3mail/Proxy_Email/issues/26).
