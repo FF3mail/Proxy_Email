@@ -104,8 +104,10 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
                 <thead>
                 <tr>
                     <th><?= h(__('observability.col_when')) ?></th>
+                    <th><?= h(__('observability.col_event')) ?></th>
                     <th><?= h(__('observability.col_direction')) ?></th>
                     <th><?= h(__('observability.col_reason')) ?></th>
+                    <th><?= h(__('observability.col_detail')) ?></th>
                     <th><?= h(__('observability.col_notified')) ?></th>
                     <th><?= h(__('observability.col_parties')) ?></th>
                 </tr>
@@ -114,8 +116,10 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
                 <?php foreach ($page['nonstandard_rows'] as $row): ?>
                     <tr>
                         <td class="mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
+                        <td><?= h((string)($row['event_type'] ?? '')) ?></td>
                         <td><?= h((string)($row['direction'] ?? '')) ?></td>
                         <td><?= h((string)($row['reason_label'] ?? '')) ?></td>
+                        <td class="mono"><?= h((string)($row['detail'] ?? '')) ?></td>
                         <td><?= h((string)($row['notified_label'] ?? '')) ?></td>
                         <td>
                             <?= h((string)($row['referent_name'] ?? '—')) ?>

@@ -324,17 +324,19 @@ return [
 
     // PROMPT-69 — observability связей (только чтение)
     'observability.title' => 'Журнал прохождения писем',
-    'observability.hint' => 'Представления только для чтения из таблицы mail_passage_journal (одна запись на доставленное или отклонённое письмо). Метки времени — UTC. Не из debug-лога демона.',
+    'observability.hint' => 'Представления только для чтения из таблицы mail_passage_journal (одна запись на доставленное, отклонённое или пропущенное вложение). Метки времени — UTC. Не из debug-лога демона.',
     'observability.refresh' => 'Обновить',
     'observability.limit_label' => 'Строк в каждом представлении',
     'observability.passage_title' => 'Прохождение писем',
     'observability.passage_empty' => 'В журнале пока нет доставленных писем.',
     'observability.nonstandard_title' => 'Нестандартные события',
-    'observability.nonstandard_empty' => 'В журнале пока нет отклонённых писем.',
+    'observability.nonstandard_empty' => 'В журнале пока нет отклонённых писем или пропущенных вложений.',
     'observability.col_when' => 'Время события (UTC)',
     'observability.col_direction' => 'Направление',
     'observability.col_passage' => 'Прохождение',
     'observability.col_reason' => 'Причина',
+    'observability.col_event' => 'Событие',
+    'observability.col_detail' => 'Детали',
     'observability.col_notified' => 'Уведомление',
     'observability.col_parties' => 'Референт / клиент',
 ];

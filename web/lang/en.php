@@ -323,17 +323,19 @@ return [
 
     // PROMPT-69 — relationship routing observability (read-only)
     'observability.title' => 'Mail passage journal',
-    'observability.hint' => 'Read-only views from the durable mail_passage_journal table (one row per delivered or disposed message). Timestamps are UTC. Not sourced from the daemon debug log.',
+    'observability.hint' => 'Read-only views from the durable mail_passage_journal table (one row per delivered, disposed, or skipped-attachment event). Timestamps are UTC. Not sourced from the daemon debug log.',
     'observability.refresh' => 'Refresh',
     'observability.limit_label' => 'Rows per view',
     'observability.passage_title' => 'Message passage',
     'observability.passage_empty' => 'No delivered messages in the journal yet.',
     'observability.nonstandard_title' => 'Nonstandard events',
-    'observability.nonstandard_empty' => 'No disposed messages in the journal yet.',
+    'observability.nonstandard_empty' => 'No disposed or skipped-attachment events in the journal yet.',
     'observability.col_when' => 'Event time (UTC)',
     'observability.col_direction' => 'Direction',
     'observability.col_passage' => 'Passage',
     'observability.col_reason' => 'Reason',
+    'observability.col_event' => 'Event',
+    'observability.col_detail' => 'Detail',
     'observability.col_notified' => 'Notification',
     'observability.col_parties' => 'Referent / client',
 ];

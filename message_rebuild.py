@@ -83,18 +83,16 @@ def rebuild_inbound_fanout(
     dto: ClientRelationshipDTO,
     *,
     temp_dir: str = DEFAULT_TEMP_DIR,
-    archive_extensions_only: bool = False,
-    approved_extensions: Optional[Sequence[str]] = None,
+    approved_part_indexes: Optional[Sequence[int]] = None,
 ) -> FanoutRebuildResult:
     """
-    Inbound 1:N fan-out rebuild (spec §1.3, §4.2).
+    Inbound 1:N fan-out rebuild (spec §1.3, §4.2 / PROMPT-79.2d).
 
     RD-13: all N children rebuild into temp files before returning success.
     Any failure deletes all temps and returns success=False with zero paths.
 
-    When archive_extensions_only=True (PROMPT-79.2c multi-attach), only parts
-    whose filename extension is in the approved archive set are rebuilt;
-    others are skipped (caller already logged them).
+    approved_part_indexes: 0-based indexes into enumerate_attachable_parts result.
+    Classification/extension filtering is the caller's job (single decision point).
     """
     temp_paths: List[Path] = []
     try:
@@ -112,33 +110,16 @@ def rebuild_inbound_fanout(
                 reason='zero_attachments',
             )
 
-        if archive_extensions_only:
-            from attachment_policy import (
-                APPROVED_ARCHIVE_EXTENSIONS,
-                extension_of_filename,
-            )
-
-            allowed = frozenset(
-                e.lower().lstrip('.')
-                for e in (approved_extensions or APPROVED_ARCHIVE_EXTENSIONS)
-            )
-            filtered = []
-            for part in attachments:
-                filename = _attachment_filename(part)
-                ext = extension_of_filename(filename)
-                if ext not in allowed:
-                    logger.warning(
-                        '[MESSAGE_REBUILD] fanout skip disallowed '
-                        'relationship_id=%s filename=%s',
-                        dto.relationship_id,
-                        filename,
-                    )
-                    continue
-                filtered.append(part)
-            attachments = filtered
+        if approved_part_indexes is not None:
+            selected = []
+            for i in approved_part_indexes:
+                if i < 0 or i >= len(attachments):
+                    raise MessageRebuildError('malformed_mime')
+                selected.append(attachments[i])
+            attachments = selected
             if not attachments:
                 logger.error(
-                    '[MESSAGE_REBUILD] zero_attachments after archive filter '
+                    '[MESSAGE_REBUILD] zero_attachments empty index list '
                     'relationship_id=%s',
                     dto.relationship_id,
                 )
@@ -310,7 +291,8 @@ def _attachment_filename(part: Message) -> str:
     filename = part.get_filename()
     if not filename or not str(filename).strip():
         raise MessageRebuildError('malformed_mime')
-    return str(filename).strip()
+    from attachment_policy import decode_mime_filename, sanitize_header_filename
+    return sanitize_header_filename(decode_mime_filename(str(filename)))
 
 
 def _build_rebuilt_message(
@@ -321,18 +303,22 @@ def _build_rebuilt_message(
     filename: str,
 ) -> bytes:
     """
-    Build rebuilt RFC822 (spec §4.4–§4.7):
-    From/To only (no Cc), regenerated Subject/Date/Message-ID, empty text/plain + one attachment.
+    Build rebuilt RFC822 (spec §4.4–§4.7 / PROMPT-79.2d D8):
+    From/To only (no Cc), Subject = sanitized attachment filename (case preserved),
+    regenerated Date/Message-ID, empty text/plain + one attachment.
     """
+    from attachment_policy import sanitize_header_filename
+    safe_name = sanitize_header_filename(filename)
     mixed = MIMEMultipart('mixed', policy=policy.SMTP)
     mixed['From'] = from_addr
     mixed['To'] = to_addr
-    mixed['Subject'] = filename
+    # Unicode Subject: policy.SMTP encodes non-ASCII as RFC 2047 on serialize.
+    mixed['Subject'] = safe_name
     mixed['Date'] = formatdate(localtime=True)
     mixed['Message-ID'] = make_msgid(domain='mail-proxy.local')
 
     mixed.attach(MIMEText('', 'plain', 'utf-8', policy=policy.SMTP))
-    mixed.attach(_clone_attachment_part(attachment_part, filename))
+    mixed.attach(_clone_attachment_part(attachment_part, safe_name))
 
     return mixed.as_bytes(policy=policy.SMTP)
 

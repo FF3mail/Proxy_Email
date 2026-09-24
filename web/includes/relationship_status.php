@@ -13,9 +13,10 @@ const DISPOSAL_REASON_LABELS = [
     'no_relationship' => 'Нет связи (relationship)',
     'relationship_inactive' => 'Связь деактивирована',
     'zero_attachments' => 'Нет вложений',
-    'multiple_attachments' => 'Более одного вложения',
+    'multiple_attachments' => 'Более одного вложения (исходящие)',
     'disallowed_extension' => 'Недопустимое расширение вложения',
-    'subject_mismatch' => 'Тема не совпадает с именем файла',
+    'subject_mismatch' => 'Тема не совпадает с именами архивов',
+    'too_many_attachments' => 'Слишком много вложений (>20)',
 ];
 
 function normalizePanelPassageJournalLimit(int $limit): int
@@ -45,12 +46,25 @@ function disposalReasonLabel(?string $code): string
 function formatPassageJournalLine(array $row): string
 {
     $direction = (string)($row['direction'] ?? '');
+    $eventType = (string)($row['event_type'] ?? '');
     $referent = (string)($row['referent_name'] ?? '—');
     $client = (string)($row['client_name'] ?? '—');
     $local = (string)($row['local_mailbox'] ?? '—');
     $external = (string)($row['external_mailbox'] ?? '—');
     $received = (string)($row['received_at'] ?? '—');
     $action = (string)($row['action_at'] ?? '—');
+    $detail = (string)($row['detail'] ?? '');
+    $reason = disposalReasonLabel(isset($row['disposal_reason']) ? (string)$row['disposal_reason'] : null);
+
+    if ($eventType === 'skipped') {
+        $fname = $detail !== '' ? $detail : $local;
+        return sprintf(
+            'Пропущено вложение (%s): %s — %s',
+            $reason,
+            $fname,
+            $client
+        );
+    }
 
     if ($direction === 'outbound') {
         return sprintf(
@@ -112,7 +126,7 @@ function buildRelationshipStatusPageData(object $pdo, int $limit = PANEL_PASSAGE
         $stmt = $pdo->prepare(
             "SELECT id, event_ts, event_type, direction, referent_name, client_name,
                     local_mailbox, external_mailbox, received_at, action_at,
-                    disposal_reason, notified, source_message_id
+                    disposal_reason, notified, source_message_id, detail
              FROM mail_passage_journal
              WHERE event_type = 'delivered'
              ORDER BY event_ts DESC, id DESC
@@ -129,9 +143,9 @@ function buildRelationshipStatusPageData(object $pdo, int $limit = PANEL_PASSAGE
         $stmt2 = $pdo->prepare(
             "SELECT id, event_ts, event_type, direction, referent_name, client_name,
                     local_mailbox, external_mailbox, received_at, action_at,
-                    disposal_reason, notified, source_message_id
+                    disposal_reason, notified, source_message_id, detail
              FROM mail_passage_journal
-             WHERE event_type = 'disposed'
+             WHERE event_type IN ('disposed', 'skipped')
              ORDER BY event_ts DESC, id DESC
              LIMIT ?"
         );

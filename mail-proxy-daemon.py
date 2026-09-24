@@ -66,6 +66,7 @@ from mail_passage_journal import (
 from mail_disposal import (
     journal_delivered,
     journal_disposed,
+    journal_skipped,
     maybe_notify_outbound_disposal,
     unlink_maildir_file,
 )
@@ -894,7 +895,7 @@ class MailHandler:
                 return finalize_inbound_process_result(plan, False)
 
             raw_bytes = mail_file.read_bytes()
-            # PROMPT-79.2c: N=0/1 use single rules; N≥2 split approved archives
+            # PROMPT-79.2d: single decision point (limit → subject → extension filter)
             inbound_class = classify_inbound_attachments(raw_bytes)
             if inbound_class.is_error:
                 logger.error(
@@ -909,11 +910,38 @@ class MailHandler:
             if inbound_class.is_invalid:
                 reason = inbound_class.reason or 'zero_attachments'
                 logger.info(
-                    '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s',
+                    '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s '
+                    'detail=%s',
                     reason,
                     account_email,
+                    inbound_class.detail,
                 )
                 try:
+                    # Write skipped rows first when disposing for disallowed_extension
+                    # after per-part filter (informative); for too_many/subject_mismatch
+                    # the disposed row carries the filename list in detail.
+                    if reason == 'disallowed_extension' and inbound_class.parts:
+                        from attachment_policy import VERDICT_SKIP
+                        for part in inbound_class.parts:
+                            if part.verdict != VERDICT_SKIP:
+                                continue
+                            journal_skipped(
+                                self._passage_journal,
+                                direction=DIRECTION_INBOUND,
+                                disposal_reason='disallowed_extension',
+                                filename=part.filename,
+                                referent_name=plan.referent_name
+                                or referent_data.get('username'),
+                                client_name=plan.client_name,
+                                local_mailbox=plan.local_mailbox
+                                or plan.local_target_email,
+                                external_mailbox=plan.external_mailbox
+                                or from_addr
+                                or None,
+                                received_at=received_at,
+                                source_message_id=source_message_id,
+                                detail='filename=%s ext=%s' % (part.filename, part.ext),
+                            )
                     journal_disposed(
                         self._passage_journal,
                         direction=DIRECTION_INBOUND,
@@ -925,6 +953,7 @@ class MailHandler:
                         external_mailbox=plan.external_mailbox or from_addr or None,
                         received_at=received_at,
                         source_message_id=source_message_id,
+                        detail=inbound_class.detail,
                     )
                 except Exception as exc:
                     logger.error(
@@ -936,17 +965,48 @@ class MailHandler:
                     plan, False, dispose_imap=True
                 )
 
+            # Deliver path: journal skipped parts BEFORE SMTP (write-before-delete
+            # for source dispose happens only after full success; skipped rows are
+            # lifecycle records and must succeed before we proceed to fan-out so a
+            # later source dispose still has them — write them now; on failure
+            # fail-closed without SMTP.
+            try:
+                from attachment_policy import VERDICT_SKIP
+                for part in inbound_class.parts:
+                    if part.verdict != VERDICT_SKIP:
+                        continue
+                    journal_skipped(
+                        self._passage_journal,
+                        direction=DIRECTION_INBOUND,
+                        disposal_reason='disallowed_extension',
+                        filename=part.filename,
+                        referent_name=plan.referent_name
+                        or referent_data.get('username'),
+                        client_name=plan.client_name,
+                        local_mailbox=plan.local_mailbox or plan.local_target_email,
+                        external_mailbox=plan.external_mailbox or from_addr or None,
+                        received_at=received_at,
+                        source_message_id=source_message_id,
+                        detail='filename=%s ext=%s' % (part.filename, part.ext),
+                    )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_DISPOSAL] skipped journal write failed — fail closed: %s',
+                    exc,
+                )
+                return finalize_inbound_process_result(plan, False)
+
             logger.info(
                 'Delivering incoming external mail to local SMTP: %s '
                 '(mode=%s relationship_id=%s target=%s maildir=%s '
-                'inbound_attach=%s approved=%s skipped=%s)',
+                'inbound_attach=deliver count=%s indexes=%s skipped=%s)',
                 plan.local_rcpts,
                 plan.mode.value,
                 plan.relationship_id,
                 plan.local_target_email,
                 plan.local_client_maildir,
-                inbound_class.status,
-                inbound_class.approved_filenames,
+                inbound_class.total_count,
+                inbound_class.deliver_indexes,
                 inbound_class.skipped_filenames,
             )
             smtp = smtplib.SMTP(
@@ -961,7 +1021,7 @@ class MailHandler:
                 from_addr=from_addr,
                 received_at=received_at,
                 source_message_id=source_message_id,
-                archive_extensions_only=inbound_class.is_split,
+                approved_part_indexes=inbound_class.deliver_indexes,
             )
             return finalize_inbound_process_result(
                 plan, delivered, smtp_error=smtp_error
@@ -996,7 +1056,7 @@ class MailHandler:
         from_addr: str,
         received_at=None,
         source_message_id: Optional[str] = None,
-        archive_extensions_only: bool = False,
+        approved_part_indexes: Optional[list] = None,
     ) -> tuple:
         """
         relationship_live inbound: fan-out rebuild then sequential SMTP (RD-13).
@@ -1015,7 +1075,7 @@ class MailHandler:
             mail_file.read_bytes(),
             dto,
             temp_dir=TEMP_DIR,
-            archive_extensions_only=archive_extensions_only,
+            approved_part_indexes=approved_part_indexes,
         )
         if not fanout.success:
             # Rebuild/MIME errors are fail-closed (not disposal).

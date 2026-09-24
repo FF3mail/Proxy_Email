@@ -16,6 +16,7 @@ from typing import Optional
 from mail_passage_journal import (
     EVENT_DELIVERED,
     EVENT_DISPOSED,
+    EVENT_SKIPPED,
     MailPassageJournal,
     PassageJournalRecord,
     utc_now_naive,
@@ -36,6 +37,7 @@ def journal_disposed(
     external_mailbox: Optional[str] = None,
     received_at: Optional[datetime] = None,
     source_message_id: Optional[str] = None,
+    detail: Optional[str] = None,
 ) -> int:
     """INSERT disposed row with notified=0. Raises on failure."""
     now = utc_now_naive()
@@ -52,6 +54,45 @@ def journal_disposed(
             disposal_reason=disposal_reason,
             notified=False,
             source_message_id=source_message_id,
+            detail=detail,
+            event_ts=now,
+        )
+    )
+
+
+def journal_skipped(
+    journal: MailPassageJournal,
+    *,
+    direction: str,
+    disposal_reason: str,
+    filename: Optional[str] = None,
+    referent_name: Optional[str] = None,
+    client_name: Optional[str] = None,
+    local_mailbox: Optional[str] = None,
+    external_mailbox: Optional[str] = None,
+    received_at: Optional[datetime] = None,
+    source_message_id: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> int:
+    """INSERT skipped-part row (PROMPT-79.2d). Raises on failure."""
+    now = utc_now_naive()
+    detail_text = detail
+    if detail_text is None and filename:
+        detail_text = 'filename=%s' % filename
+    return journal.write(
+        PassageJournalRecord(
+            event_type=EVENT_SKIPPED,
+            direction=direction,
+            referent_name=referent_name,
+            client_name=client_name,
+            local_mailbox=local_mailbox or filename,
+            external_mailbox=external_mailbox,
+            received_at=received_at or now,
+            action_at=now,
+            disposal_reason=disposal_reason,
+            notified=False,
+            source_message_id=source_message_id,
+            detail=detail_text,
             event_ts=now,
         )
     )

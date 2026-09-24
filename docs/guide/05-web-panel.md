@@ -194,9 +194,9 @@ Dashboard → **«Создать референта»** (`action=referent_form`)
 Страница читает **только** таблицу `mail_passage_journal` (не debug-лог демона):
 
 1. **Прохождение писем** — строки `event_type=delivered` в человекочитаемом виде (исходящие и входящие формулировки по реестру решений PROMPT-79 §5).
-2. **Нестандартные события** — строки `event_type=disposed` с причиной (`disposal_reason`) и признаком «референт уведомлён / не уведомлён».
+2. **Нестандартные события** — строки `event_type=disposed` и `event_type=skipped` (пропущенные вложения) с причиной, колонками Event/Detail и признаком уведомления референта.
 
-Метки времени в журнале — **UTC** (записываются демоном в application code). Требуется применённая миграция `migrations/004_mail_passage_journal.sql`.
+Метки времени в журнале — **UTC** (записываются демоном в application code). Требуются миграции `004_mail_passage_journal.sql` и `005_mail_passage_journal_skipped.sql`.
 
 ---
 

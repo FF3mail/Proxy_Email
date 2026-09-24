@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 EVENT_DELIVERED = 'delivered'
 EVENT_DISPOSED = 'disposed'
+EVENT_SKIPPED = 'skipped'
 DIRECTION_INBOUND = 'inbound'
 DIRECTION_OUTBOUND = 'outbound'
 
@@ -26,6 +27,7 @@ DISPOSAL_ZERO_ATTACHMENTS = 'zero_attachments'
 DISPOSAL_MULTIPLE_ATTACHMENTS = 'multiple_attachments'
 DISPOSAL_DISALLOWED_EXTENSION = 'disallowed_extension'
 DISPOSAL_SUBJECT_MISMATCH = 'subject_mismatch'
+DISPOSAL_TOO_MANY_ATTACHMENTS = 'too_many_attachments'
 
 
 def utc_now_naive() -> datetime:
@@ -57,6 +59,7 @@ class PassageJournalRecord:
     disposal_reason: Optional[str] = None
     notified: bool = False
     source_message_id: Optional[str] = None
+    detail: Optional[str] = None
     event_ts: Optional[datetime] = None
 
 
@@ -79,13 +82,13 @@ class MailPassageJournal:
                 referent_name, client_name,
                 local_mailbox, external_mailbox,
                 received_at, action_at,
-                disposal_reason, notified, source_message_id
+                disposal_reason, notified, source_message_id, detail
             ) VALUES (
                 %s, %s, %s,
                 %s, %s,
                 %s, %s,
                 %s, %s,
-                %s, %s, %s
+                %s, %s, %s, %s
             )
         """
         params = (
@@ -101,6 +104,7 @@ class MailPassageJournal:
             record.disposal_reason,
             1 if record.notified else 0,
             record.source_message_id,
+            record.detail,
         )
         conn = None
         cursor = None
