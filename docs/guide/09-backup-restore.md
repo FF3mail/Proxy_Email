@@ -36,6 +36,15 @@ gzip /backup/mail_proxy_$(date +%Y%m%d).sql
 
 > Храните пароль root MySQL в защищённом файле (`/root/.my.cnf` с chmod 600), не в открытом cron.
 
+Очистка журнала прохождения писем (ADR-001, 1 год; независимо от debug-лога). Пример cron ежедневно в 03:15:
+
+```bash
+15 3 * * * root /usr/bin/python3 /opt/Proxy_email/scripts/purge_mail_passage_journal.py \
+  >> /var/log/mail-proxy/journal-purge.log 2>&1
+```
+
+Скрипт читает `/etc/mail-proxy/db.conf` и удаляет строки с `event_ts` старше 365 суток (cutoff вычисляется в UTC в коде скрипта, не через MySQL `NOW()`). Путь к репозиторию/скрипту скорректируйте под фактическое размещение на хосте.
+
 ---
 
 ## 9.3. Резервная копия crypto.key

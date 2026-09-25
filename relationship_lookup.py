@@ -2,9 +2,10 @@
 """
 ClientRelationship lookup layer (PROMPT-53 / PROMPT-54).
 
-Standalone query module. PROMPT-58 Stage 1 imports it into mail-proxy-daemon.py
-for shadow-mode logging only — it does not drive live delivery yet.
-Implements PROMPT-53 §10–§13 query contracts against additive `clients` columns.
+Standalone query module used by mail-proxy-daemon for live relationship
+resolution. Implements PROMPT-53 §10–§13 query contracts against additive
+`clients` columns. PROMPT-79.2 adds classified resolve (matched / no_match /
+inactive) for disposal journaling.
 Importing this module has no side effects beyond class/function definitions.
 """
 
@@ -71,6 +72,25 @@ class DatabaseConnectionProvider(Protocol):
 def normalize_email(address: str) -> str:
     """Lowercase + trim per PROMPT-53 §8/§10."""
     return address.strip().lower()
+
+
+# PROMPT-79.2 — classified lookup outcomes for disposal (distinct from errors).
+STATUS_MATCHED = 'matched'
+STATUS_NO_MATCH = 'no_match'
+STATUS_INACTIVE = 'relationship_inactive'
+
+
+@dataclass(frozen=True)
+class RelationshipClassifyResult:
+    """Definitive classify result (never used for DB/lookup exceptions)."""
+
+    status: str
+    dto: Optional['ClientRelationshipDTO'] = None
+    relationship_id: Optional[int] = None
+    referent_name: Optional[str] = None
+    client_name: Optional[str] = None
+    local_mailbox: Optional[str] = None
+    external_mailbox: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -140,13 +160,38 @@ class RelationshipLookup:
     ) -> Optional[ClientRelationshipDTO]:
         """
         PROMPT-53 §11: external mailbox context + external From.
-        Returns None for unknown sender or invalid/inactive relationship.
+        Returns DTO only for a fully valid+active relationship; else None.
+        Prefer classify_inbound() when inactive must be distinguished.
+        """
+        classified = self.classify_inbound(external_account_id, external_sender_email)
+        return classified.dto if classified.status == STATUS_MATCHED else None
+
+    def resolve_outbound(
+        self,
+        local_recipient_email: str,
+    ) -> Optional[ClientRelationshipDTO]:
+        """
+        PROMPT-53 §12: local message From/identity identifies Client relationship.
+        Prefer classify_outbound() when inactive must be distinguished.
+        """
+        classified = self.classify_outbound(local_recipient_email)
+        return classified.dto if classified.status == STATUS_MATCHED else None
+
+    def classify_inbound(
+        self,
+        external_account_id: int,
+        external_sender_email: str,
+    ) -> RelationshipClassifyResult:
+        """
+        PROMPT-79.2: matched | no_match | relationship_inactive.
+        Raises on DB errors (callers treat exceptions as fail-closed).
         """
         sender = normalize_email(external_sender_email)
         if not sender:
-            return None
+            return RelationshipClassifyResult(status=STATUS_NO_MATCH)
 
-        sql = f"""
+        matched = self._fetch_one(
+            f"""
             {_RELATIONSHIP_SELECT}
             FROM clients c
             JOIN external_accounts ea ON ea.id = c.external_account_id
@@ -154,29 +199,144 @@ class RelationshipLookup:
             WHERE c.external_account_id = %s
               AND c.external_client_email = %s
               AND {_VALID_RELATIONSHIP_WHERE}
-        """
-        return self._fetch_one(sql, (int(external_account_id), sender))
+            """,
+            (int(external_account_id), sender),
+        )
+        if matched is not None:
+            return self._matched_result(matched)
 
-    def resolve_outbound(
+        inactive = self._fetch_one_any_active(
+            """
+            SELECT
+                c.id AS relationship_id,
+                c.external_client_email,
+                c.local_client_email,
+                c.local_referent_email,
+                c.active AS relationship_active,
+                ea.email AS external_referent_email,
+                ea.active AS account_active,
+                r.username AS referent_username,
+                r.active AS referent_active
+            FROM clients c
+            LEFT JOIN external_accounts ea ON ea.id = c.external_account_id
+            LEFT JOIN referents r ON r.id = c.referent_id
+            WHERE c.external_account_id = %s
+              AND LOWER(TRIM(c.external_client_email)) = %s
+            LIMIT 1
+            """,
+            (int(external_account_id), sender),
+        )
+        if inactive is None:
+            return RelationshipClassifyResult(status=STATUS_NO_MATCH)
+        return self._inactive_or_incomplete(inactive, direction='inbound')
+
+    def classify_outbound(
         self,
         local_recipient_email: str,
-    ) -> Optional[ClientRelationshipDTO]:
+    ) -> RelationshipClassifyResult:
         """
-        PROMPT-53 §12: local message To identifies Client relationship.
+        PROMPT-79.2: matched | no_match | relationship_inactive.
+        Raises on DB errors (callers treat exceptions as fail-closed).
         """
         recipient = normalize_email(local_recipient_email)
         if not recipient:
-            return None
+            return RelationshipClassifyResult(status=STATUS_NO_MATCH)
 
-        sql = f"""
+        matched = self._fetch_one(
+            f"""
             {_RELATIONSHIP_SELECT}
             FROM clients c
             JOIN external_accounts ea ON ea.id = c.external_account_id
             JOIN referents r ON r.id = c.referent_id
             WHERE c.local_client_email = %s
               AND {_VALID_RELATIONSHIP_WHERE}
-        """
-        return self._fetch_one(sql, (recipient,))
+            """,
+            (recipient,),
+        )
+        if matched is not None:
+            return self._matched_result(matched)
+
+        inactive = self._fetch_one_any_active(
+            """
+            SELECT
+                c.id AS relationship_id,
+                c.external_client_email,
+                c.local_client_email,
+                c.local_referent_email,
+                c.active AS relationship_active,
+                ea.email AS external_referent_email,
+                ea.active AS account_active,
+                r.username AS referent_username,
+                r.active AS referent_active
+            FROM clients c
+            LEFT JOIN external_accounts ea ON ea.id = c.external_account_id
+            LEFT JOIN referents r ON r.id = c.referent_id
+            WHERE LOWER(TRIM(c.local_client_email)) = %s
+            LIMIT 1
+            """,
+            (recipient,),
+        )
+        if inactive is None:
+            return RelationshipClassifyResult(status=STATUS_NO_MATCH)
+        return self._inactive_or_incomplete(inactive, direction='outbound')
+
+    @staticmethod
+    def _matched_result(dto: ClientRelationshipDTO) -> RelationshipClassifyResult:
+        return RelationshipClassifyResult(
+            status=STATUS_MATCHED,
+            dto=dto,
+            relationship_id=dto.relationship_id,
+            referent_name=(dto.referent or {}).get('username'),
+            client_name=dto.external_client_email or dto.local_client_email,
+            local_mailbox=dto.local_referent_email or dto.local_client_email,
+            external_mailbox=dto.external_client_email or dto.external_referent_email,
+        )
+
+    @staticmethod
+    def _inactive_or_incomplete(
+        row: Mapping[str, Any],
+        *,
+        direction: str,
+    ) -> RelationshipClassifyResult:
+        rel_active = int(row.get('relationship_active') or 0) == 1
+        acct_active = int(row.get('account_active') or 0) == 1
+        ref_active = int(row.get('referent_active') or 0) == 1
+        if rel_active and acct_active and ref_active:
+            # Row exists but failed completeness predicates → treat as no match.
+            return RelationshipClassifyResult(status=STATUS_NO_MATCH)
+
+        local_mailbox = row.get('local_referent_email') or row.get('local_client_email')
+        external_mailbox = row.get('external_client_email') or row.get(
+            'external_referent_email'
+        )
+        client_name = row.get('external_client_email') or row.get('local_client_email')
+        if direction == 'outbound':
+            local_mailbox = row.get('local_client_email') or local_mailbox
+        return RelationshipClassifyResult(
+            status=STATUS_INACTIVE,
+            relationship_id=int(row['relationship_id']) if row.get('relationship_id') else None,
+            referent_name=row.get('referent_username'),
+            client_name=client_name,
+            local_mailbox=local_mailbox,
+            external_mailbox=external_mailbox,
+        )
+
+    def _fetch_one_any_active(
+        self, sql: str, params: tuple
+    ) -> Optional[Mapping[str, Any]]:
+        conn = None
+        cursor = None
+        try:
+            conn = self._db.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            return row
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
 
     def list_poll_targets(self) -> List[Dict[str, Any]]:
         """

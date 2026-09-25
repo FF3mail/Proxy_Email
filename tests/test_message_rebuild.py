@@ -211,13 +211,26 @@ class MessageRebuildFixtureTest(unittest.TestCase):
         msg = self._read_child(result.temp_paths[0])
         self.assertEqual(msg['Subject'], 'real.pdf')
 
-    def test_F9_nested_rfc822_fail_closed(self) -> None:
+    def test_F9_nested_rfc822_inbound_opaque_no_attachment_disp(self) -> None:
+        """Inbound uses opaque nested policy (79.2j); bare rfc822 ≠ attachment."""
         inner = MIMEText('nested', 'plain', 'utf-8', policy=policy.SMTP)
         wrapper = MIMEBase('message', 'rfc822', policy=policy.SMTP)
         wrapper.set_payload(inner.as_bytes(policy=policy.SMTP))
         outer = MIMEMultipart('mixed', policy=policy.SMTP)
         outer.attach(wrapper)
         result = self._fanout(outer.as_bytes(policy=policy.SMTP))
+        self.assertFalse(result.success)
+        self.assertEqual(result.reason, 'zero_attachments')
+
+    def test_O_nested_rfc822_outbound_still_fail_closed(self) -> None:
+        """Outbound keeps nested_policy='error' (PROMPT-79.2j)."""
+        inner = MIMEText('nested', 'plain', 'utf-8', policy=policy.SMTP)
+        wrapper = MIMEBase('message', 'rfc822', policy=policy.SMTP)
+        wrapper.set_payload(inner.as_bytes(policy=policy.SMTP))
+        wrapper.add_header('Content-Disposition', 'attachment', filename='fwd.eml')
+        outer = MIMEMultipart('mixed', policy=policy.SMTP)
+        outer.attach(wrapper)
+        result = self._outbound(outer.as_bytes(policy=policy.SMTP))
         self.assertFalse(result.success)
         self.assertEqual(result.reason, 'malformed_mime')
 

@@ -189,9 +189,14 @@ Dashboard → **«Создать референта»** (`action=referent_form`)
 
 **Комментарий:** мониторинг читает файлы логов напрямую — права `www-data` на логи через группу `mail-proxy-logs`.
 
-### Статус маршрутизации (`relationship-status.php`)
+### Журнал прохождения писем (`relationship-status.php`)
 
-Навигационный пункт сохранён. С **PROMPT-79.1** страница показывает заглушку: shadow-статистика и per-referent overrides удалены; полноценная observability для live routing запланирована в **PROMPT-79.2**.
+Страница читает **только** таблицу `mail_passage_journal` (не debug-лог демона):
+
+1. **Прохождение писем** — строки `event_type=delivered` в человекочитаемом виде (исходящие и входящие формулировки по реестру решений PROMPT-79 §5).
+2. **Нестандартные события** — строки `event_type=disposed` и `event_type=skipped` (пропущенные вложения) с причиной, колонками Event/Detail и признаком уведомления референта.
+
+Метки времени в журнале — **UTC** (записываются демоном в application code). Требуются миграции `004_mail_passage_journal.sql` и `005_mail_passage_journal_skipped.sql`.
 
 ---
 

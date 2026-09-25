@@ -83,18 +83,29 @@ def rebuild_inbound_fanout(
     dto: ClientRelationshipDTO,
     *,
     temp_dir: str = DEFAULT_TEMP_DIR,
+    approved_part_indexes: Optional[Sequence[int]] = None,
 ) -> FanoutRebuildResult:
     """
-    Inbound 1:N fan-out rebuild (spec §1.3, §4.2).
+    Inbound 1:N fan-out rebuild (spec §1.3, §4.2 / PROMPT-79.2d).
 
     RD-13: all N children rebuild into temp files before returning success.
     Any failure deletes all temps and returns success=False with zero paths.
+
+    approved_part_indexes: 0-based indexes into enumerate_attachable_parts result.
+    Classification/extension filtering is the caller's job (single decision point).
+
+    PROMPT-79.2j: inbound enumeration uses nested_policy=opaque so indexes
+    match classify_inbound_attachments (outbound keeps the default 'error').
     """
+    from attachment_policy import NESTED_POLICY_OPAQUE
+
     temp_paths: List[Path] = []
     try:
         msg = _parse_message(raw_bytes)
         _reject_signed_or_encrypted(msg)
-        attachments = _enumerate_attachable_parts(msg)
+        attachments = _enumerate_attachable_parts_shared(
+            msg, nested_policy=NESTED_POLICY_OPAQUE
+        )
         if not attachments:
             logger.error(
                 '[MESSAGE_REBUILD] zero_attachments relationship_id=%s',
@@ -105,6 +116,25 @@ def rebuild_inbound_fanout(
                 error='zero_attachments',
                 reason='zero_attachments',
             )
+
+        if approved_part_indexes is not None:
+            selected = []
+            for i in approved_part_indexes:
+                if i < 0 or i >= len(attachments):
+                    raise MessageRebuildError('malformed_mime')
+                selected.append(attachments[i])
+            attachments = selected
+            if not attachments:
+                logger.error(
+                    '[MESSAGE_REBUILD] zero_attachments empty index list '
+                    'relationship_id=%s',
+                    dto.relationship_id,
+                )
+                return FanoutRebuildResult(
+                    success=False,
+                    error='zero_attachments',
+                    reason='zero_attachments',
+                )
 
         children: List[FanoutChildMetadata] = []
         for index, part in enumerate(attachments, start=1):
@@ -159,7 +189,7 @@ def rebuild_outbound_message(
     try:
         msg = _parse_message(raw_bytes)
         _reject_signed_or_encrypted(msg)
-        attachments = _enumerate_attachable_parts(msg)
+        attachments = _enumerate_attachable_parts_shared(msg)
         if not attachments:
             logger.error(
                 '[MESSAGE_REBUILD] zero_attachments relationship_id=%s',
@@ -238,37 +268,35 @@ def _reject_signed_or_encrypted(msg: Message) -> None:
                     raise MessageRebuildError('signed_or_encrypted')
 
 
-def _enumerate_attachable_parts(msg: Message) -> List[Message]:
-    """Collect Content-Disposition: attachment parts; discard inline (spec §4.2/§4.3)."""
-    found: List[Message] = []
-    _walk_for_attachments(msg, found)
-    return found
+def _enumerate_attachable_parts_shared(
+    msg: Message,
+    *,
+    nested_policy: str = 'error',
+) -> List[Message]:
+    """
+    PROMPT-79.2e E5: one enumerator shared with attachment_policy so classify
+    indexes always match rebuild. Maps policy ValueError → MessageRebuildError.
 
+    Default nested_policy='error' (outbound). Inbound must pass
+    NESTED_POLICY_OPAQUE explicitly (PROMPT-79.2j).
+    """
+    from attachment_policy import enumerate_attachable_parts
 
-def _walk_for_attachments(part: Message, found: List[Message]) -> None:
-    if (part.get_content_type() or '').lower() == 'message/rfc822':
-        raise MessageRebuildError('malformed_mime')
-
-    if part.is_multipart():
-        payload = part.get_payload()
-        if not isinstance(payload, list):
-            raise MessageRebuildError('malformed_mime')
-        for subpart in payload:
-            if isinstance(subpart, str):
-                raise MessageRebuildError('malformed_mime')
-            _walk_for_attachments(subpart, found)
-        return
-
-    disposition = (part.get('Content-Disposition') or '').lower()
-    if 'attachment' in disposition:
-        found.append(part)
+    try:
+        return enumerate_attachable_parts(msg, nested_policy=nested_policy)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason in ('nested_rfc822', 'malformed_multipart'):
+            raise MessageRebuildError('malformed_mime') from exc
+        raise MessageRebuildError('malformed_mime') from exc
 
 
 def _attachment_filename(part: Message) -> str:
     filename = part.get_filename()
     if not filename or not str(filename).strip():
         raise MessageRebuildError('malformed_mime')
-    return str(filename).strip()
+    from attachment_policy import decode_mime_filename, sanitize_header_filename
+    return sanitize_header_filename(decode_mime_filename(str(filename)))
 
 
 def _build_rebuilt_message(
@@ -279,18 +307,22 @@ def _build_rebuilt_message(
     filename: str,
 ) -> bytes:
     """
-    Build rebuilt RFC822 (spec §4.4–§4.7):
-    From/To only (no Cc), regenerated Subject/Date/Message-ID, empty text/plain + one attachment.
+    Build rebuilt RFC822 (spec §4.4–§4.7 / PROMPT-79.2d D8):
+    From/To only (no Cc), Subject = sanitized attachment filename (case preserved),
+    regenerated Date/Message-ID, empty text/plain + one attachment.
     """
+    from attachment_policy import sanitize_header_filename
+    safe_name = sanitize_header_filename(filename)
     mixed = MIMEMultipart('mixed', policy=policy.SMTP)
     mixed['From'] = from_addr
     mixed['To'] = to_addr
-    mixed['Subject'] = filename
+    # Unicode Subject: policy.SMTP encodes non-ASCII as RFC 2047 on serialize.
+    mixed['Subject'] = safe_name
     mixed['Date'] = formatdate(localtime=True)
     mixed['Message-ID'] = make_msgid(domain='mail-proxy.local')
 
     mixed.attach(MIMEText('', 'plain', 'utf-8', policy=policy.SMTP))
-    mixed.attach(_clone_attachment_part(attachment_part, filename))
+    mixed.attach(_clone_attachment_part(attachment_part, safe_name))
 
     return mixed.as_bytes(policy=policy.SMTP)
 

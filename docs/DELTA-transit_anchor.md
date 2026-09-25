@@ -1,7 +1,7 @@
-# DELTA-transit — Якорный документ v4.0
+# DELTA-transit — Якорный документ v4.4
 
 **Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
-**Дата:** 2026-09-11  
+**Дата:** 2026-09-24  
 **Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
 
 ---
@@ -600,10 +600,33 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Scope** | Remove `relationship_shadow.py`, shadow/legacy/dual routing paths, per-referent mode UI, shadow observability parsing |
 | **Daemon** | `relationship_routing.py` live-only; `mail-proxy-daemon.py` relationship-only watches; override cache removed |
 | **Production modes** | `INBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_WATCH_MODE=relationship_only` via `mail-proxy.service.d/routing.conf` |
-| **Panel** | Referent form no longer edits `inbound_routing_mode` / `outbound_*` columns; `relationship-status.php` stub until PROMPT-79.2 |
+| **Panel** | Referent form no longer edits `inbound_routing_mode` / `outbound_*` columns; `relationship-status.php` → mail-passage journal views (PROMPT-79.2) |
 | **Schema** | DB override columns retained (cleanup deferred PROMPT-79.4) |
 | **Verdict** | See closure report |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v4.0*
+## 21. PROMPT-79.2 — Mail-passage journal and disposal
+
+**Reports:** [`docs/reports/PROMPT-79-2-mail-passage-journal.md`](reports/PROMPT-79-2-mail-passage-journal.md)  
+**ADR:** [`docs/decisions/ADR-001-mail-passage-journal.md`](decisions/ADR-001-mail-passage-journal.md)  
+**Issue:** [#26](https://github.com/FF3mail/Proxy_Email/issues/26) (case-insensitive subject/extension rules)
+
+| Field | Value |
+|-------|-------|
+| **Storage** | MySQL `mail_passage_journal` via `004` + `005` (`skipped` event + `detail` VARCHAR(1024); `schema.sql` / `003` untouched) |
+| **Timestamps** | `event_ts` / `received_at` / `action_at` — UTC computed in application code; naive `DATETIME(0)`; never SQL `NOW()` |
+| **One row** | Per delivered recipient/child and per disposal event |
+| **Disposal** | `no_relationship` / `relationship_inactive` / attachment gates (`zero_attachments`, `disallowed_extension`, `subject_mismatch`, `too_many_attachments`, `missing_filename`; outbound `multiple_attachments`). Skipped → `event_type=skipped`. Inbound IMAP: journal → Seen → Deleted+EXPUNGE |
+| **Inbound attach gate (79.2d/e/i/j)** | One path for N≥1; attachment = Disposition contains `attachment` only (inline ignored). Archives ∪ images (no SVG); MAX=20; archive Subject (E2 NFC); `missing_filename` skip; **`nested_message`** for `message/rfc822` attachment (opaque, no inner walk); dispose order Seen→delete (E4); shared enumerator with `nested_policy` (inbound opaque on **classify and rebuild** / outbound error — 79.2j desync fix). Reports: `PROMPT-79-2d-…`, `PROMPT-79-2e-…`, `PROMPT-79-2i-…`, `PROMPT-79-2j-….md` |
+| **Fail-closed** | Lookup/MIME/DB errors → leave message (UNSEEN / Maildir intact); never dispose on ambiguity |
+| **Write-before-delete** | Journal `INSERT` must succeed before IMAP `\Deleted`+EXPUNGE or Maildir unlink |
+| **Notify** | Outbound disposal → local §4 template to referent; inbound-from-internet → silent; `notified` flipped to 1 only after confirmed send |
+| **Inactive model** | Deactivated relationship disposed like no-match with distinct reason code (operator clarification 2026-09-23; decisions log §2 amended) |
+| **Retention** | 1 year; daily cron `scripts/purge_mail_passage_journal.py` (independent of debug-log logrotate) |
+| **Panel** | `relationship-status.php` — passage table + nonstandard events from journal only |
+| **Verdict** | See closure report |
+
+---
+
+*Конец документа · DELTA-transit Anchor v4.4*

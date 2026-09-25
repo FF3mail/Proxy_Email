@@ -148,7 +148,7 @@ class RelationshipLivePlanTest(unittest.TestCase):
 
 
 class ProcessResultTest(unittest.TestCase):
-    def test_live_miss_marks_seen_without_delivery(self) -> None:
+    def test_live_miss_does_not_mark_seen_without_dispose_flag(self) -> None:
         from relationship_routing import InboundDeliveryPlan
 
         plan = InboundDeliveryPlan(
@@ -158,8 +158,22 @@ class ProcessResultTest(unittest.TestCase):
             skip_reason='no_relationship_match',
         )
         result = finalize_inbound_process_result(plan, False)
-        self.assertTrue(result.mark_imap_seen)
+        self.assertFalse(result.mark_imap_seen)
+        self.assertFalse(result.dispose_imap)
         self.assertFalse(result.local_delivered)
+
+    def test_dispose_flag_sets_dispose_imap(self) -> None:
+        from relationship_routing import InboundDeliveryPlan
+
+        plan = InboundDeliveryPlan(
+            mode=InboundRoutingMode.RELATIONSHIP_LIVE,
+            local_rcpts=[],
+            mail_from='refloc1@testvps.loc',
+            skip_reason='no_relationship_match',
+        )
+        result = finalize_inbound_process_result(plan, False, dispose_imap=True)
+        self.assertTrue(result.dispose_imap)
+        self.assertFalse(result.mark_imap_seen)
 
     def test_live_error_no_seen(self) -> None:
         from relationship_routing import InboundDeliveryPlan
@@ -172,6 +186,7 @@ class ProcessResultTest(unittest.TestCase):
         )
         result = finalize_inbound_process_result(plan, False)
         self.assertFalse(result.mark_imap_seen)
+        self.assertFalse(result.dispose_imap)
         self.assertFalse(result.local_delivered)
 
 

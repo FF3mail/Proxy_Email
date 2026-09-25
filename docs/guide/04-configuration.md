@@ -202,3 +202,27 @@ fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
 ---
 
 *Предыдущий: [03-installation.md](03-installation.md) · Следующий: [05-web-panel.md](05-web-panel.md)*
+
+
+---
+
+## 4.11. Inbound attachment policy (PROMPT-79.2d)
+
+Код: `attachment_policy.py`, точка входа демона — `classify_inbound_attachments`.
+
+| Константа | Значение |
+|-----------|----------|
+| `APPROVED_ARCHIVE_EXTENSIONS` | Архивы (исходящие и часть входящих) |
+| `IMAGE_EXTENSIONS` | Изображения (только входящие) |
+| `APPROVED_INBOUND_EXTENSIONS` | Архивы ∪ изображения (без SVG) |
+| `MAX_INBOUND_ATTACHMENTS` | 20 |
+| `DETAIL_MAX_LEN` | 1024 (усечение `detail` в журнале) |
+
+Порядок проверок: N=0 → `zero_attachments`; N>20 → `too_many_attachments`;
+`check_inbound_subject` (D7); фильтр расширений; fan-out индексов
+`deliver_indexes` через `rebuild_inbound_fanout` (без собственной
+фильтрации расширений). Дочерний Subject = sanitized filename (D8).
+
+`DISPOSAL_MISSING_FILENAME` / inline policy (PROMPT-79.2e): see decisions log
+and `docs/reports/PROMPT-79-2e-inline-missing-filename-dispose.md`. Shared
+enumerator: rebuild imports `enumerate_attachable_parts` from this module.
