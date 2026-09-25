@@ -1,0 +1,21 @@
+# DELTA-transit — зависимости Python-демона
+# Воссоздан на основании: mail-proxy-daemon.py (импорты) + Якорный документ v2.0
+#
+# Установка выполняется через venv (delta-transit-install.sh, Phase Python):
+#   ${VENV_PATH}/bin/pip install -r requirements.txt
+#
+# Все четыре пакета — сторонние зависимости демона.
+# Стандартная библиотека (os, sys, threading, imaplib, smtplib и др.) не включается.
+
+# AES-256-GCM шифрование паролей и OAuth-токенов (Cryptor-класс)
+# Совместимость: Python Cryptor ↔ PHP Cryptor обязательна
+cryptography>=42.0.0
+
+# Мониторинг Maildir через inotify (MaildirHandler / watchdog.observers)
+watchdog>=4.0.0
+
+# Пул соединений с MariaDB (Database-класс, DB_POOL_SIZE=12)
+mysql-connector-python>=8.4.0
+
+# HTTP-запросы к OAuth2-эндпоинтам (обновление токенов в _refresh_oauth_token)
+requests>=2.32.0

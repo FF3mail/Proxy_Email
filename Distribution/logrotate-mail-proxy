@@ -1,0 +1,52 @@
+# =============================================================================
+# Конфигурация logrotate для проекта mail-proxy
+# =============================================================================
+#
+# Обслуживает лог-файлы в /var/log/mail-proxy/:
+#   - mail-proxy-daemon.log  (Python-демон, пишет через logging)
+#   - web_admin.log          (PHP веб-панель, пишет через writeLog())
+#
+# Права каталога и файлов: tmpfiles.d/mail-proxy.conf (setgid 2750).
+# Ротация: ежедневно, хранить 30 дней, сжимать gzip.
+# =============================================================================
+
+/var/log/mail-proxy/mail-proxy-daemon.log {
+
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+
+    # www-data reads via mail-proxy-logs group membership (panel monitor.php).
+    create 0640 vmail mail-proxy-logs
+    su vmail mail-proxy-logs
+
+    dateext
+    dateformat -%Y%m%d
+
+    sharedscripts
+
+    postrotate
+        if systemctl is-active --quiet mail-proxy; then
+            systemctl kill --kill-who=main --signal=SIGUSR1 mail-proxy 2>/dev/null || true
+        fi
+    endscript
+}
+
+/var/log/mail-proxy/web_admin.log {
+
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+
+    create 0660 vmail mail-proxy-logs
+    su vmail mail-proxy-logs
+
+    dateext
+    dateformat -%Y%m%d
+}

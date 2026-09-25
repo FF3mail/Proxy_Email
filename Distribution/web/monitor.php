@@ -1,0 +1,644 @@
+<?php
+declare(strict_types=1);
+
+// IP allow-list before session_start() so a 403 never emits Set-Cookie (PROMPT-29).
+require_once __DIR__ . '/includes/helpers.php';
+checkLocalNetworkAccess();
+
+startPanelSession();
+
+require_once __DIR__ . '/includes/i18n.php';
+initPanelI18n();
+
+// ============================================================
+// Подключение общих зависимостей панели управления
+// ============================================================
+require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/panel_migration.php';
+
+require_once __DIR__ . '/includes/log_viewer.php';
+require_once __DIR__ . '/includes/log_tail.php';
+
+sanitizeLegacyPanelSession();
+bootstrapPanelAuth();
+
+requirePanelAdmin();
+
+// ============================================================
+// Константы страницы мониторинга
+// ============================================================
+
+// Максимальное число строк, считываемых с хвоста каждого лог-файла
+const MONITOR_TAIL_LINES = 200;
+
+// Максимальное число событий, отображаемых в каждой секции
+const MONITOR_EVENTS_PER_SECTION = 30;
+
+// Директория с лог-файлами демона и веб-панели
+const LOG_DIR = '/var/log/mail-proxy';
+
+// Путь к pid-файлу демона для определения его статуса
+const DAEMON_PID_FILE = '/run/mail-proxy/mail-proxy.pid';
+
+// Имя systemd-юнита (документация; статус читается через pid-файл + /proc, без shell)
+const DAEMON_SERVICE_NAME = 'mail-proxy';
+
+// ============================================================
+// Вспомогательные функции парсинга логов
+// tailFile() — см. includes/log_tail.php
+// ============================================================
+
+/**
+ * Парсит одну строку лога и возвращает структурированный массив.
+ * Обрабатывает оба формата: PHP-панель и Python-демон.
+ *
+ * PHP-формат:  [2025-01-15 14:23:01] сообщение
+ * Python-формат: 2025-01-15 14:23:01,123 ERROR mail_proxy.daemon: сообщение
+ *
+ * @param string $line  Строка лога
+ * @return array{ts: string, level: string, message: string}|null
+ */
+function parseLogLine(string $line): ?array
+{
+    $line = trim($line);
+    if ($line === '') {
+        return null;
+    }
+
+    // Формат PHP-панели: [YYYY-MM-DD HH:MM:SS] сообщение
+    if (preg_match(
+        '/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(.+)$/s',
+        $line,
+        $m
+    )) {
+        $msg   = $m[2];
+        $level = detectLevel($msg);
+        return ['ts' => $m[1], 'level' => $level, 'message' => $msg];
+    }
+
+    // Формат Python-демона: YYYY-MM-DD HH:MM:SS,mmm LEVEL logger: сообщение
+    if (preg_match(
+        '/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+\S+:\s+(.+)$/s',
+        $line,
+        $m
+    )) {
+        return ['ts' => $m[1], 'level' => strtoupper($m[2]), 'message' => $m[3]];
+    }
+
+    return null;
+}
+
+/**
+ * Определяет уровень события по ключевым словам в тексте сообщения.
+ * Используется для PHP-формата, где уровень не выводится явно.
+ *
+ * @param string $msg  Текст сообщения
+ * @return string      Уровень: ERROR | WARNING | INFO
+ */
+function detectLevel(string $msg): string
+{
+    $upper = strtoupper($msg);
+    if (str_contains($upper, 'ERROR') || str_contains($upper, 'CRITICAL')) {
+        return 'ERROR';
+    }
+    if (str_contains($upper, 'WARN') || str_contains($upper, 'FAIL')) {
+        return 'WARNING';
+    }
+    return 'INFO';
+}
+
+/**
+ * Загружает и парсит все строки из лог-файла.
+ * Возвращает только строки соответствующие фильтру уровней/ключевых слов.
+ *
+ * @param string   $filePath  Путь к файлу
+ * @param string[] $keywords  Ключевые слова для фильтрации (регистр игнорируется)
+ * @param string[] $levels    Уровни для фильтрации (ERROR, WARNING, CRITICAL и т.д.)
+ * @param int      $limit     Максимум результирующих записей
+ * @return array[]            Массив распарсенных записей
+ */
+function loadLogEvents(
+    string $filePath,
+    array $keywords = [],
+    array $levels   = [],
+    int   $limit    = MONITOR_EVENTS_PER_SECTION
+): array {
+    $lines  = tailFile($filePath, MONITOR_TAIL_LINES);
+    $events = [];
+
+    foreach (array_reverse($lines) as $line) {
+        $parsed = parseLogLine($line);
+        if ($parsed === null) {
+            continue;
+        }
+
+        // Фильтрация по уровню
+        if (!empty($levels) && !in_array($parsed['level'], $levels, true)) {
+            continue;
+        }
+
+        // Фильтрация по ключевым словам (хотя бы одно должно присутствовать)
+        if (!empty($keywords)) {
+            $found = false;
+            $upper = strtoupper($parsed['message']);
+            foreach ($keywords as $kw) {
+                if (str_contains($upper, strtoupper($kw))) {
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
+                continue;
+            }
+        }
+
+        $events[] = $parsed;
+
+        if (count($events) >= $limit) {
+            break;
+        }
+    }
+
+    return $events;
+}
+
+// ============================================================
+// Определение статуса демона
+// ============================================================
+
+/**
+ * Read PID from daemon pid file (no shell). Returns null if unavailable.
+ */
+function readDaemonPidFile(string $pidFile): ?int
+{
+    if (!is_readable($pidFile)) {
+        return null;
+    }
+
+    $raw = @file_get_contents($pidFile);
+    if ($raw === false) {
+        return null;
+    }
+
+    $pid = (int)trim($raw);
+    return $pid > 1 ? $pid : null;
+}
+
+/**
+ * True if /proc/$pid exists (process table entry). Avoids shell_exec/posix_kill
+ * which are commonly listed in PHP-FPM disable_functions on iRedMail hosts.
+ */
+function isProcPidAlive(int $pid): bool
+{
+    if ($pid <= 1) {
+        return false;
+    }
+
+    return @is_dir('/proc/' . $pid);
+}
+
+/**
+ * Best-effort check that a PID is the mail-proxy daemon (cmdline or exe).
+ * Returns true if evidence matches, false if evidence contradicts, null if unknown.
+ */
+function procLooksLikeMailProxy(int $pid): ?bool
+{
+    $cmdlinePath = '/proc/' . $pid . '/cmdline';
+    if (is_readable($cmdlinePath)) {
+        $cmdline = @file_get_contents($cmdlinePath);
+        if ($cmdline === false || $cmdline === '') {
+            return null;
+        }
+        $flat = str_replace("\0", ' ', $cmdline);
+        if (stripos($flat, 'mail-proxy-daemon') !== false) {
+            return true;
+        }
+        // Readable cmdline that does not mention the daemon → not ours
+        return false;
+    }
+
+    $exe = @readlink('/proc/' . $pid . '/exe');
+    if (is_string($exe) && $exe !== '') {
+        if (stripos($exe, 'python') !== false) {
+            return null; // inconclusive without cmdline
+        }
+        return false;
+    }
+
+    return null;
+}
+
+/**
+ * Uptime seconds from /proc/$pid (starttime via stat, else ctime of /proc entry).
+ */
+function procUptimeSeconds(int $pid): ?int
+{
+    $statPath = '/proc/' . $pid . '/stat';
+    if (is_readable($statPath)) {
+        $stat = @file_get_contents($statPath);
+        if (is_string($stat) && $stat !== '') {
+            // comm may contain spaces/parens; starttime is field 22 after ") "
+            $rparen = strrpos($stat, ')');
+            if ($rparen !== false) {
+                $rest = trim(substr($stat, $rparen + 1));
+                $fields = preg_split('/\s+/', $rest) ?: [];
+                // After ')': state(1) ... starttime is index 19 (field 22 overall)
+                if (isset($fields[19]) && ctype_digit((string)$fields[19])) {
+                    $startTicks = (int)$fields[19];
+                    $hz = 100;
+                    $uptimeFile = @file_get_contents('/proc/uptime');
+                    if (is_string($uptimeFile)) {
+                        $parts = explode(' ', trim($uptimeFile), 2);
+                        $systemUptime = (float)($parts[0] ?? 0);
+                        if ($systemUptime > 0) {
+                            $startSeconds = $startTicks / $hz;
+                            return (int)max(0, (int)floor($systemUptime - $startSeconds));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    $ctime = @filectime('/proc/' . $pid);
+    if ($ctime !== false && $ctime > 0) {
+        return max(0, time() - $ctime);
+    }
+
+    return null;
+}
+
+/**
+ * Daemon status without shell_exec/system/exec/passthru/proc_open.
+ * Uses pid file + /proc; missing sources yield status=unknown (never HTTP 500).
+ *
+ * @return array{status: string, uptime: string, pid: int|null}
+ */
+function getDaemonStatus(): array
+{
+    $status = 'unknown';
+    $uptime = '';
+    $pid = null;
+
+    try {
+        $filePid = readDaemonPidFile(DAEMON_PID_FILE);
+
+        if ($filePid !== null && isProcPidAlive($filePid)) {
+            $looks = procLooksLikeMailProxy($filePid);
+            if ($looks === false) {
+                // Stale pid file pointing at unrelated process
+                $status = 'inactive';
+            } else {
+                $status = 'active';
+                $pid = $filePid;
+                $seconds = procUptimeSeconds($filePid);
+                if ($seconds !== null) {
+                    $uptime = formatUptime($seconds);
+                }
+            }
+        } elseif (is_readable(DAEMON_PID_FILE)) {
+            // Pid file present but process gone
+            $status = 'inactive';
+        }
+        // else: no pid file → unknown (daemon pre-PROMPT-26 or RuntimeDirectory missing)
+    } catch (Throwable) {
+        $status = 'unknown';
+        $uptime = '';
+        $pid = null;
+    }
+
+    return ['status' => $status, 'uptime' => $uptime, 'pid' => $pid];
+}
+
+/**
+ * Форматирует количество секунд в читаемую строку вида "3д 5ч 12м".
+ *
+ * @param int $seconds  Количество секунд
+ * @return string
+ */
+function formatUptime(int $seconds): string
+{
+    $days    = intdiv($seconds, 86400);
+    $hours   = intdiv($seconds % 86400, 3600);
+    $minutes = intdiv($seconds % 3600, 60);
+
+    $parts = [];
+    if ($days > 0)    $parts[] = __('monitor.uptime_days', ['n' => (string)$days]);
+    if ($hours > 0)   $parts[] = __('monitor.uptime_hours', ['n' => (string)$hours]);
+    $parts[] = __('monitor.uptime_minutes', ['n' => (string)$minutes]);
+
+    return implode(' ', $parts);
+}
+// ============================================================
+// Сбор данных для всех секций мониторинга
+// ============================================================
+
+$daemonLog  = LOG_DIR . '/mail-proxy-daemon.log';
+$webAdminLog = LOG_DIR . '/web_admin.log';
+
+// Статус демона
+$daemonStatus = getDaemonStatus();
+
+// Последние ошибки OAuth2 — ищем в логе демона
+$oauthErrors = loadLogEvents(
+    $daemonLog,
+    keywords: ['OAuth2', 'XOAUTH2', 'token'],
+    levels:   ['ERROR', 'CRITICAL', 'WARNING']
+);
+
+// Последние ошибки SMTP — ищем в логе демона
+$smtpErrors = loadLogEvents(
+    $daemonLog,
+    keywords: ['SMTP', 'smtp', 'sendmail', 'MAIL FROM', 'RCPT TO', 'DATA'],
+    levels:   ['ERROR', 'CRITICAL', 'WARNING']
+);
+
+// Последние ошибки IMAP — ищем в логе демона
+$imapErrors = loadLogEvents(
+    $daemonLog,
+    keywords: ['IMAP', 'imap', 'INBOX', 'UNSEEN'],
+    levels:   ['ERROR', 'CRITICAL', 'WARNING']
+);
+
+// Критические события — любые CRITICAL и ERROR из обоих логов
+$criticalEvents = array_merge(
+    loadLogEvents($daemonLog,   levels: ['CRITICAL', 'ERROR'], limit: 15),
+    loadLogEvents($webAdminLog, levels: ['ERROR'],             limit: 15)
+);
+
+// Сортируем критические события по времени — новые первыми
+usort($criticalEvents, fn($a, $b) => strcmp($b['ts'], $a['ts']));
+$criticalEvents = array_slice($criticalEvents, 0, MONITOR_EVENTS_PER_SECTION);
+
+// Журнал действий веб-панели (все уровни)
+$webAdminEvents = loadLogEvents($webAdminLog, levels: [], limit: MONITOR_EVENTS_PER_SECTION);
+
+// ============================================================
+// Вспомогательная функция рендеринга таблицы событий
+// ============================================================
+
+/**
+ * Рендерит HTML-таблицу событий лога.
+ * Каждая строка раскрашивается по уровню важности.
+ *
+ * @param array[] $events  Массив распарсенных событий
+ * @param string  $empty   Текст при пустом списке
+ */
+function renderEventsTable(array $events, ?string $empty = null): void
+{
+    $emptyText = $empty ?? __('monitor.no_events');
+
+    if (empty($events)) {
+        echo '<p class="no-events">' . h($emptyText) . '</p>';
+        return;
+    }
+
+    echo '<table class="events-table">';
+    echo '<thead><tr><th>' . h(__('monitor.col_time')) . '</th><th>' . h(__('monitor.col_level')) . '</th><th>' . h(__('monitor.col_message')) . '</th></tr></thead>';
+    echo '<tbody>';
+
+    foreach ($events as $ev) {
+        $levelClass = match($ev['level']) {
+            'CRITICAL' => 'level-critical',
+            'ERROR'    => 'level-error',
+            'WARNING'  => 'level-warning',
+            default    => 'level-info',
+        };
+
+        echo '<tr class="' . $levelClass . '">';
+        echo '<td class="ts">'  . h($ev['ts'])      . '</td>';
+        echo '<td class="lvl">' . h($ev['level'])   . '</td>';
+        // Ограничиваем длину сообщения для читаемости таблицы
+        $msg = mb_strlen($ev['message']) > 300
+            ? mb_substr($ev['message'], 0, 297) . '...'
+            : $ev['message'];
+        echo '<td class="msg">' . h($msg) . '</td>';
+        echo '</tr>';
+    }
+
+    echo '</tbody></table>';
+}
+
+// ============================================================
+// Рендеринг HTML-страницы
+// ============================================================
+
+$statusLabel = match($daemonStatus['status']) {
+    'active'     => '<span class="badge badge-ok">' . h(__('monitor.status_running')) . '</span>',
+    'inactive'   => '<span class="badge badge-warn">' . h(__('monitor.status_stopped')) . '</span>',
+    'failed'     => '<span class="badge badge-err">' . h(__('monitor.status_error')) . '</span>',
+    'activating' => '<span class="badge badge-warn">' . h(__('monitor.status_starting')) . '</span>',
+    default      => '<span class="badge badge-unknown">' . h(__('monitor.status_unknown')) . '</span>',
+};
+?>
+<!DOCTYPE html>
+<html lang="<?= h(panelHtmlLang()) ?>">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><?= h(__('monitor.title')) ?></title>
+<style>
+    /* Базовые стили — согласованы с существующим интерфейсом панели управления */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 14px;
+        background: #f4f6f8;
+        color: #333;
+    }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+    h1 { font-size: 22px; margin-bottom: 20px; color: #2c3e50; }
+    h2 { font-size: 16px; margin: 24px 0 10px; color: #2c3e50;
+         border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+
+    /* Карточка статуса демона */
+    .status-card {
+        background: #fff;
+        border-radius: 6px;
+        padding: 16px 20px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.08);
+        display: flex;
+        align-items: center;
+        gap: 32px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+    }
+
+    .status-card .label { color: #666; font-size: 12px; text-transform: uppercase; }
+    .status-card .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
+
+    /* Бейджи статуса */
+    .badge { display: inline-block; padding: 4px 12px;
+             border-radius: 12px; font-size: 13px; font-weight: 600; }
+    .badge-ok      { background: #d4edda; color: #155724; }
+    .badge-warn    { background: #fff3cd; color: #856404; }
+    .badge-err     { background: #f8d7da; color: #721c24; }
+    .badge-unknown { background: #e2e3e5; color: #383d41; }
+
+    /* Секция событий */
+    .section {
+        background: #fff;
+        border-radius: 6px;
+        padding: 16px 20px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.08);
+        margin-bottom: 20px;
+    }
+
+    /* Таблица событий */
+    .events-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+
+    .events-table th {
+        background: #f0f2f5;
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 2px solid #ddd;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .events-table td {
+        padding: 6px 10px;
+        border-bottom: 1px solid #f0f0f0;
+        vertical-align: top;
+    }
+
+    .events-table td.ts  { white-space: nowrap; color: #555; width: 160px; }
+    .events-table td.lvl { white-space: nowrap; font-weight: 600; width: 90px; }
+    .events-table td.msg { word-break: break-word; font-family: monospace; }
+
+    /* Раскраска строк по уровню */
+    tr.level-critical { background: #fff0f0; }
+    tr.level-critical td.lvl { color: #c0392b; }
+    tr.level-error    { background: #fff8f8; }
+    tr.level-error    td.lvl { color: #e74c3c; }
+    tr.level-warning  { background: #fffdf0; }
+    tr.level-warning  td.lvl { color: #e67e22; }
+    tr.level-info     td.lvl { color: #27ae60; }
+
+    .no-events { color: #888; font-style: italic; padding: 8px 0; }
+
+    /* Навигационная панель */
+    .nav { background: #2c3e50; padding: 10px 20px;
+           display: flex; gap: 20px; align-items: center; }
+    .nav a { color: #ecf0f1; text-decoration: none; font-size: 14px; }
+    .nav a:hover { color: #3498db; }
+    .nav a.active { color: #3498db; font-weight: 600; }
+
+    /* Метаинформация страницы */
+    .page-meta { color: #999; font-size: 12px; margin-bottom: 16px; }
+
+    /* Кнопка обновления */
+    .btn-refresh {
+        display: inline-block;
+        padding: 6px 14px;
+        background: #3498db;
+        color: #fff;
+        border-radius: 4px;
+        text-decoration: none;
+        font-size: 13px;
+        margin-left: auto;
+    }
+    .btn-refresh:hover { background: #2980b9; }
+
+    .lang-link { color: #bdc3c7; font-size: 13px; text-decoration: none; margin-left: 12px; }
+    .lang-link:hover { color: #3498db; }
+    .lang-active { color: #3498db; font-size: 13px; font-weight: 600; margin-left: 12px; }
+    .lang-sep { color: #7f8c8d; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<!-- Навигационное меню — интегрируется с существующей панелью управления -->
+<nav class="nav">
+    <a href="/index.php"><?= h(__('nav.control_panel')) ?></a>
+    <a href="/index.php?action=referent_list"><?= h(__('nav.referents')) ?></a>
+    <a href="/index.php?action=account_list"><?= h(__('nav.accounts')) ?></a>
+    <a href="/index.php?action=provider_list"><?= h(__('nav.providers')) ?></a>
+    <a href="/monitor.php" class="active"><?= h(__('nav.monitor')) ?></a>
+    <a href="/relationship-status.php"><?= h(__('nav.relationship_status')) ?></a>
+    <a href="/logs.php">Логи</a>
+    <span style="margin-left:auto;" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></span>
+</nav>
+
+<div class="container">
+    <div style="display:flex; align-items:center; margin: 20px 0 4px;">
+        <h1><?= h(__('monitor.heading')) ?></h1>
+        <a href="/monitor.php" class="btn-refresh"><?= h(__('monitor.refresh')) ?></a>
+        <a href="/logs.php" class="btn-refresh" style="margin-left:12px;">Полный просмотр логов</a>
+    </div>
+    <p class="page-meta">
+        <?= h(__('monitor.data_from')) ?> <?= h(LOG_DIR) ?> &nbsp;|&nbsp;
+        <?= h(__('monitor.updated_at')) ?> <?= h(date('Y-m-d H:i:s')) ?>
+    </p>
+
+    <!-- Секция 1: Статус демона -->
+    <div class="status-card">
+        <div>
+            <div class="label"><?= h(__('monitor.service')) ?></div>
+            <div class="value"><?= $statusLabel ?></div>
+        </div>
+        <?php if ($daemonStatus['uptime'] !== ''): ?>
+        <div>
+            <div class="label"><?= h(__('monitor.uptime')) ?></div>
+            <div class="value"><?= h($daemonStatus['uptime']) ?></div>
+        </div>
+        <?php endif; ?>
+        <?php if ($daemonStatus['pid'] !== null): ?>
+        <div>
+            <div class="label"><?= h(__('monitor.pid')) ?></div>
+            <div class="value"><?= (int)$daemonStatus['pid'] ?></div>
+        </div>
+        <?php endif; ?>
+        <div>
+            <div class="label"><?= h(__('monitor.daemon_log')) ?></div>
+            <div class="value" style="font-size:13px; font-weight:400;">
+                <?= h($daemonLog) ?>
+                <?php if (!is_readable($daemonLog)): ?>
+                    <span style="color:#e74c3c"> <?= h(__('monitor.log_unavailable')) ?></span>
+                <?php else: ?>
+                    <span style="color:#27ae60"> <?= h(__('monitor.log_available')) ?></span>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Секция 2: Журнал веб-панели -->
+    <div class="section">
+        <h2>Журнал веб-панели</h2>
+        <?php renderEventsTable($webAdminEvents, 'Записей веб-панели не найдено'); ?>
+    </div>
+
+    <!-- Секция 3: Критические события -->
+    <div class="section">
+        <h2><?= h(__('monitor.critical_events')) ?></h2>
+        <?php renderEventsTable($criticalEvents, __('monitor.no_critical')); ?>
+    </div>
+
+    <!-- Секция 3: Ошибки OAuth2 -->
+    <div class="section">
+        <h2><?= h(__('monitor.oauth_errors')) ?></h2>
+        <?php renderEventsTable($oauthErrors, __('monitor.no_oauth_errors')); ?>
+    </div>
+
+    <!-- Секция 4: Ошибки SMTP -->
+    <div class="section">
+        <h2><?= h(__('monitor.smtp_errors')) ?></h2>
+        <?php renderEventsTable($smtpErrors, __('monitor.no_smtp_errors')); ?>
+    </div>
+
+    <!-- Секция 5: Ошибки IMAP -->
+    <div class="section">
+        <h2><?= h(__('monitor.imap_errors')) ?></h2>
+        <?php renderEventsTable($imapErrors, __('monitor.no_imap_errors')); ?>
+    </div>
+
+</div><!-- /container -->
+</body>
+</html>
