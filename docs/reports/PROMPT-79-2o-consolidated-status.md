@@ -18,8 +18,9 @@
 | Pre-O1 VPS repo | `5597a48` (79.2j daemon); panel already had 79.2n tabs from prior deploy |
 | O1 action | `git reset --hard a472e90`; rsync `web/` → `/var/www/mail-proxy` (preserved `config.php`) |
 | Panel backup | `/root/prompt79-2o-panel-backup-20260925T114036Z` |
-| Daemon restart | **Not required** — `git diff 5597a48..a472e90` is panel/tests only (no `*.py` daemon delta) |
+| Daemon restart | **Not required / not performed** — `git diff 5597a48..a472e90` is panel/tests only; ActiveEnterTimestamp remained `08:20:51 UTC` through O1 |
 | `mail-proxy` / `nginx` | `active` |
+| Attempt #1 note | Failed unittest due to **local worktree overlay corruption** from Windows `tar` — see [Incident log](#incident-log--o1-first-attempt-worktree-corruption-not-a-product-defect). Attempt #2 (clean reset) is the authoritative O1 result. |
 
 ### Automated suites @ `a472e90`
 
@@ -75,6 +76,68 @@ Statuses below supersede scattered “ready / blocked / K4 NOT VERIFIED” wordi
 | **Production (non-lab) burn-in** | All live mail proofs are on the disposable lab copy / prior lab VPS — not a production mailbox campaign. |
 
 Nothing else from the K1–K5 / panel i18n / filter / tabs checklist remains NOT VERIFIED after O1.
+
+---
+
+## Incident log — O1 first-attempt worktree corruption (not a product defect)
+
+**Why recorded:** the first O1 unittest run failed, then a `git reset --hard a472e90` made the suite green. That must not read as “it fixed itself” before merge — root cause and blast radius are below.
+
+### What happened (timeline, UTC)
+
+| Time | Event |
+|------|--------|
+| **08:20:51** | `mail-proxy` last entered active (`ActiveEnterTimestamp`); MainPID=4483. |
+| **11:39:10** | O1 attempt #1 starts. Script checks out `a472e90`, then overlays `/tmp/panel79_2o` into `/root/Proxy_Email`. |
+| **11:39** | Agent workstation used **Windows `tar -cf - … \| ssh tar -xf`** to stream `tests/` and daemon `*.py` into `/tmp/panel79_2o`. Extract printed `tar: Skipping to next header` / non-zero exit — **corrupt/incomplete members**. |
+| **11:39** | Overlay `cp -a /tmp/panel79_2o/tests/.` → `/root/Proxy_Email/tests/` overwrote the clean checkout. Unittest: **169 ran, 1 fail, 1 error, 11 skipped** (`SyntaxError` in `test_purge_mail_passage_journal.py`; Cyrillic `AssertionError` in notify wording test). |
+| **11:40:35** | O1 attempt #2: `git reset --hard a472e90` (no Windows tar overlay of Python). Unittest **171/11sk/0fail**; panel + HTML PASS. |
+| O1 window 11:30–11:50 | **`journalctl -u mail-proxy`:** no start/stop/restart. Daemon **not** restarted. |
+
+### Blast radius — what was / was not damaged
+
+| Asset | Status |
+|-------|--------|
+| **Git commit / GitHub push (`a472e90` and later `3763e66`)** | **Untouched.** Failures were not in origin blobs. |
+| **VPS git objects** | **Intact.** |
+| **VPS working tree `/root/Proxy_Email` during attempt #1** | **Temporarily corrupted** (tests overlaid from bad tar). Restored by `git reset --hard`. |
+| **Leftover `/tmp/panel79_2o/`** | Still present as evidence (not used by running services). |
+| **`/usr/local/bin/*.py` (running daemon)** | **Never overwritten by O1.** Still byte-match repo at `a472e90` (see checksums). |
+| **Product runtime / journal / panel config** | No incident impact beyond aborted unittest #1. |
+
+### Smoking gun still on disk (`/tmp/panel79_2o`)
+
+`tests/test_purge_mail_passage_journal.py` in the overlay:
+
+- md5 `d5438631…` vs clean repo `b5b075bd…` (same length 3048 bytes, **different content**)
+- **86 CRLF** line endings (Windows tar) vs repo **LF-only**
+- Line 87 truncated mid-token: `self.assertEqual(section.ge` → `SyntaxError: '(' was never closed`  
+  (matches attempt #1 error exactly)
+
+Root cause: **agent transfer hygiene** (Windows `tar` over SSH), not DELTA-transit code and not a bad push.
+
+### Checksums after `git reset --hard a472e90` vs origin blob
+
+Re-verified on lab 2026-09-25: worktree at `a472e90`, each file md5 == `git cat-file -p a472e90:<path> | md5sum`. `git diff a472e90 -- <files>` empty. `ALL_MATCH_A472E90=1`.
+
+| File | md5 |
+|------|-----|
+| `mail-proxy-daemon.py` | `acc80285b27ceffcc04c16b57911cdf9` |
+| `relationship_lookup.py` | `2e068e8366b9cb95270a70b5b6861f85` |
+| `relationship_routing.py` | `a733fd787a0bf624280f5ebe81d17c91` |
+| `message_rebuild.py` | `1fe06361ce40c0a6c5b53991b3939ee8` |
+| `attachment_policy.py` | `6ae4eaeecf4efadab8e4a752d284a54f` |
+| `mail_passage_journal.py` | `7b208307c2612551a38accb55b671bac` |
+| `mail_disposal.py` | `7d5e626f8b0b4b14e255898ae0b323b8` |
+| `referent_notify.py` | `61c43e30bb201b5ed052e9b67c99b2f5` |
+| `tests/test_purge_mail_passage_journal.py` | `b5b075bd3dbc2f87aab5ce52a094b27c` |
+| `tests/test_mail_passage_journal.py` | `b0e0af3baad2850a9c29afca50266387` |
+
+`/usr/local/bin/{same eight daemon modules}` → **BIN_MATCH** each vs that worktree (daemon codepath not part of the tar incident).
+
+### Lesson for future lab ops
+
+Do **not** stream project trees with Windows `tar` into the VPS overlay. Prefer `git fetch` + `reset --hard` on the host, or `scp` of individual text files. Never `cp` a failed tar extract over a clean checkout.
 
 ---
 
