@@ -205,3 +205,14 @@ MIME (не считать браковкой), запись в журнал ра
   архивы внутри nested-части не считаются top-level вложениями.
 - Исходящий путь **без изменений**: nested по-прежнему `error` /
   fail-closed при валидации.
+
+### Поправка PROMPT-79.2j (2026-09-25)
+
+- Дефект: inbound rebuild вызывал enumerator с default `nested_policy='error'`,
+  а `classify_inbound_attachments` — с `'opaque'`. При zip + nested и
+  `status=deliver` rebuild падал → UNSEEN retry loop и дубли `skipped` в журнале.
+- Решение: `rebuild_inbound_fanout` явно передаёт `NESTED_POLICY_OPAQUE`;
+  outbound (`rebuild_outbound_message`) оставляет default `'error'`.
+- Известный зазор (без фикса): opaque сейчас только для `message/rfc822`;
+  прочие `message/*` ещё обходятся walk'ом — расширение до
+  `ctype.startswith('message/')` только после подтверждения оператора.

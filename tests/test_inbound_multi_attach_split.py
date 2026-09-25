@@ -563,7 +563,38 @@ class DaemonInbound792dTest(unittest.TestCase):
         rebuild = (ROOT / 'message_rebuild.py').read_text(encoding='utf-8')
         self.assertNotIn('archive_extensions_only', rebuild)
 
-
+    def test_zip_plus_nested_e2e_no_retry_loop(self) -> None:
+        """PROMPT-79.2j: classify→skip journal→rebuild→SMTP→delivered; Seen once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            maildir = Path(tmp) / 'Maildir'
+            maildir.mkdir()
+            path = Path(tmp) / 'm.eml'
+            path.write_bytes(
+                _mixed(
+                    [
+                        _part('a.zip'),
+                        _nested_rfc822_attachment([], filename='fwd.eml'),
+                    ],
+                    subject='a.zip',
+                )
+            )
+            handler, journal = self._handler(maildir)
+            with patch('smtplib.SMTP', return_value=MagicMock()):
+                handler._stream_file_via_smtp = MagicMock(return_value=True)
+                result = self._deliver(handler, path)
+            self.assertTrue(result.local_delivered, result.smtp_error)
+            self.assertTrue(result.mark_imap_seen)
+            self.assertFalse(result.dispose_imap)
+            events = [c[0][0].event_type for c in journal.write.call_args_list]
+            self.assertEqual(events.count('skipped'), 1)
+            self.assertEqual(events.count('delivered'), 1)
+            skipped = [
+                c[0][0]
+                for c in journal.write.call_args_list
+                if c[0][0].event_type == 'skipped'
+            ]
+            self.assertEqual(skipped[0].disposal_reason, DISPOSAL_NESTED_MESSAGE)
+            self.assertEqual(handler._stream_file_via_smtp.call_count, 1)
 
 
 def _part(name=None, *, disposition='attachment', payload=b'data', maintype='application', subtype='octet-stream'):
@@ -882,6 +913,90 @@ class NestedRfc822InboundTest(unittest.TestCase):
         self.assertTrue(c.may_deliver)
         self.assertEqual(c.deliver_indexes, (0,))
         self.assertEqual(c.parts[1].skip_kind, 'nested_message')
+
+    def test_zip_plus_nested_rebuild_aligned(self) -> None:
+        """PROMPT-79.2j repro: classify deliver + rebuild must succeed (opaque)."""
+        raw = _mixed(
+            [
+                _part('a.zip'),
+                _nested_rfc822_attachment([], filename='fwd.eml'),
+            ],
+            subject='a.zip',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.status, 'deliver')
+        self.assertEqual(c.deliver_indexes, (0,))
+        with tempfile.TemporaryDirectory() as tmp:
+            fan = rebuild_inbound_fanout(
+                raw, _dto(tmp), temp_dir=tmp, approved_part_indexes=c.deliver_indexes
+            )
+            self.assertTrue(fan.success, fan.error)
+            self.assertEqual(len(fan.children), 1)
+            self.assertEqual(fan.children[0].filename, 'a.zip')
+
+    def test_zip_nested_png_index_alignment(self) -> None:
+        """Nested between deliverables: indexes stay aligned across classify/rebuild."""
+        raw = _mixed(
+            [
+                _part('a.zip'),
+                _nested_rfc822_attachment([], filename='fwd.eml'),
+                _part('pic.png', maintype='image', subtype='png'),
+            ],
+            subject='a.zip',
+        )
+        c = classify_inbound_attachments(raw)
+        self.assertTrue(c.may_deliver)
+        self.assertEqual(c.deliver_indexes, (0, 2))
+        self.assertEqual(c.parts[1].skip_kind, 'nested_message')
+        with tempfile.TemporaryDirectory() as tmp:
+            fan = rebuild_inbound_fanout(
+                raw, _dto(tmp), temp_dir=tmp, approved_part_indexes=c.deliver_indexes
+            )
+            self.assertTrue(fan.success, fan.error)
+            self.assertEqual(len(fan.children), 2)
+            self.assertEqual(
+                [ch.filename for ch in fan.children],
+                ['a.zip', 'pic.png'],
+            )
+
+    def test_any_deliver_rebuild_never_nested_fail(self) -> None:
+        """Any classify status=deliver must rebuild without nested/malformed failure."""
+        cases = [
+            _mixed(
+                [_part('a.zip'), _nested_rfc822_attachment([], filename='fwd.eml')],
+                subject='a.zip',
+            ),
+            _mixed(
+                [
+                    _part('a.zip'),
+                    _nested_rfc822_attachment([], filename='fwd.eml'),
+                    _part('b.png', maintype='image', subtype='png'),
+                ],
+                subject='a.zip',
+            ),
+            _mixed(
+                [
+                    _nested_rfc822_attachment([], filename='fwd.eml'),
+                    _part('only.zip'),
+                ],
+                subject='only.zip',
+            ),
+        ]
+        nested_fail_reasons = frozenset({'malformed_mime', 'nested_rfc822'})
+        for raw in cases:
+            c = classify_inbound_attachments(raw)
+            self.assertEqual(c.status, 'deliver', c)
+            with tempfile.TemporaryDirectory() as tmp:
+                fan = rebuild_inbound_fanout(
+                    raw,
+                    _dto(tmp),
+                    temp_dir=tmp,
+                    approved_part_indexes=c.deliver_indexes,
+                )
+                self.assertTrue(fan.success, fan.error)
+                self.assertNotIn(fan.reason, nested_fail_reasons)
+                self.assertEqual(len(fan.children), len(c.deliver_indexes))
 
     def test_inner_zip_not_enumerated(self) -> None:
         inner_zip = _part('secret.zip')

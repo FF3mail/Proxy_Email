@@ -31,3 +31,9 @@ Outbound `validate_single_archive_attachment` / `message_rebuild` F9 unchanged (
 ## Out of scope
 
 Lab VPS deploy, outbound path changes, content inspection inside nested bodies.
+
+## Follow-up
+
+**PROMPT-79.2j** fixed inbound rebuild using `nested_policy='error'` while classify
+used `'opaque'` (UNSEEN retry + journal duplication on zip+nested deliver). See
+[`PROMPT-79-2j-nested-policy-desync.md`](PROMPT-79-2j-nested-policy-desync.md).

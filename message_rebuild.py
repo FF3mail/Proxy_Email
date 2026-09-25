@@ -93,12 +93,19 @@ def rebuild_inbound_fanout(
 
     approved_part_indexes: 0-based indexes into enumerate_attachable_parts result.
     Classification/extension filtering is the caller's job (single decision point).
+
+    PROMPT-79.2j: inbound enumeration uses nested_policy=opaque so indexes
+    match classify_inbound_attachments (outbound keeps the default 'error').
     """
+    from attachment_policy import NESTED_POLICY_OPAQUE
+
     temp_paths: List[Path] = []
     try:
         msg = _parse_message(raw_bytes)
         _reject_signed_or_encrypted(msg)
-        attachments = _enumerate_attachable_parts_shared(msg)
+        attachments = _enumerate_attachable_parts_shared(
+            msg, nested_policy=NESTED_POLICY_OPAQUE
+        )
         if not attachments:
             logger.error(
                 '[MESSAGE_REBUILD] zero_attachments relationship_id=%s',
@@ -261,15 +268,22 @@ def _reject_signed_or_encrypted(msg: Message) -> None:
                     raise MessageRebuildError('signed_or_encrypted')
 
 
-def _enumerate_attachable_parts_shared(msg: Message) -> List[Message]:
+def _enumerate_attachable_parts_shared(
+    msg: Message,
+    *,
+    nested_policy: str = 'error',
+) -> List[Message]:
     """
     PROMPT-79.2e E5: one enumerator shared with attachment_policy so classify
     indexes always match rebuild. Maps policy ValueError → MessageRebuildError.
+
+    Default nested_policy='error' (outbound). Inbound must pass
+    NESTED_POLICY_OPAQUE explicitly (PROMPT-79.2j).
     """
     from attachment_policy import enumerate_attachable_parts
 
     try:
-        return enumerate_attachable_parts(msg)
+        return enumerate_attachable_parts(msg, nested_policy=nested_policy)
     except ValueError as exc:
         reason = str(exc)
         if reason in ('nested_rfc822', 'malformed_multipart'):
