@@ -381,3 +381,73 @@ Journal rows for this RUNID retained (ids 76–85).
 - Outbound harness must keep **unique Maildir filenames** (79.2h D4 lesson).
 
 *Operator: confirm or reject this G3 proposal before any merge.*
+
+---
+
+## PROMPT-79.2k-2 — K3 addendum (partial SMTP on disposable copy)
+
+**Date:** 2026-09-25 (UTC)  
+**Host:** `192.168.125.116` (`hostname=mail`) — **operator-confirmed disposable exact copy** of the lab (safe to reset/destroy; not the shared ongoing lab). Uptime at start ~18 min (recently booted clone; retained prior 79.2k rollback/evidence on disk).  
+**Commit:** `5597a482fcf5a92c40e0b120a1df7f8dc6140b35`  
+**RUNID:** `20260925T080618Z` — `X-Lab-Test: 79-2k2-20260925T080618Z`  
+**Evidence:** `/root/prompt79-2k2-evidence-20260925T080618Z.log`, sink `/root/prompt79-2k2-sink-20260925T080618Z.log`  
+**G2:** Approved in-session for this disposable copy.
+
+### Step 0 / baseline
+
+| Item | Result |
+|------|--------|
+| Disposable copy | Operator text in PROMPT-79.2k-2 + short uptime; proceeded |
+| Unit tests | **171 ran / 11 skipped / 0 fail** (before and after) |
+
+### Step 1 — Injection method
+
+| Check | Result |
+|-------|--------|
+| `os.environ` / systemd override for `LOCAL_SMTP_PORT` | **None** — constant only (`LOCAL_SMTP_PORT = 25`); existing drop-ins set routing modes only |
+| **Chosen method** | **`source_patch`** (fallback) |
+
+**DISCLOSURE:** this run required a direct source-file patch on the disposable copy, not a config-only change.
+
+Pre-patch: `cp` → `/root/prompt79-2k2-daemon-backup-20260925T080618Z.py`; `LOCAL_SMTP_*` matched repo `5597a48`. Patch: **one line** `LOCAL_SMTP_PORT = 25` → `2525`. Post-test: restored from backup; `diff` byte-identical; `LOCAL_SMTP_PORT = 25` again.
+
+### Step 2 — Sink
+
+Python SMTP sink on `127.0.0.1:2525`: accept first `DATA` (250), reject subsequent `DATA` with `550 Rejected by K3 sink (second child)`. Daemon restarted with port 2525; idle (0 UNSEEN) before switch.
+
+### Step 3 — Failure injection — **PASS**
+
+Inbound APPEND: 3 zips, Subject = all three names, MID `<79-2k2-20260925T080618Z-K3@lab.test>`.
+
+| Evidence | Observed |
+|----------|----------|
+| Journal | **Exactly 1** `delivered` (`id=86`); **no** `disposed` |
+| IMAP source | **PRESENT** uid=45, `FLAGS ()` → **UNSEEN** (not `\Seen`) |
+| Sink | `ACCEPT` session_n=1; `REJECT DATA` prior_accepted=1 (same TCP conn — fan-out reuses SMTP) |
+| Daemon | `DATA command rejected: 550 …`; `[MESSAGE_REBUILD] fanout_incomplete delivered=1 failed=2` |
+
+### Step 4 — Restore + recovery — **PASS**
+
+| Step | Result |
+|------|--------|
+| Restore | Backup restored; `diff` clean; restart on `:25`; `ProxyDaemon operational` |
+| Sanity | Unrelated zip → `delivered` `id=90` on real Postfix |
+| K3 re-poll (same UNSEEN source, no re-inject) | +3 `delivered` (`id=87,88,89`) at 08:13:52 — full re-fanout (at-least-once; first child duplicated per D6) |
+| Maildir | **3** children in `refloc1/.../Maildir/new` (`k3a/b/c-…zip` subjects) |
+| Source after success | **PRESENT `\Seen`** (normal deliver lifecycle; not expunged) |
+
+### Step 5 — Cleanup
+
+| Item | Result |
+|------|--------|
+| Sink | Stopped (`SINK_DOWN`) |
+| Daemon file | Matches backup; `LOCAL_SMTP_PORT = 25` |
+| Daemon | `active`; `INTERIM_MARKERS=0` |
+| Unit tests | **171 / 11 skipped / OK** |
+| Artifacts left | Journal ids **86–90**; Maildir children for RUNID; backup+evidence under `/root/prompt79-2k2-*`. Disposable copy — operator may reset/destroy (no further mailbox wipe required). |
+
+### K3 verdict (updates 79.2k G3 caveat only)
+
+**K3 / L20: PASS** on disposable copy with documented `source_patch` injection.
+
+Does **not** re-issue G3; folds into existing 79.2k recommendation (K3 was the remaining functional NOT VERIFIED; K4 panel browser still NOT VERIFIED).
