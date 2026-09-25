@@ -2,14 +2,14 @@
 declare(strict_types=1);
 
 /**
- * Mail-passage journal observability (PROMPT-79.2 / ADR-001 / PROMPT-79.2l / 79.2m).
+ * Mail-passage journal observability
+ * (PROMPT-79.2 / ADR-001 / 79.2l / 79.2m / 79.2n).
  */
 
 const PANEL_PASSAGE_JOURNAL_LIMIT_DEFAULT = 100;
 const PANEL_PASSAGE_JOURNAL_LIMIT_MIN = 20;
 const PANEL_PASSAGE_JOURNAL_LIMIT_MAX = 500;
 
-/** Known disposal_reason codes written by daemon / attachment_policy. */
 const PANEL_DISPOSAL_REASON_CODES = [
     'no_relationship',
     'relationship_inactive',
@@ -22,7 +22,10 @@ const PANEL_DISPOSAL_REASON_CODES = [
     'nested_message',
 ];
 
-/** Nonstandard event filter values (GET event_filter). */
+const PANEL_TAB_PASSAGE = 'passage';
+const PANEL_TAB_NONSTANDARD = 'nonstandard';
+
+/** Nonstandard event column filter (replaces event_filter). */
 const PANEL_EVENT_FILTER_ALL = 'all';
 const PANEL_EVENT_FILTER_SKIPPED = 'skipped';
 const PANEL_EVENT_FILTER_DISPOSED = 'disposed';
@@ -38,6 +41,15 @@ function normalizePanelPassageJournalLimit(int $limit): int
     return $limit;
 }
 
+function normalizePanelTab(?string $tab): string
+{
+    $t = strtolower(trim((string)$tab));
+    if ($t === PANEL_TAB_NONSTANDARD) {
+        return PANEL_TAB_NONSTANDARD;
+    }
+    return PANEL_TAB_PASSAGE;
+}
+
 function normalizePanelEventFilter(?string $filter): string
 {
     $f = strtolower(trim((string)$filter));
@@ -47,26 +59,44 @@ function normalizePanelEventFilter(?string $filter): string
     return PANEL_EVENT_FILTER_ALL;
 }
 
-/**
- * Trim passage_referent; empty / sentinel means no filter.
- */
 function normalizePassageReferentFilter(?string $referent): string
 {
     return trim((string)$referent);
 }
 
-/**
- * Trim passage_client; empty after trim means no filter.
- */
 function normalizePassageClientFilter(?string $client): string
 {
     return trim((string)$client);
 }
 
 /**
- * Escape LIKE wildcards so user-typed % and _ are literals.
- * Caller wraps with %…% for substring match.
+ * Accept only well-formed Y-m-d; otherwise return empty (filter ignored).
  */
+function normalizePanelDateFilter(?string $raw): string
+{
+    $s = trim((string)$raw);
+    if ($s === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) {
+        return '';
+    }
+    $dt = DateTimeImmutable::createFromFormat('Y-m-d', $s);
+    if ($dt === false || $dt->format('Y-m-d') !== $s) {
+        return '';
+    }
+    return $s;
+}
+
+/**
+ * Direction filter: empty = all; inbound|outbound only.
+ */
+function normalizePanelDirectionFilter(?string $raw): string
+{
+    $d = strtolower(trim((string)$raw));
+    if ($d === 'inbound' || $d === 'outbound') {
+        return $d;
+    }
+    return '';
+}
+
 function escapeSqlLikeWildcards(string $value): string
 {
     return str_replace(
@@ -104,8 +134,6 @@ function passageDirectionLabel(string $direction): string
 }
 
 /**
- * Human-readable passage line (decisions log §5) — follows current panel lang.
- *
  * @param array<string,mixed> $row
  */
 function formatPassageJournalLine(array $row): string
@@ -146,12 +174,10 @@ function formatPassageJournalLine(array $row): string
 }
 
 /**
- * Append party filters to a WHERE builder (bound params).
- *
  * @param list<string> $where
- * @param list<array{0:mixed,1:int}> $binds  [value, PDO::PARAM_*]
+ * @param list<array{0:mixed,1:int}> $binds
  */
-function appendPassagePartyFilters(
+function appendPartyFilters(
     array &$where,
     array &$binds,
     string $referent,
@@ -162,10 +188,45 @@ function appendPassagePartyFilters(
         $binds[] = [$referent, PDO::PARAM_STR];
     }
     if ($client !== '') {
-        // ESCAPE '\\' so \% and \_ are literals (MySQL/MariaDB default ESCAPE is \).
         $where[] = 'client_name LIKE ? ESCAPE \'\\\\\'';
-        $pattern = '%' . escapeSqlLikeWildcards($client) . '%';
-        $binds[] = [$pattern, PDO::PARAM_STR];
+        $binds[] = ['%' . escapeSqlLikeWildcards($client) . '%', PDO::PARAM_STR];
+    }
+}
+
+/**
+ * Inclusive date range on event_ts. date_to includes the whole calendar day.
+ *
+ * @param list<string> $where
+ * @param list<array{0:mixed,1:int}> $binds
+ */
+function appendEventTsDateRange(
+    array &$where,
+    array &$binds,
+    string $dateFrom,
+    string $dateTo
+): void {
+    if ($dateFrom !== '') {
+        $where[] = 'event_ts >= ?';
+        $binds[] = [$dateFrom . ' 00:00:00', PDO::PARAM_STR];
+    }
+    if ($dateTo !== '') {
+        $where[] = 'event_ts < DATE_ADD(?, INTERVAL 1 DAY)';
+        $binds[] = [$dateTo, PDO::PARAM_STR];
+    }
+}
+
+/**
+ * @param list<string> $where
+ * @param list<array{0:mixed,1:int}> $binds
+ */
+function appendDirectionFilter(
+    array &$where,
+    array &$binds,
+    string $direction
+): void {
+    if ($direction !== '') {
+        $where[] = 'direction = ?';
+        $binds[] = [$direction, PDO::PARAM_STR];
     }
 }
 
@@ -182,35 +243,57 @@ function bindAll(object $stmt, array $binds): void
 }
 
 /**
- * @return array{
- *   limit: int,
- *   event_filter: string,
- *   passage_referent: string,
- *   passage_client: string,
- *   referent_options: list<string>,
- *   passage_rows: list<array<string,mixed>>,
- *   passage_lines: list<string>,
- *   nonstandard_rows: list<array<string,mixed>>,
- *   table_missing: bool,
- *   error: ?string
- * }
+ * @param array{
+ *   limit?: int,
+ *   tab?: string,
+ *   passage_referent?: string,
+ *   passage_client?: string,
+ *   passage_date_from?: string,
+ *   passage_date_to?: string,
+ *   passage_direction?: string,
+ *   ns_referent?: string,
+ *   ns_client?: string,
+ *   ns_date_from?: string,
+ *   ns_date_to?: string,
+ *   ns_event?: string,
+ *   ns_direction?: string
+ * } $opts
+ * @return array<string,mixed>
  */
-function buildRelationshipStatusPageData(
-    object $pdo,
-    int $limit = PANEL_PASSAGE_JOURNAL_LIMIT_DEFAULT,
-    string $eventFilter = PANEL_EVENT_FILTER_ALL,
-    string $passageReferent = '',
-    string $passageClient = ''
-): array {
-    $limit = normalizePanelPassageJournalLimit($limit);
-    $eventFilter = normalizePanelEventFilter($eventFilter);
-    $passageReferent = normalizePassageReferentFilter($passageReferent);
-    $passageClient = normalizePassageClientFilter($passageClient);
+function buildRelationshipStatusPageData(object $pdo, array $opts = []): array
+{
+    $limit = normalizePanelPassageJournalLimit((int)($opts['limit'] ?? PANEL_PASSAGE_JOURNAL_LIMIT_DEFAULT));
+    $tab = normalizePanelTab($opts['tab'] ?? PANEL_TAB_PASSAGE);
+
+    $passageReferent = normalizePassageReferentFilter($opts['passage_referent'] ?? '');
+    $passageClient = normalizePassageClientFilter($opts['passage_client'] ?? '');
+    $passageDateFrom = normalizePanelDateFilter($opts['passage_date_from'] ?? '');
+    $passageDateTo = normalizePanelDateFilter($opts['passage_date_to'] ?? '');
+    $passageDirection = normalizePanelDirectionFilter($opts['passage_direction'] ?? '');
+
+    $nsReferent = normalizePassageReferentFilter($opts['ns_referent'] ?? '');
+    $nsClient = normalizePassageClientFilter($opts['ns_client'] ?? '');
+    $nsDateFrom = normalizePanelDateFilter($opts['ns_date_from'] ?? '');
+    $nsDateTo = normalizePanelDateFilter($opts['ns_date_to'] ?? '');
+    $nsEvent = normalizePanelEventFilter($opts['ns_event'] ?? PANEL_EVENT_FILTER_ALL);
+    $nsDirection = normalizePanelDirectionFilter($opts['ns_direction'] ?? '');
+
     $result = [
         'limit' => $limit,
-        'event_filter' => $eventFilter,
+        'tab' => $tab,
         'passage_referent' => $passageReferent,
         'passage_client' => $passageClient,
+        'passage_date_from' => $passageDateFrom,
+        'passage_date_to' => $passageDateTo,
+        'passage_direction' => $passageDirection,
+        'ns_referent' => $nsReferent,
+        'ns_client' => $nsClient,
+        'ns_date_from' => $nsDateFrom,
+        'ns_date_to' => $nsDateTo,
+        'ns_event' => $nsEvent,
+        'ns_direction' => $nsDirection,
+        // Back-compat alias used by older assertions / templates if any.
+        'event_filter' => $nsEvent,
         'referent_options' => [],
         'passage_rows' => [],
         'passage_lines' => [],
@@ -231,7 +314,6 @@ function buildRelationshipStatusPageData(
             return $result;
         }
 
-        // Distinct referent names from journal (bounded staff set; avoids joining referents).
         $refStmt = $pdo->query(
             "SELECT DISTINCT referent_name FROM mail_passage_journal
              WHERE referent_name IS NOT NULL AND referent_name <> ''
@@ -245,52 +327,59 @@ function buildRelationshipStatusPageData(
             }
         }
 
-        $passageWhere = ["event_type = 'delivered'"];
-        $passageBinds = [];
-        appendPassagePartyFilters($passageWhere, $passageBinds, $passageReferent, $passageClient);
-        $passageBinds[] = [$limit, PDO::PARAM_INT];
-        $passageSql =
-            "SELECT id, event_ts, event_type, direction, referent_name, client_name,
-                    local_mailbox, external_mailbox, received_at, action_at,
-                    disposal_reason, notified, source_message_id, detail
-             FROM mail_passage_journal
-             WHERE " . implode(' AND ', $passageWhere) . "
-             ORDER BY event_ts DESC, id DESC
-             LIMIT ?";
-        $stmt = $pdo->prepare($passageSql);
-        bindAll($stmt, $passageBinds);
-        $stmt->execute();
-        $passage = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $result['passage_rows'] = $passage;
-        foreach ($passage as $row) {
-            $result['passage_lines'][] = formatPassageJournalLine($row);
+        if ($tab === PANEL_TAB_PASSAGE) {
+            $where = ["event_type = 'delivered'"];
+            $binds = [];
+            appendPartyFilters($where, $binds, $passageReferent, $passageClient);
+            appendEventTsDateRange($where, $binds, $passageDateFrom, $passageDateTo);
+            appendDirectionFilter($where, $binds, $passageDirection);
+            $binds[] = [$limit, PDO::PARAM_INT];
+            $sql =
+                "SELECT id, event_ts, event_type, direction, referent_name, client_name,
+                        local_mailbox, external_mailbox, received_at, action_at,
+                        disposal_reason, notified, source_message_id, detail
+                 FROM mail_passage_journal
+                 WHERE " . implode(' AND ', $where) . "
+                 ORDER BY event_ts DESC, id DESC
+                 LIMIT ?";
+            $stmt = $pdo->prepare($sql);
+            bindAll($stmt, $binds);
+            $stmt->execute();
+            $passage = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $result['passage_rows'] = $passage;
+            foreach ($passage as $row) {
+                $result['passage_lines'][] = formatPassageJournalLine($row);
+            }
+            return $result;
         }
 
-        if ($eventFilter === PANEL_EVENT_FILTER_SKIPPED) {
+        // Nonstandard tab only.
+        if ($nsEvent === PANEL_EVENT_FILTER_SKIPPED) {
             $eventClause = "event_type = 'skipped'";
-        } elseif ($eventFilter === PANEL_EVENT_FILTER_DISPOSED) {
+        } elseif ($nsEvent === PANEL_EVENT_FILTER_DISPOSED) {
             $eventClause = "event_type = 'disposed'";
         } else {
             $eventClause = "event_type IN ('disposed', 'skipped')";
         }
-
-        $nsWhere = [$eventClause];
-        $nsBinds = [];
-        appendPassagePartyFilters($nsWhere, $nsBinds, $passageReferent, $passageClient);
-        $nsBinds[] = [$limit, PDO::PARAM_INT];
-        $nsSql =
+        $where = [$eventClause];
+        $binds = [];
+        appendPartyFilters($where, $binds, $nsReferent, $nsClient);
+        appendEventTsDateRange($where, $binds, $nsDateFrom, $nsDateTo);
+        appendDirectionFilter($where, $binds, $nsDirection);
+        $binds[] = [$limit, PDO::PARAM_INT];
+        $sql =
             "SELECT id, event_ts, event_type, direction, referent_name, client_name,
                     local_mailbox, external_mailbox, received_at, action_at,
                     disposal_reason, notified, source_message_id, detail
              FROM mail_passage_journal
-             WHERE " . implode(' AND ', $nsWhere) . "
+             WHERE " . implode(' AND ', $where) . "
              ORDER BY event_ts DESC, id DESC
              LIMIT ?";
-        $stmt2 = $pdo->prepare($nsSql);
-        bindAll($stmt2, $nsBinds);
-        $stmt2->execute();
-        $disposed = $stmt2->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        foreach ($disposed as &$row) {
+        $stmt = $pdo->prepare($sql);
+        bindAll($stmt, $binds);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($rows as &$row) {
             $row['reason_label'] = disposalReasonLabel(
                 isset($row['disposal_reason']) ? (string)$row['disposal_reason'] : null
             );
@@ -301,7 +390,7 @@ function buildRelationshipStatusPageData(
                 : __('observability.notified_no');
         }
         unset($row);
-        $result['nonstandard_rows'] = $disposed;
+        $result['nonstandard_rows'] = $rows;
     } catch (Throwable $e) {
         $result['error'] = $e->getMessage();
     }
