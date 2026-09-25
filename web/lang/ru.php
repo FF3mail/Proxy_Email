@@ -344,6 +344,11 @@ return [
     'observability.filter_all' => 'Все нестандартные (отклонённые + пропущенные)',
     'observability.filter_skipped' => 'Только пропущенные вложения',
     'observability.filter_disposed' => 'Только отклонённые',
+    'observability.filter_referent_label' => 'Референт',
+    'observability.filter_client_label' => 'Клиент',
+    'observability.filter_all_referents' => 'Все референты',
+    'observability.filter_client_placeholder' => 'Подстрока имени клиента…',
+    'observability.limit_shared_note' => 'Одинаковый лимит для обеих таблиц на странице.',
 
     'observability.event.delivered' => 'Доставлено',
     'observability.event.disposed' => 'Отклонено',

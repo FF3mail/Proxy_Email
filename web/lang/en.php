@@ -343,6 +343,11 @@ return [
     'observability.filter_all' => 'All nonstandard (disposed + skipped)',
     'observability.filter_skipped' => 'Skipped attachments only',
     'observability.filter_disposed' => 'Disposed only',
+    'observability.filter_referent_label' => 'Referent',
+    'observability.filter_client_label' => 'Client',
+    'observability.filter_all_referents' => 'All referents',
+    'observability.filter_client_placeholder' => 'Substring of client name…',
+    'observability.limit_shared_note' => 'Applies to both tables on this page.',
 
     'observability.event.delivered' => 'Delivered',
     'observability.event.disposed' => 'Disposed',
