@@ -287,3 +287,97 @@ Test messages **deleted** from referent INBOX after observation. **PASS** — ma
 - L20 and panel browser screenshots remain **NOT VERIFIED**.
 
 *Operator: confirm or reject this G3 proposal.*
+
+---
+
+## PROMPT-79.2k — final lab verification
+
+**Date:** 2026-09-25 (UTC)  
+**Commit under test:** `5597a482fcf5a92c40e0b120a1df7f8dc6140b35`  
+**RUNID:** `20260925T065928Z` — header `X-Lab-Test: 79-2k-20260925T065928Z`  
+**Evidence (VPS):** `/root/prompt79-2k-evidence-20260925T065928Z.log`  
+**Rollback snapshot:** `/root/prompt79-2k-rollback-20260925T065758Z`  
+**Mode:** VERIFY ONLY (no code changes, no merge)
+
+### Operator gates
+
+| Gate | Status | Notes |
+|------|--------|-------|
+| **G1bis** (deploy `5597a48` + restart) | **Confirmed** | Operator `yes` in chat; deploy + `systemctl restart mail-proxy` executed. |
+| **G2** (K3 partial SMTP) | **Not used** | No safe isolated LOCAL_SMTP redirect (see K3). |
+| **G3** (final verdict) | **Pending operator** | See §Verdict below. |
+
+### Baseline / deploy
+
+| Item | Result |
+|------|--------|
+| Local `HEAD` / unit tests | `5597a48`; **171 ran / 11 skipped / 0 fail** |
+| Pre-deploy lab | `5cd6c23`; daemon MD5 `627974b1…` |
+| Post-deploy | `5597a48`; `message_rebuild.py` MD5 `1fe06361…`; `NESTED_POLICY_OPAQUE` present in inbound fan-out |
+| Daemon | `active` — `ProxyDaemon operational`; `INTERIM_MARKERS=0` |
+
+### K1 — Clean single outbound (closes V2) — **PASS**
+
+Atomic drop only (write `Maildir/tmp` → rename into `Maildir/new`): `K1-20260925T065928Z.eml`, Subject/`filename` = `k1-20260925T065928Z.zip`. Observed at ≥320s (covers ~291s duplicate gap).
+
+| Check | Observed |
+|-------|----------|
+| Journal | **Exactly 1** `delivered` outbound row `id=76`, `notified=0`, MID `<79-2k-…-K1@lab.test>` |
+| Daemon | **1×** `Watchdog: new email`; **1×** `[OUTBOUND_ROUTING]`; file **Deleted processed** at 06:59:29Z (no second pass by +5min) |
+| Maildir/new | File **gone** after process |
+| `clientint1` receipt | **INBOX count=1**; From=`refint1@frona.ru`; To=`clientint1@frona.ru`; Subject=`k1-20260925T065928Z.zip`; attachment SHA-256 matches inject hash `9fc1e3bf…e973d3` |
+
+### K2 — Real `message/rfc822` after 79.2j — **PASS**
+
+IMAP APPEND; stored parts confirmed `Content-Type: message/rfc822` on fetch for K2A/B/C.
+
+| Variant | Journal | Source after 2 polls (~75s apart) |
+|---------|---------|-----------------------------------|
+| **K2A** attachment `fwd.eml` | `skipped`+`disposed` `nested_message` (`id=77,78`) | **GONE** both cycles |
+| **K2B** no Content-Disposition | `disposed` `zero_attachments` (`id=81`) | **GONE** both cycles |
+| **K2C** zip + nested (Subject=zip name) | 1× `skipped` nested (`id=79`) + 1× `delivered` (`id=80`); **no** second skipped on retry | **PRESENT `\Seen`** both cycles — not UNSEEN, not re-journaled |
+
+Note: successful inbound deliver path marks `\Seen` and does **not** expunge (same as L01/K5L01). 79.2j goal (no UNSEEN retry loop / no skipped duplication) holds for K2C.
+
+### K3 — Partial SMTP failure (L20) — **NOT VERIFIED**
+
+`LOCAL_SMTP_HOST=127.0.0.1` / `PORT=25` are **hardcoded**; listener is host Postfix `master` on `:25`. No env override for an isolated sink. Replacing `:25` would risk all local mail on the lab VPS. **G2 not requested**; no temporary config applied.
+
+### K4 — Panel browser — **NOT VERIFIED** (agent)
+
+Playwright/Chromium **not** available on lab. Panel URL returns login redirect (HTTP 302 → `/index.php?action=login`). Operator manual check:
+
+- URLs: `https://panel.testvps.loc/relationship-status.php` (`?lang=ru` / `?lang=en`)
+- Row ids: `skipped` 23–24, 28, 30, 77, 79, 83; `nested_message` 77–79; `subject_mismatch` **15**, **73–74** (CR/LF detail from 79.2h); `too_many_attachments` 52, **85**; `missing_filename` 28–30; `disallowed_extension` 23–27, 83; `zero_attachments` 20–21, 81
+
+Confirm skipped filter toggles the set and `detail` renders as plain text (no broken HTML).
+
+### K5 — Quick inbound regression — **PASS**
+
+| Case | Journal / IMAP | Verdict |
+|------|----------------|---------|
+| **K5L01** (clean archive) | 1× `delivered` `id=82`; source `\Seen` | **PASS** |
+| **K5L09** (zip + `evil.exe`) | 1× `skipped` disallowed `id=83` + 1× `delivered` `id=84`; source `\Seen` | **PASS** |
+| **K5L14** (21 attachments) | 1× `disposed` `too_many_attachments` `id=85`; source **GONE** | **PASS** |
+
+### K6 — Cleanup
+
+| Action | Result |
+|--------|--------|
+| Removed (X-Lab-Test=`79-2k-20260925T065928Z`) | `refint1` INBOX uids 45–47 (K2C Seen + K5L01/L09 Seen sources) |
+| Remaining with TAG | **0** across clientint1/refint1 INBOX/Sent/Drafts/Trash/Junk |
+| K3 temp config | N/A |
+| Daemon | Left running on **`5597a48`** |
+
+Journal rows for this RUNID retained (ids 76–85).
+
+### Verdict recommendation (G3)
+
+**Ready to merge PR #33 @ `5597a48`**, with documentation caveats only:
+
+- **K1/V2 closed:** single clean outbound → exactly one journal `delivered`, one Watchdog/routing cycle, one internet receipt.
+- **K2 / 79.2j closed on live IMAP:** genuine `message/rfc822` dispose + zip+nested deliver without UNSEEN retry / skipped duplication.
+- **K3 (L20)** and **K4 (browser UI)** remain **NOT VERIFIED** (no safe SMTP sink; no Playwright). Unit coverage for partial fan-out / panel labels still stands from prior prompts.
+- Outbound harness must keep **unique Maildir filenames** (79.2h D4 lesson).
+
+*Operator: confirm or reject this G3 proposal before any merge.*
