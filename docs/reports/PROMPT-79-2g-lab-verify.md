@@ -1,5 +1,7 @@
 # PROMPT-79.2g — Live lab verification (PR #33 @ 5cd6c23)
 
+> **Current G3 rollup (read this first):** [PROMPT-79-2o-consolidated-status.md](PROMPT-79-2o-consolidated-status.md) — single PASS/FAIL/NOT VERIFIED table for backend K1–K5 + panel 79.2l/m/n, re-verified @ `a472e90` on 2026-09-25. This 79.2g file remains the historical lab matrix log.
+
 **Date:** 2026-09-24 (UTC)  
 **Lab host:** `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
 **Branch under test:** `prompt-79-2c-inbound-multi-attach-split` @ `5cd6c23c6d0e597d260045103a7ca6fc30ead8c5`  
