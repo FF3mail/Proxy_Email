@@ -118,6 +118,7 @@ class InboundProcessResult:
     plan: InboundDeliveryPlan
     smtp_error: Optional[str] = None
     dispose_imap: bool = False
+    source_message_id: Optional[str] = None
 
 
 def extract_message_from_address(msg: Any) -> str:
@@ -259,6 +260,7 @@ def finalize_inbound_process_result(
     smtp_error: Optional[str] = None,
     *,
     dispose_imap: bool = False,
+    source_message_id: Optional[str] = None,
 ) -> InboundProcessResult:
     if plan.lookup_error:
         return InboundProcessResult(
@@ -267,6 +269,7 @@ def finalize_inbound_process_result(
             plan=plan,
             smtp_error=plan.lookup_error,
             dispose_imap=False,
+            source_message_id=source_message_id,
         )
     if dispose_imap:
         return InboundProcessResult(
@@ -275,6 +278,7 @@ def finalize_inbound_process_result(
             plan=plan,
             smtp_error=smtp_error or plan.skip_reason,
             dispose_imap=True,
+            source_message_id=source_message_id,
         )
     if plan.skip_reason in (SKIP_NO_RELATIONSHIP, SKIP_RELATIONSHIP_INACTIVE):
         # Caller should journal+dispose; if finalize reached without dispose flag,
@@ -285,6 +289,7 @@ def finalize_inbound_process_result(
             plan=plan,
             smtp_error=plan.skip_reason,
             dispose_imap=False,
+            source_message_id=source_message_id,
         )
     return InboundProcessResult(
         mark_imap_seen=smtp_delivered,
@@ -292,6 +297,7 @@ def finalize_inbound_process_result(
         plan=plan,
         smtp_error=smtp_error,
         dispose_imap=False,
+        source_message_id=source_message_id,
     )
 
 

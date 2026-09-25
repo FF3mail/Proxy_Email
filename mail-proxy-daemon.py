@@ -54,7 +54,7 @@ from relationship_routing import (
 )
 from message_rebuild import rebuild_inbound_fanout, rebuild_outbound_message
 from attachment_policy import (
-    DISPOSAL_MULTIPLE,
+    classify_inbound_attachments,
     validate_single_archive_attachment,
 )
 from mail_passage_journal import (
@@ -66,6 +66,7 @@ from mail_passage_journal import (
 from mail_disposal import (
     journal_delivered,
     journal_disposed,
+    journal_skipped,
     maybe_notify_outbound_disposal,
     unlink_maildir_file,
 )
@@ -546,37 +547,66 @@ class MailHandler:
             return False
 
     def _dispose_imap_message(
-        self, mail: imaplib.IMAP4, uid: Optional[str], num: bytes
+        self,
+        mail: imaplib.IMAP4,
+        uid: Optional[str],
+        num: bytes,
+        *,
+        account_email: Optional[str] = None,
+        source_message_id: Optional[str] = None,
     ) -> bool:
-        """STORE \\Deleted then EXPUNGE. Returns True only if both succeed."""
+        """
+        PROMPT-79.2e E4: Seen → Deleted → EXPUNGE.
+
+        Journal INSERTs must already have succeeded before this is called.
+        Seen STORE failure → WARNING, still proceed to delete.
+        Delete/EXPUNGE failure after Seen → WARNING (message stays Seen, not re-polled).
+        """
+        if not self._mark_imap_message_seen(mail, uid, num):
+            logger.warning(
+                '[MAIL_DISPOSAL] IMAP STORE Seen failed before delete '
+                'account=%s uid=%s source_message_id=%s — proceeding to delete',
+                account_email or '(unknown)',
+                uid,
+                source_message_id or '(none)',
+            )
         try:
             if uid:
                 status, _ = mail.uid('STORE', uid, '+FLAGS', '(\\Deleted)')
             else:
                 status, _ = mail.store(num, '+FLAGS', '(\\Deleted)')
             if status != 'OK':
-                logger.error(
-                    '[MAIL_DISPOSAL] IMAP STORE Deleted failed uid=%s seq=%r status=%r',
+                logger.warning(
+                    '[MAIL_DISPOSAL] IMAP STORE Deleted failed after Seen '
+                    'account=%s uid=%s seq=%r status=%r source_message_id=%s',
+                    account_email or '(unknown)',
                     uid,
                     num,
                     status,
+                    source_message_id or '(none)',
                 )
                 return False
             status, _ = mail.expunge()
             if status != 'OK':
-                logger.error(
-                    '[MAIL_DISPOSAL] IMAP EXPUNGE failed uid=%s status=%r',
+                logger.warning(
+                    '[MAIL_DISPOSAL] IMAP EXPUNGE failed after Seen '
+                    'account=%s uid=%s status=%r source_message_id=%s',
+                    account_email or '(unknown)',
                     uid,
                     status,
+                    source_message_id or '(none)',
                 )
                 return False
             return True
         except Exception as e:
-            logger.error(
-                '[MAIL_DISPOSAL] IMAP dispose exception uid=%s seq=%r err=%s',
+            logger.warning(
+                '[MAIL_DISPOSAL] IMAP dispose exception after Seen '
+                'account=%s uid=%s seq=%r err=%s source_message_id=%s',
+                account_email or '(unknown)',
                 uid,
                 num,
                 e,
+                source_message_id or '(none)',
             )
             return False
 
@@ -795,7 +825,13 @@ class MailHandler:
                         temp_path, referent_data, acc
                     )
                     if result.dispose_imap:
-                        if self._dispose_imap_message(mail, uid, num):
+                        if self._dispose_imap_message(
+                            mail,
+                            uid,
+                            num,
+                            account_email=str(acc.get('email') or ''),
+                            source_message_id=result.source_message_id,
+                        ):
                             self._clear_imap_size_skip_entry(account_id, uid, seq)
                     elif result.mark_imap_seen:
                         mail.store(num, '+FLAGS', '\\Seen')
@@ -850,7 +886,9 @@ class MailHandler:
                     from_addr or '(empty)',
                     plan.lookup_error,
                 )
-                return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
+                )
 
             if plan.skip_reason in (SKIP_NO_RELATIONSHIP, SKIP_RELATIONSHIP_INACTIVE):
                 reason = disposal_reason_for_skip(plan.skip_reason)
@@ -880,9 +918,14 @@ class MailHandler:
                         '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
                         exc,
                     )
-                    return finalize_inbound_process_result(plan, False)
+                    return finalize_inbound_process_result(
+                        plan, False, source_message_id=source_message_id
+                    )
                 return finalize_inbound_process_result(
-                    plan, False, dispose_imap=True
+                    plan,
+                    False,
+                    dispose_imap=True,
+                    source_message_id=source_message_id,
                 )
 
             if not plan.local_rcpts:
@@ -891,51 +934,68 @@ class MailHandler:
                     plan.mode.value,
                     account_email,
                 )
-                return finalize_inbound_process_result(plan, False)
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
+                )
 
             raw_bytes = mail_file.read_bytes()
-            policy = validate_single_archive_attachment(raw_bytes)
-            if policy.is_error:
+            # PROMPT-79.2d: single decision point (limit → subject → extension filter)
+            inbound_class = classify_inbound_attachments(raw_bytes)
+            if inbound_class.is_error:
                 logger.error(
                     '[ATTACHMENT_POLICY] inbound inspection error — fail closed: %s',
-                    policy.error,
+                    inbound_class.error,
                 )
                 return finalize_inbound_process_result(
-                    plan, False, smtp_error=policy.error or 'attachment_policy_error'
+                    plan,
+                    False,
+                    smtp_error=inbound_class.error or 'attachment_policy_error',
+                    source_message_id=source_message_id,
                 )
-            if policy.is_invalid:
-                reason = policy.reason or 'zero_attachments'
-                # PROMPT-79.2-incident-check interim: multi-attach inbound must
-                # NOT be deleted until PROMPT-79.2c splitting ships. Hold with
-                # \Seen only (pre-79.2 style) and log — no journal disposed row
-                # (schema has no "held" state; do not fake delivered either).
-                if reason == DISPOSAL_MULTIPLE:
-                    logger.warning(
-                        '[PROMPT-79.2-INTERIM] inbound multi-attachment message '
-                        'held for manual review, awaiting PROMPT-79.2c splitting: '
-                        'account=%s sender=%s relationship_id=%s message_id=%s '
-                        'referent=%s client=%s local=%s',
-                        account_email,
-                        from_addr or '(empty)',
-                        plan.relationship_id,
-                        source_message_id or '(none)',
-                        plan.referent_name or referent_data.get('username'),
-                        plan.client_name,
-                        plan.local_mailbox or plan.local_target_email,
-                    )
-                    return InboundProcessResult(
-                        mark_imap_seen=True,
-                        local_delivered=False,
-                        plan=plan,
-                        smtp_error='interim_multi_attachment_hold',
-                        dispose_imap=False,
-                    )
+            if inbound_class.is_invalid:
+                reason = inbound_class.reason or 'zero_attachments'
                 logger.info(
-                    '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s',
+                    '[MAIL_DISPOSAL] inbound invalid attachment reason=%s account=%s '
+                    'detail=%s',
                     reason,
                     account_email,
+                    inbound_class.detail,
                 )
                 try:
+                    # Skipped rows before disposed (disallowed_extension / missing_filename).
+                    # too_many / subject_mismatch carry lists in disposed.detail.
+                    from attachment_policy import (
+                        VERDICT_SKIP,
+                        inbound_invalid_writes_skipped_rows,
+                        part_skip_disposal_reason,
+                        part_skip_journal_detail,
+                    )
+                    if (
+                        inbound_invalid_writes_skipped_rows(reason)
+                        and inbound_class.parts
+                    ):
+                        for part in inbound_class.parts:
+                            if part.verdict != VERDICT_SKIP:
+                                continue
+                            skip_reason = part_skip_disposal_reason(part)
+                            detail = part_skip_journal_detail(part)
+                            journal_skipped(
+                                self._passage_journal,
+                                direction=DIRECTION_INBOUND,
+                                disposal_reason=skip_reason,
+                                filename=part.filename,
+                                referent_name=plan.referent_name
+                                or referent_data.get('username'),
+                                client_name=plan.client_name,
+                                local_mailbox=plan.local_mailbox
+                                or plan.local_target_email,
+                                external_mailbox=plan.external_mailbox
+                                or from_addr
+                                or None,
+                                received_at=received_at,
+                                source_message_id=source_message_id,
+                                detail=detail,
+                            )
                     journal_disposed(
                         self._passage_journal,
                         direction=DIRECTION_INBOUND,
@@ -947,25 +1007,74 @@ class MailHandler:
                         external_mailbox=plan.external_mailbox or from_addr or None,
                         received_at=received_at,
                         source_message_id=source_message_id,
+                        detail=inbound_class.detail,
                     )
                 except Exception as exc:
                     logger.error(
                         '[MAIL_DISPOSAL] journal write failed — not disposing: %s',
                         exc,
                     )
-                    return finalize_inbound_process_result(plan, False)
+                    return finalize_inbound_process_result(
+                        plan, False, source_message_id=source_message_id
+                    )
                 return finalize_inbound_process_result(
-                    plan, False, dispose_imap=True
+                    plan,
+                    False,
+                    dispose_imap=True,
+                    source_message_id=source_message_id,
+                )
+
+            # Deliver path: journal skipped parts BEFORE SMTP (write-before-delete
+            # for source dispose happens only after full success; skipped rows are
+            # lifecycle records and must succeed before we proceed to fan-out so a
+            # later source dispose still has them — write them now; on failure
+            # fail-closed without SMTP.
+            try:
+                from attachment_policy import (
+                    VERDICT_SKIP,
+                    part_skip_disposal_reason,
+                    part_skip_journal_detail,
+                )
+                for part in inbound_class.parts:
+                    if part.verdict != VERDICT_SKIP:
+                        continue
+                    skip_reason = part_skip_disposal_reason(part)
+                    detail = part_skip_journal_detail(part)
+                    journal_skipped(
+                        self._passage_journal,
+                        direction=DIRECTION_INBOUND,
+                        disposal_reason=skip_reason,
+                        filename=part.filename,
+                        referent_name=plan.referent_name
+                        or referent_data.get('username'),
+                        client_name=plan.client_name,
+                        local_mailbox=plan.local_mailbox or plan.local_target_email,
+                        external_mailbox=plan.external_mailbox or from_addr or None,
+                        received_at=received_at,
+                        source_message_id=source_message_id,
+                        detail=detail,
+                    )
+            except Exception as exc:
+                logger.error(
+                    '[MAIL_DISPOSAL] skipped journal write failed — fail closed: %s',
+                    exc,
+                )
+                return finalize_inbound_process_result(
+                    plan, False, source_message_id=source_message_id
                 )
 
             logger.info(
                 'Delivering incoming external mail to local SMTP: %s '
-                '(mode=%s relationship_id=%s target=%s maildir=%s)',
+                '(mode=%s relationship_id=%s target=%s maildir=%s '
+                'inbound_attach=deliver count=%s indexes=%s skipped=%s)',
                 plan.local_rcpts,
                 plan.mode.value,
                 plan.relationship_id,
                 plan.local_target_email,
                 plan.local_client_maildir,
+                inbound_class.total_count,
+                inbound_class.deliver_indexes,
+                inbound_class.skipped_filenames,
             )
             smtp = smtplib.SMTP(
                 LOCAL_SMTP_HOST, LOCAL_SMTP_PORT, timeout=SMTP_TIMEOUT
@@ -979,9 +1088,13 @@ class MailHandler:
                 from_addr=from_addr,
                 received_at=received_at,
                 source_message_id=source_message_id,
+                approved_part_indexes=inbound_class.deliver_indexes,
             )
             return finalize_inbound_process_result(
-                plan, delivered, smtp_error=smtp_error
+                plan,
+                delivered,
+                smtp_error=smtp_error,
+                source_message_id=source_message_id,
             )
         except Exception as e:
             logger.error(f"Local SMTP delivery failed: {e}")
@@ -994,7 +1107,10 @@ class MailHandler:
                     referent_local_inbox=referent_data['local_inbox'],
                 )
             return finalize_inbound_process_result(
-                plan, False, smtp_error=str(e)
+                plan,
+                False,
+                smtp_error=str(e),
+                source_message_id=source_message_id,
             )
         finally:
             if smtp is not None:
@@ -1013,6 +1129,7 @@ class MailHandler:
         from_addr: str,
         received_at=None,
         source_message_id: Optional[str] = None,
+        approved_part_indexes: Optional[list] = None,
     ) -> tuple:
         """
         relationship_live inbound: fan-out rebuild then sequential SMTP (RD-13).
@@ -1031,6 +1148,7 @@ class MailHandler:
             mail_file.read_bytes(),
             dto,
             temp_dir=TEMP_DIR,
+            approved_part_indexes=approved_part_indexes,
         )
         if not fanout.success:
             # Rebuild/MIME errors are fail-closed (not disposal).
