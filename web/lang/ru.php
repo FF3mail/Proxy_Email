@@ -339,4 +339,33 @@ return [
     'observability.col_detail' => 'Детали',
     'observability.col_notified' => 'Уведомление',
     'observability.col_parties' => 'Референт / клиент',
+
+    'observability.filter_label' => 'Фильтр событий',
+    'observability.filter_all' => 'Все нестандартные (отклонённые + пропущенные)',
+    'observability.filter_skipped' => 'Только пропущенные вложения',
+    'observability.filter_disposed' => 'Только отклонённые',
+
+    'observability.event.delivered' => 'Доставлено',
+    'observability.event.disposed' => 'Отклонено',
+    'observability.event.skipped' => 'Пропущено',
+
+    'observability.direction.inbound' => 'Входящее',
+    'observability.direction.outbound' => 'Исходящее',
+
+    'observability.notified_yes' => 'референт уведомлён',
+    'observability.notified_no' => 'референт не уведомлён',
+
+    'observability.reason.no_relationship' => 'Нет связи (relationship)',
+    'observability.reason.relationship_inactive' => 'Связь деактивирована',
+    'observability.reason.zero_attachments' => 'Нет вложений',
+    'observability.reason.multiple_attachments' => 'Более одного вложения (исходящие)',
+    'observability.reason.disallowed_extension' => 'Недопустимое расширение вложения',
+    'observability.reason.subject_mismatch' => 'Тема не совпадает с именами архивов',
+    'observability.reason.too_many_attachments' => 'Слишком много вложений (>20)',
+    'observability.reason.missing_filename' => 'Вложение без имени файла',
+    'observability.reason.nested_message' => 'Вложенное письмо (message/rfc822) не принимается',
+
+    'observability.passage_outbound' => 'Письмо от «{referent}» для «{client}» получено на {local} в {received}, отправлено на {external} в {action}',
+    'observability.passage_inbound' => 'Письмо от «{client}» для «{referent}» получено на {external} в {received}, доставлено на {local} в {action}',
+    'observability.passage_skipped' => 'Пропущено вложение ({reason}): {detail} — {client}',
 ];

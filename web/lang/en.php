@@ -338,4 +338,33 @@ return [
     'observability.col_detail' => 'Detail',
     'observability.col_notified' => 'Notification',
     'observability.col_parties' => 'Referent / client',
+
+    'observability.filter_label' => 'Event filter',
+    'observability.filter_all' => 'All nonstandard (disposed + skipped)',
+    'observability.filter_skipped' => 'Skipped attachments only',
+    'observability.filter_disposed' => 'Disposed only',
+
+    'observability.event.delivered' => 'Delivered',
+    'observability.event.disposed' => 'Disposed',
+    'observability.event.skipped' => 'Skipped',
+
+    'observability.direction.inbound' => 'Inbound',
+    'observability.direction.outbound' => 'Outbound',
+
+    'observability.notified_yes' => 'Referent notified',
+    'observability.notified_no' => 'Referent not notified',
+
+    'observability.reason.no_relationship' => 'No relationship match',
+    'observability.reason.relationship_inactive' => 'Relationship deactivated',
+    'observability.reason.zero_attachments' => 'No attachments',
+    'observability.reason.multiple_attachments' => 'More than one attachment (outbound)',
+    'observability.reason.disallowed_extension' => 'Disallowed attachment extension',
+    'observability.reason.subject_mismatch' => 'Subject does not match archive names',
+    'observability.reason.too_many_attachments' => 'Too many attachments (>20)',
+    'observability.reason.missing_filename' => 'Attachment without a filename',
+    'observability.reason.nested_message' => 'Nested message (message/rfc822) not accepted',
+
+    'observability.passage_outbound' => 'Mail from “{referent}” for “{client}” received at {local} at {received}, sent to {external} at {action}',
+    'observability.passage_inbound' => 'Mail from “{client}” for “{referent}” received at {external} at {received}, delivered to {local} at {action}',
+    'observability.passage_skipped' => 'Skipped attachment ({reason}): {detail} — {client}',
 ];

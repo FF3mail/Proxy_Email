@@ -16,7 +16,11 @@ bootstrapPanelAuth();
 requirePanelAdmin();
 
 $limit = normalizePanelPassageJournalLimit((int)($_GET['limit'] ?? PANEL_PASSAGE_JOURNAL_LIMIT_DEFAULT));
-$page = buildRelationshipStatusPageData(getPdo(), $limit);
+$eventFilter = normalizePanelEventFilter(
+    isset($_GET['event_filter']) ? (string)$_GET['event_filter'] : PANEL_EVENT_FILTER_ALL
+);
+$page = buildRelationshipStatusPageData(getPdo(), $limit, $eventFilter);
+$lang = currentPanelLang();
 ?>
 <!DOCTYPE html>
 <html lang="<?= h(panelHtmlLang()) ?>">
@@ -41,8 +45,10 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
     th { background: #f8fafc; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #64748b; }
     .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #475569; }
     .empty { color: #94a3b8; padding: 12px 0; }
-    .toolbar { margin-bottom: 12px; }
-    .toolbar label { margin-right: 8px; }
+    .toolbar { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    .toolbar label { display: block; margin-bottom: 4px; font-size: 12px; color: #64748b; }
+    .toolbar .field { display: inline-block; }
+    .toolbar select, .toolbar input[type=number] { padding: 4px 8px; }
 </style>
 </head>
 <body>
@@ -62,9 +68,26 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
 
     <div class="toolbar">
         <form method="get" action="/relationship-status.php">
-            <label for="limit"><?= h(__('observability.limit_label')) ?></label>
-            <input id="limit" type="number" name="limit" min="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MIN ?>"
-                   max="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MAX ?>" value="<?= (int)$page['limit'] ?>">
+            <input type="hidden" name="lang" value="<?= h($lang) ?>">
+            <div class="field">
+                <label for="limit"><?= h(__('observability.limit_label')) ?></label>
+                <input id="limit" type="number" name="limit" min="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MIN ?>"
+                       max="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MAX ?>" value="<?= (int)$page['limit'] ?>">
+            </div>
+            <div class="field">
+                <label for="event_filter"><?= h(__('observability.filter_label')) ?></label>
+                <select id="event_filter" name="event_filter">
+                    <option value="<?= h(PANEL_EVENT_FILTER_ALL) ?>"<?= $page['event_filter'] === PANEL_EVENT_FILTER_ALL ? ' selected' : '' ?>>
+                        <?= h(__('observability.filter_all')) ?>
+                    </option>
+                    <option value="<?= h(PANEL_EVENT_FILTER_SKIPPED) ?>"<?= $page['event_filter'] === PANEL_EVENT_FILTER_SKIPPED ? ' selected' : '' ?>>
+                        <?= h(__('observability.filter_skipped')) ?>
+                    </option>
+                    <option value="<?= h(PANEL_EVENT_FILTER_DISPOSED) ?>"<?= $page['event_filter'] === PANEL_EVENT_FILTER_DISPOSED ? ' selected' : '' ?>>
+                        <?= h(__('observability.filter_disposed')) ?>
+                    </option>
+                </select>
+            </div>
             <button type="submit"><?= h(__('observability.refresh')) ?></button>
         </form>
     </div>
@@ -86,7 +109,7 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
                 <?php foreach ($page['passage_rows'] as $i => $row): ?>
                     <tr>
                         <td class="mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
-                        <td><?= h((string)($row['direction'] ?? '')) ?></td>
+                        <td><?= h(passageDirectionLabel((string)($row['direction'] ?? ''))) ?></td>
                         <td><?= h($page['passage_lines'][$i] ?? '') ?></td>
                     </tr>
                 <?php endforeach; ?>
@@ -114,10 +137,10 @@ $page = buildRelationshipStatusPageData(getPdo(), $limit);
                 </thead>
                 <tbody>
                 <?php foreach ($page['nonstandard_rows'] as $row): ?>
-                    <tr>
+                    <tr data-event-type="<?= h((string)($row['event_type'] ?? '')) ?>">
                         <td class="mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
-                        <td><?= h((string)($row['event_type'] ?? '')) ?></td>
-                        <td><?= h((string)($row['direction'] ?? '')) ?></td>
+                        <td><?= h((string)($row['event_label'] ?? passageEventTypeLabel((string)($row['event_type'] ?? '')))) ?></td>
+                        <td><?= h((string)($row['direction_label'] ?? passageDirectionLabel((string)($row['direction'] ?? '')))) ?></td>
                         <td><?= h((string)($row['reason_label'] ?? '')) ?></td>
                         <td class="mono"><?= h((string)($row['detail'] ?? '')) ?></td>
                         <td><?= h((string)($row['notified_label'] ?? '')) ?></td>
