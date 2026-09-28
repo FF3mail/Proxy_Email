@@ -10,6 +10,8 @@ initPanelI18n();
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/log_viewer.php';
+require_once __DIR__ . '/includes/panel_modals.php';
+require_once __DIR__ . '/includes/panel_nav.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
@@ -51,15 +53,13 @@ $sourceLabel = match ($source) {
     .error { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; color: #856404; margin-bottom: 16px; }
     .meta { color: #666; font-size: 12px; margin-bottom: 12px; }
 </style>
+<link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
 <body>
-<nav class="nav">
-    <a href="/index.php">Панель управления</a>
-    <a href="/monitor.php">Мониторинг</a>
-    <a href="/relationship-status.php">Статус связей</a>
-    <a href="/logs.php" style="color:#3498db;font-weight:600;">Логи</a>
-</nav>
-<div class="container">
+<div class="app-shell">
+<?php renderPanelSidebar(); ?>
+<main class="app-main">
+<div class="container" style="max-width:none;margin:0;padding:0">
     <h1>Просмотр логов</h1>
 
     <form method="get" action="/logs.php" class="controls">
@@ -91,6 +91,8 @@ $sourceLabel = match ($source) {
             }
         ?></div>
     <?php endif; ?>
+</div>
+</main>
 </div>
 </body>
 </html>

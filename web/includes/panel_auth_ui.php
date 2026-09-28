@@ -133,64 +133,145 @@ function renderOperatorList(): void
     $stmt = $pdo->query(
         'SELECT id, username, role, active, created_at FROM panel_admins ORDER BY role DESC, username ASC'
     );
-    $rows = $stmt->fetchAll();
+    $rows = $stmt->fetchAll() ?: [];
+    $csrf = h((string) ($_SESSION['csrf_token'] ?? ''));
+
+    $flash = $GLOBALS['flash'] ?? null;
+    $GLOBALS['flash'] = null;
 
     renderHeader(__('operator.title'));
+    renderPanelModalStyles();
     ?>
-    <h2 class="text-xl font-semibold mb-4"><?= h(__('operator.heading')) ?></h2>
-    <p class="text-sm text-slate-600 mb-6"><?= h(__('operator.hint')) ?></p>
-
-    <table class="min-w-full bg-white shadow rounded mb-8">
-        <thead class="bg-slate-100 text-left">
-        <tr>
-            <th class="px-4 py-2"><?= h(__('common.username')) ?></th>
-            <th class="px-4 py-2"><?= h(__('common.role')) ?></th>
-            <th class="px-4 py-2"><?= h(__('common.active')) ?></th>
-            <th class="px-4 py-2"><?= h(__('common.created')) ?></th>
-            <th class="px-4 py-2"><?= h(__('common.actions')) ?></th>
-        </tr>
-        </thead>
-        <tbody>
-        <?php foreach ($rows as $r): ?>
-            <tr class="border-t">
-                <td class="px-4 py-2"><?= h((string)$r['username']) ?></td>
-                <td class="px-4 py-2"><?= h((string)$r['role']) ?></td>
-                <td class="px-4 py-2"><?= (int)$r['active'] === 1 ? h(__('common.yes')) : h(__('common.no')) ?></td>
-                <td class="px-4 py-2"><?= h((string)$r['created_at']) ?></td>
-                <td class="px-4 py-2">
-                    <?php if ((string)$r['role'] !== 'master' && (int)$r['active'] === 1): ?>
-                        <form method="post" action="/index.php" class="inline">
-                            <input type="hidden" name="action" value="operator_deactivate">
-                            <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                            <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
-                            <button type="submit" class="text-red-700 text-sm"><?= h(__('operator.deactivate')) ?></button>
-                        </form>
-                    <?php else: ?>
-                        <?= h(__('common.dash')) ?>
-                    <?php endif; ?>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
-
-    <div class="bg-white shadow rounded p-6 max-w-lg">
-        <h3 class="font-semibold mb-4"><?= h(__('operator.add_heading')) ?></h3>
-        <form method="post" action="/index.php" class="space-y-3">
-            <input type="hidden" name="action" value="operator_create">
-            <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-            <div>
-                <label class="block text-sm mb-1" for="op_username"><?= h(__('common.username')) ?></label>
-                <input class="w-full border rounded px-3 py-2" type="text" id="op_username" name="username" required maxlength="100">
-            </div>
-            <div>
-                <label class="block text-sm mb-1" for="op_password"><?= h(__('common.password')) ?></label>
-                <input class="w-full border rounded px-3 py-2" type="password" id="op_password" name="password" required minlength="8">
-            </div>
-            <button type="submit" class="bg-slate-800 text-white rounded px-4 py-2"><?= h(__('operator.create')) ?></button>
-        </form>
+    <div class="pm-head">
+        <h1><?= h(__('operator.heading')) ?></h1>
+        <button type="button" class="pm-btn pm-btn-primary" data-pm-open="dlg-operator-create">+ <?= h(__('operator.create')) ?></button>
     </div>
+    <p class="pm-hint"><?= h(__('operator.hint')) ?></p>
+
+    <?php if ($rows === []): ?>
+        <div class="pm-empty">
+            <?= h(__('operator.empty')) ?><br>
+            <button type="button" class="pm-btn pm-btn-primary" style="margin-top:10px" data-pm-open="dlg-operator-create">+ <?= h(__('operator.create')) ?></button>
+        </div>
+    <?php else: ?>
+        <div class="pm-card pm-table-wrap">
+            <table class="pm-table pm-list-table" id="operator-table" data-pm-table="1">
+                <thead>
+                <tr>
+                    <th data-sort="username"><?= h(__('common.username')) ?></th>
+                    <th data-sort="role"><?= h(__('common.role')) ?></th>
+                    <th data-sort="active"><?= h(__('common.active')) ?></th>
+                    <th data-sort="created"><?= h(__('common.created')) ?></th>
+                    <th><?= h(__('common.actions')) ?></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($rows as $i => $r):
+                    $isMaster = (string) $r['role'] === 'master';
+                    $isActive = (int) $r['active'] === 1;
+                    ?>
+                    <tr tabindex="0" class="<?= $i === 0 ? 'pm-sel' : '' ?>">
+                        <td><?= h((string) $r['username']) ?></td>
+                        <td><?= h((string) $r['role']) ?></td>
+                        <td>
+                            <?php if ($isActive): ?>
+                                <span class="pm-chip pm-chip-ok"><?= h(__('common.yes')) ?></span>
+                            <?php else: ?>
+                                <span class="pm-chip pm-chip-off"><?= h(__('common.no')) ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td class="pm-mono"><?= h((string) $r['created_at']) ?></td>
+                        <td>
+                            <?php if ($isMaster): ?>
+                                <button type="button" class="pm-btn pm-btn-sm pm-btn-disabled" disabled
+                                        title="<?= h(__('operator.master_protected')) ?>">
+                                    <?= h(__('operator.deactivate')) ?>
+                                </button>
+                                <span class="pm-help" style="display:block;margin-top:4px;font-size:12px;color:var(--pm-warn)">
+                                    <?= h(__('operator.master_protected')) ?>
+                                </span>
+                            <?php elseif ($isActive): ?>
+                                <button type="button" class="pm-btn pm-btn-sm pm-btn-danger"
+                                        data-op-deactivate="<?= (int) $r['id'] ?>"
+                                        data-op-name="<?= h((string) $r['username']) ?>">
+                                    <?= h(__('operator.deactivate')) ?>
+                                </button>
+                            <?php else: ?>
+                                <span class="pm-chip pm-chip-off"><?= h(__('operator.inactive')) ?></span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <p class="pm-foot"><?= h(__('operator.foot')) ?></p>
+    <?php endif; ?>
+
+    <dialog class="pm-dialog" id="dlg-operator-create" aria-modal="true">
+        <form method="post" action="/index.php">
+            <div class="pm-mh">
+                <h2><?= h(__('operator.add_heading')) ?></h2>
+                <button type="button" class="pm-x" data-pm-close aria-label="<?= h(__('common.cancel')) ?>">×</button>
+            </div>
+            <div class="pm-mb"><div class="pm-fg">
+                <input type="hidden" name="action" value="operator_create">
+                <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
+                <div class="pm-f pm-full">
+                    <label for="op_username"><?= h(__('common.username')) ?></label>
+                    <input type="text" id="op_username" name="username" required maxlength="100" autocomplete="off">
+                </div>
+                <div class="pm-f pm-full">
+                    <label for="op_password"><?= h(__('common.password')) ?></label>
+                    <input type="password" id="op_password" name="password" required minlength="8" autocomplete="new-password">
+                    <span class="pm-help"><?= h(__('operator.password_hint')) ?></span>
+                </div>
+            </div></div>
+            <div class="pm-mf"><span></span><div class="pm-r">
+                <button type="button" class="pm-btn" data-pm-close><?= h(__('common.cancel')) ?></button>
+                <button type="submit" class="pm-btn pm-btn-primary"><?= h(__('operator.create')) ?></button>
+            </div></div>
+        </form>
+    </dialog>
+
+    <dialog class="pm-dialog" id="dlg-operator-deactivate" aria-modal="true" data-pm-nodirty="1">
+        <form method="post" action="/index.php" id="form-operator-deactivate">
+            <div class="pm-mh">
+                <h2><?= h(__('operator.deactivate_title')) ?></h2>
+                <button type="button" class="pm-x" data-pm-close aria-label="<?= h(__('common.cancel')) ?>">×</button>
+            </div>
+            <div class="pm-mb">
+                <p style="margin:0" id="op-deactivate-text"><?= h(__('operator.deactivate_confirm')) ?></p>
+                <input type="hidden" name="action" value="operator_deactivate">
+                <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
+                <input type="hidden" name="id" id="op_deactivate_id" value="">
+            </div>
+            <div class="pm-mf"><span></span><div class="pm-r">
+                <button type="button" class="pm-btn" data-pm-close><?= h(__('common.cancel')) ?></button>
+                <button type="submit" class="pm-btn pm-btn-danger-solid" data-pm-focus><?= h(__('operator.deactivate')) ?></button>
+            </div></div>
+        </form>
+    </dialog>
+
+    <script>
+    (function () {
+      var tpl = <?= json_encode(__('operator.deactivate_body'), JSON_UNESCAPED_UNICODE) ?>;
+      document.querySelectorAll('[data-op-deactivate]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var id = btn.getAttribute('data-op-deactivate') || '';
+          var name = btn.getAttribute('data-op-name') || '';
+          document.getElementById('op_deactivate_id').value = id;
+          document.getElementById('op-deactivate-text').textContent =
+            (tpl || '').replace('{name}', name || '—');
+          if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-operator-deactivate'));
+        });
+      });
+    })();
+    </script>
     <?php
+    renderPanelModalScripts(is_array($flash) ? $flash : null);
     renderFooter();
 }
 
