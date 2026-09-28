@@ -10,8 +10,6 @@ initPanelI18n();
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/relationship_status.php';
-require_once __DIR__ . '/includes/panel_modals.php';
-require_once __DIR__ . '/includes/panel_nav.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
@@ -80,13 +78,15 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
     .col-filters legend { font-size: 12px; font-weight: 600; color: #64748b; padding: 0 4px; }
     .col-filters .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 </style>
-<link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
-<body class="bg-gray-100">
-<div class="app-shell">
-<?php renderPanelSidebar(); ?>
-<main class="app-main">
-<div class="container" style="max-width:none;margin:0;padding:0">
+<body>
+<nav class="nav">
+    <a href="/index.php"><?= h(__('nav.control_panel')) ?></a>
+    <a href="/monitor.php"><?= h(__('nav.monitor')) ?></a>
+    <a href="/relationship-status.php" class="active"><?= h(__('nav.relationship_status')) ?></a>
+    <a href="/logs.php">Логи</a>
+</nav>
+<div class="container">
     <h1><?= h(__('observability.title')) ?></h1>
     <p class="hint"><?= h(__('observability.hint')) ?></p>
 
@@ -311,8 +311,6 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
         <?php endif; ?>
     </div>
 <?php endif; ?>
-</div>
-</main>
 </div>
 </body>
 </html>

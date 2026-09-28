@@ -1,0 +1,71 @@
+# MANIFEST — Distribution (post PR #31–#33)
+
+source: origin/master
+commit: e551b71426962c5f632c1e937d2a71de68f15f06
+subject: Merge pull request #32 from FF3mail/prompt-79-2-mail-passage-journal
+built_utc: 2026-09-25
+file_count: 62
+
+## Files
+attachment_policy.py
+configure_limits.sh
+delta-transit-install.sh
+docs/decisions/ADR-001-mail-passage-journal.md
+docs/decisions/README.md
+docs/DELTA_transit_admin_guide.pdf
+docs/DELTA-transit_anchor.md
+docs/guide/01-overview.md
+docs/guide/02-requirements.md
+docs/guide/03-installation.md
+docs/guide/04-configuration.md
+docs/guide/05-web-panel.md
+docs/guide/06-operations.md
+docs/guide/07-troubleshooting.md
+docs/guide/08-security.md
+docs/guide/09-backup-restore.md
+docs/guide/10-deployment-checklist.md
+docs/guide/README.md
+docs/README.md
+License.txt
+logrotate-mail-proxy
+mail_disposal.py
+mail_passage_journal.py
+mail-proxy.service
+mail-proxy.service.d/routing.conf
+mail-proxy-daemon.py
+mail-proxy-setup.sh
+message_rebuild.py
+migrations/002_client_relationship_columns.sql
+migrations/003_referent_mode_overrides.sql
+migrations/004_mail_passage_journal.sql
+migrations/005_mail_passage_journal_skipped.sql
+README.md
+referent_notify.py
+relationship_lookup.py
+relationship_routing.py
+requirements.txt
+schema.sql
+scripts/purge_mail_passage_journal.py
+tmpfiles.d-mail-proxy.conf
+verify-install-regression.sh
+web/config.php
+web/includes/auth.php
+web/includes/Cryptor.php
+web/includes/helpers.php
+web/includes/i18n.php
+web/includes/log_tail.php
+web/includes/log_viewer.php
+web/includes/maildir_resolver.php
+web/includes/oauth2.php
+web/includes/panel_auth_ui.php
+web/includes/panel_local_mail.php
+web/includes/panel_migration.php
+web/includes/providers_ui.php
+web/includes/relationship_editor.php
+web/includes/relationship_status.php
+web/index.php
+web/lang/en.php
+web/lang/ru.php
+web/logs.php
+web/monitor.php
+web/relationship-status.php

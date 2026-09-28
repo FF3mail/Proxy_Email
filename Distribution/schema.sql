@@ -1,0 +1,126 @@
+CREATE DATABASE IF NOT EXISTS mail_proxy CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE mail_proxy;
+
+-- 1. Таблица referents
+CREATE TABLE IF NOT EXISTS referents (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    local_inbox VARCHAR(255) UNIQUE NOT NULL,
+    local_outbox VARCHAR(255) UNIQUE NOT NULL,
+    inbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
+    outbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
+    outbound_watch_mode ENUM('referent_only','dual','relationship_only') NULL DEFAULT NULL,
+    active TINYINT(1) DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2. Таблица clients (ClientRelationship entity; PROMPT-53/54 additive columns)
+CREATE TABLE IF NOT EXISTS clients (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    referent_id INT UNSIGNED NOT NULL,
+    external_client_email VARCHAR(255) NULL,
+    local_client_email VARCHAR(255) NULL,
+    local_referent_email VARCHAR(255) NULL,
+    external_account_id INT UNSIGNED NULL,
+    local_client_maildir VARCHAR(512) NULL,
+    active TINYINT(1) DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_clients_external_client (external_client_email),
+    UNIQUE KEY uq_clients_local_client (local_client_email),
+    UNIQUE KEY uq_clients_local_referent (local_referent_email),
+    UNIQUE KEY uq_clients_external_account (external_account_id),
+    FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 3. Таблица external_accounts
+CREATE TABLE IF NOT EXISTS external_accounts (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    referent_id INT UNSIGNED NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(255) DEFAULT NULL,
+    auth_type ENUM('plain','oauth2') DEFAULT 'plain',
+    provider VARCHAR(50) DEFAULT NULL,
+    password_enc TEXT DEFAULT NULL,
+    imap_host VARCHAR(255) NOT NULL,
+    imap_port INT UNSIGNED DEFAULT 993,
+    imap_encryption ENUM('none','ssl','tls') DEFAULT 'ssl',
+    smtp_host VARCHAR(255) NOT NULL,
+    smtp_port INT UNSIGNED DEFAULT 587,
+    smtp_encryption ENUM('none','ssl','tls') DEFAULT 'tls',
+    client_id VARCHAR(255) DEFAULT NULL,
+    client_secret_enc TEXT DEFAULT NULL,
+    active TINYINT(1) DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2b. ClientRelationship → external_accounts (PROMPT-53 §19, ON DELETE RESTRICT)
+ALTER TABLE clients
+    ADD CONSTRAINT fk_clients_external_account
+    FOREIGN KEY (external_account_id) REFERENCES external_accounts(id)
+    ON DELETE RESTRICT;
+
+-- 4. Таблица oauth_tokens
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    account_id INT UNSIGNED NOT NULL,
+    access_token_enc TEXT NOT NULL,
+    refresh_token_enc TEXT DEFAULT NULL,
+    scope TEXT DEFAULT NULL,
+    token_type VARCHAR(50) DEFAULT 'Bearer',
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES external_accounts(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_account_id (account_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 5. Таблица oauth_providers
+CREATE TABLE IF NOT EXISTS oauth_providers (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(50) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    auth_endpoint VARCHAR(255) NOT NULL,
+    token_endpoint VARCHAR(255) NOT NULL,
+    scopes TEXT NOT NULL,
+    extra_params_json TEXT DEFAULT NULL,
+    active TINYINT(1) DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Добавление начальных записей в oauth_providers
+INSERT INTO oauth_providers (code, name, auth_endpoint, token_endpoint, scopes, extra_params_json, active)
+VALUES
+('google', 'Google', 'https://accounts.google.com/o/oauth2/v2/auth', 'https://oauth2.googleapis.com/token', 'https://mail.google.com/', '{"access_type":"offline","prompt":"consent"}', 1),
+('yandex', 'Yandex', 'https://oauth.yandex.ru/authorize', 'https://oauth.yandex.ru/token', 'mail:imap_full mail:smtp', '{"force_confirm":"yes"}', 1),
+('microsoft', 'Microsoft', 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize', 'https://login.microsoftonline.com/common/oauth2/v2.0/token', 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access', '{}', 1)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    auth_endpoint = VALUES(auth_endpoint),
+    token_endpoint = VALUES(token_endpoint),
+    scopes = VALUES(scopes),
+    extra_params_json = VALUES(extra_params_json),
+    active = VALUES(active),
+    updated_at = CURRENT_TIMESTAMP;
+
+-- 6. Panel operators (web UI login; separate from mail referents/clients)
+-- Application rule: UI may only INSERT role='admin'. Exactly one role='master'
+-- row is seeded by the installer. A second master via direct SQL is an
+-- accepted limitation (no DB trigger).
+-- Upgrade (PROMPT 25): CREATE IF NOT EXISTS is replayed by installer and
+-- web/includes/panel_migration.php; existing mail data is never dropped.
+CREATE TABLE IF NOT EXISTS panel_admins (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role ENUM('master','admin') NOT NULL DEFAULT 'admin',
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_panel_admins_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
