@@ -44,54 +44,46 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= h(__('observability.title')) ?> — DELTA-transit</title>
+<?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
 <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: 14px; line-height: 1.45;
-      background: var(--pm-bg, #f1f5f9); color: var(--pm-text, #0f172a);
-    }
-    h1 { font-size: 22px; margin: 0 0 8px; font-weight: 700; color: var(--pm-text, #0f172a); }
-    h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
-    .hint { color: var(--pm-muted, #64748b); margin-bottom: 16px; line-height: 1.45; font-size: 13px; }
-    .card {
-      background: var(--pm-surface, #fff); border-radius: 8px; padding: 18px 20px;
-      border: 1px solid var(--pm-border, #e2e8f0); margin-bottom: 16px;
-    }
-    .error { color: var(--pm-danger, #a1443f); }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px; background: #f4f6f8; color: #333; }
+    .nav { background: #2c3e50; padding: 10px 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+    .nav a { color: #ecf0f1; text-decoration: none; }
+    .nav a:hover, .nav a.active { color: #3498db; font-weight: 600; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    h2 { font-size: 16px; margin: 0 0 10px; }
+    .hint { color: #64748b; margin-bottom: 16px; line-height: 1.45; }
+    .card { background: #fff; border-radius: 6px; padding: 16px; border: 1px solid #e2e8f0; margin-bottom: 16px; }
+    .error { color: #b91c1c; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--pm-border, #e2e8f0); vertical-align: top; }
-    th {
-      background: var(--pm-surface2, #f8fafc); font-weight: 600; font-size: 13px;
-      color: var(--pm-muted, #64748b); text-transform: none;
-    }
-    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: var(--pm-muted, #64748b); }
-    .empty { color: var(--pm-muted, #64748b); padding: 12px 0; }
-    .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--pm-border, #e2e8f0); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    th { background: #f8fafc; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #64748b; }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #475569; }
+    .empty { color: #94a3b8; padding: 12px 0; }
+    .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; }
     .tabs a {
-        display: inline-block; padding: 10px 16px; text-decoration: none; color: var(--pm-muted, #64748b);
-        border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 14px;
+        display: inline-block; padding: 10px 18px; text-decoration: none; color: #64748b;
+        border: 1px solid transparent; border-bottom: none; margin-bottom: -2px; border-radius: 6px 6px 0 0;
     }
-    .tabs a:hover { color: var(--pm-text, #0f172a); }
+    .tabs a:hover { color: #1e293b; background: #f8fafc; }
     .tabs a.active {
-        color: var(--pm-accent, #3f6d9e); font-weight: 600;
-        border-bottom-color: var(--pm-accent, #3f6d9e);
+        color: #0f172a; font-weight: 600; background: #fff;
+        border-color: #e2e8f0 #e2e8f0 #fff;
     }
     .global-filter { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
-    .global-filter label, .col-filters label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--pm-muted, #64748b); font-weight: 600; }
+    .global-filter label, .col-filters label { display: block; margin-bottom: 4px; font-size: 12px; color: #64748b; }
     .global-filter .field, .col-filters .field { display: inline-block; }
     .global-filter select, .global-filter input,
-    .col-filters select, .col-filters input {
-      padding: 8px 10px; min-width: 9rem; border: 1px solid var(--pm-border, #e2e8f0);
-      border-radius: 6px; font: inherit; background: #fff;
-    }
-    .col-filters { background: var(--pm-surface2, #f8fafc); border: 1px solid var(--pm-border, #e2e8f0); border-radius: 8px; padding: 10px; margin-bottom: 12px; }
-    .col-filters legend { font-size: 12px; font-weight: 600; color: var(--pm-muted, #64748b); padding: 0 4px; }
+    .col-filters select, .col-filters input { padding: 4px 8px; min-width: 9rem; }
+    .col-filters { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; margin-bottom: 12px; }
+    .col-filters legend { font-size: 12px; font-weight: 600; color: #64748b; padding: 0 4px; }
     .col-filters .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 </style>
 <link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
-<body>
+<body class="bg-gray-100">
 <div class="app-shell">
 <?php renderPanelSidebar(); ?>
 <main class="app-main">

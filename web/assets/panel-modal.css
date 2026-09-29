@@ -52,7 +52,13 @@ dialog.pm-dialog::backdrop{background:var(--pm-overlay)}
 /* Sidebar (prototype) */
 .pm-side{width:232px;background:#1e293b;color:#cbd5e1;display:flex;flex-direction:column;flex-shrink:0;transition:width .18s;min-height:100vh}
 .pm-side.collapsed{width:56px}
-.pm-brand{padding:14px 16px;font-weight:600;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:8px;white-space:nowrap;overflow:hidden;border-bottom:1px solid #334155}
+.pm-brand{padding:10px 12px 10px 14px;font-weight:600;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:6px;white-space:nowrap;overflow:hidden;border-bottom:1px solid #334155}
+.pm-brand-link{display:flex;align-items:center;gap:6px;min-width:0;text-decoration:none;color:inherit;flex:1;overflow:hidden}
+.pm-brand-mark{flex-shrink:0;width:28px;height:auto;display:block}
+.pm-brand-wordmarks{display:flex;flex-direction:column;gap:1px;min-width:0;max-width:148px}
+.pm-brand-delta,.pm-brand-transit{display:block;width:100%;height:auto;object-fit:contain;object-position:left center}
+.pm-brand-transit{max-width:72px;opacity:.95}
+.pm-brand-fallback{display:none}
 .pm-brand-text{overflow:hidden;text-overflow:ellipsis}
 .pm-side-toggle{background:none;border:0;color:#cbd5e1;cursor:pointer;font-size:18px;padding:0 4px;line-height:1}
 .pm-side-user{padding:8px 16px 0;font-size:12px;color:#94a3b8;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -62,8 +68,8 @@ dialog.pm-dialog::backdrop{background:var(--pm-overlay)}
 .pm-side-nav a:hover,.pm-side-exit button:hover{background:#334155;color:#fff}
 .pm-side-nav a.active{background:#334155;color:#fff;font-weight:600}
 .pm-ic{width:20px;text-align:center;flex-shrink:0}
-.pm-side.collapsed .pm-lbl,.pm-side.collapsed .pm-brand-text,.pm-side.collapsed .pm-side-user,.pm-side.collapsed .pm-side-lang{display:none}
+.pm-side.collapsed .pm-lbl,.pm-side.collapsed .pm-brand-text,.pm-side.collapsed .pm-brand-wordmarks,.pm-side.collapsed .pm-side-user,.pm-side.collapsed .pm-side-lang{display:none}
 .pm-side-exit{margin-top:auto;padding-top:8px}
 .app-shell{display:flex;min-height:100vh;background:var(--pm-bg,#f1f5f9)}
 .app-main{flex:1;min-width:0;padding:20px 28px 40px}
-@media (max-width:720px){.pm-side{width:56px}.pm-side .pm-lbl,.pm-side .pm-brand-text,.pm-side .pm-side-user,.pm-side .pm-side-lang{display:none}.app-main{padding:14px}}
+@media (max-width:720px){.pm-side{width:56px}.pm-side .pm-lbl,.pm-side .pm-brand-text,.pm-side .pm-brand-wordmarks,.pm-side .pm-side-user,.pm-side .pm-side-lang{display:none}.app-main{padding:14px}}

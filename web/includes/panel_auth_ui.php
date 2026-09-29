@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 // Panel auth / operators UI handlers (PROMPT 24). Loaded from index.php.
 
+require_once __DIR__ . '/panel_brand.php';
+
 function renderLoginForm(): void
 {
     global $flash;
@@ -24,44 +26,37 @@ function renderLoginForm(): void
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= h(__('auth.login_title')) ?></title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .lang-link { color: #64748b; font-size: 0.875rem; text-decoration: none; }
-        .lang-link:hover { color: #1e293b; }
-        .lang-active { color: #1e293b; font-size: 0.875rem; font-weight: 600; }
-        .lang-sep { color: #94a3b8; font-size: 0.875rem; }
-    </style>
+    <?php renderPanelFaviconLinks(); ?>
+    <link rel="stylesheet" href="/assets/login-brand.css">
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center">
-<div class="bg-white shadow rounded p-8 w-full max-w-md">
-    <div class="flex justify-between items-start mb-4">
-        <h1 class="text-2xl font-bold"><?= h(__('auth.login_heading')) ?></h1>
-        <div aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></div>
+<body class="login-page">
+<div class="login-lang" aria-label="<?= h(__('common.language')) ?>"><?php renderLanguageSelector(); ?></div>
+<div class="login-card">
+    <div class="login-brand">
+        <img class="login-wordmark-delta" src="<?= h(panelBrandUrl('wordmark-delta.png')) ?>" width="335" height="105" alt="Delta">
+        <img class="login-wordmark-transit" src="<?= h(panelBrandUrl('wordmark-transit.png')) ?>" width="113" height="26" alt="TRANSIT">
     </div>
+    <h2><?= h(__('auth.login_heading')) ?></h2>
     <?php if ($flash): ?>
-        <div class="<?= $flash['type'] === 'success'
-            ? 'bg-green-100 border border-green-400 text-green-700'
-            : 'bg-red-100 border border-red-400 text-red-700' ?> px-4 py-3 rounded mb-4">
+        <div class="login-flash <?= $flash['type'] === 'success' ? 'login-flash-ok' : 'login-flash-err' ?>">
             <?= h((string)$flash['message']) ?>
         </div>
     <?php endif; ?>
     <?php if (!$loginAllowed): ?>
-        <div class="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4 text-sm">
-            <?= h($setupMessage) ?>
-        </div>
+        <div class="login-flash login-flash-warn"><?= h($setupMessage) ?></div>
     <?php endif; ?>
-    <form method="post" action="/index.php" class="space-y-4">
+    <form method="post" action="/index.php">
         <input type="hidden" name="action" value="login_submit">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
         <div>
-            <label class="block text-sm font-medium mb-1" for="username"><?= h(__('auth.username')) ?></label>
-            <input class="w-full border rounded px-3 py-2" type="text" id="username" name="username" required autocomplete="username">
+            <label for="username"><?= h(__('auth.username')) ?></label>
+            <input type="text" id="username" name="username" required autocomplete="username">
         </div>
         <div>
-            <label class="block text-sm font-medium mb-1" for="password"><?= h(__('auth.password')) ?></label>
-            <input class="w-full border rounded px-3 py-2" type="password" id="password" name="password" required autocomplete="current-password">
+            <label for="password"><?= h(__('auth.password')) ?></label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
         </div>
-        <button type="submit" class="w-full bg-slate-800 text-white rounded py-2"<?= $loginAllowed ? '' : ' disabled' ?>><?= h(__('auth.login_button')) ?></button>
+        <button type="submit" class="login-submit"<?= $loginAllowed ? '' : ' disabled' ?>><?= h(__('auth.login_button')) ?></button>
     </form>
 </div>
 </body>

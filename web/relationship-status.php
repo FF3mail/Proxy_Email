@@ -44,6 +44,7 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= h(__('observability.title')) ?> — DELTA-transit</title>
+<?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
 <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px; background: #f4f6f8; color: #333; }

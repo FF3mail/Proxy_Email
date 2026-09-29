@@ -109,6 +109,7 @@ function renderHeader(string $title): void
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= h($title) ?> — <?= h(__('app.title_suffix')) ?></title>
+    <?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/assets/panel-modal.css">
     <style>

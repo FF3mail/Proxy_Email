@@ -36,7 +36,6 @@ require_once __DIR__ . '/includes/referent_card_ui.php';
 require_once __DIR__ . '/includes/panel_nav.php';
 require_once __DIR__ . '/includes/directory_pages.php';
 require_once __DIR__ . '/includes/dashboard_ui.php';
-require_once __DIR__ . '/includes/panel_help.php';
 
 use MailProxy\Cryptor;
 
@@ -61,8 +60,6 @@ $postActionsRequiringCsrf = [
     'oauth_initiate',
     'operator_create',
     'operator_deactivate',
-    'operator_update',
-    'operator_delete',
     'relationship_save',
     'relationship_delete',
 ];
@@ -79,7 +76,7 @@ if (!in_array($action, $preAuthActions, true)) {
     requirePanelAdmin();
 }
 
-if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate', 'operator_update', 'operator_delete'], true)) {
+if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate'], true)) {
     requireMasterAdmin();
 }
 
@@ -112,6 +109,7 @@ function renderHeader(string $title): void
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= h($title) ?> — <?= h(__('app.title_suffix')) ?></title>
+    <?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/assets/panel-modal.css">
     <style>
@@ -168,18 +166,6 @@ switch ($action) {
 
     case 'operator_deactivate':
         handleOperatorDeactivate();
-        break;
-
-    case 'operator_update':
-        handleOperatorUpdate();
-        break;
-
-    case 'operator_delete':
-        handleOperatorDelete();
-        break;
-
-    case 'help':
-        renderHelpPage();
         break;
 
     case 'dashboard':
@@ -379,7 +365,12 @@ function renderReferentForm(): void
         'username' => '',
         'local_inbox' => '',
         'local_outbox' => '',
-        'active' => 0,
+        'active' => 1,
+    ];
+
+    $client = [
+        'email' => '',
+        'active' => 1,
     ];
 
     if (!empty($_GET['id'])) {
@@ -394,6 +385,19 @@ function renderReferentForm(): void
 
         if ($row) {
             $referent = $row;
+
+            $stmt = $pdo->prepare(
+                'SELECT *
+                 FROM clients
+                 WHERE referent_id = ?'
+            );
+            $stmt->execute([(int)$referent['id']]);
+
+            $clientRow = $stmt->fetch();
+
+            if ($clientRow) {
+                $client = $clientRow;
+            }
         }
     }
 
@@ -457,7 +461,6 @@ function renderReferentForm(): void
         </div>
         <?php endif; ?>
 
-        <?php if (!empty($referent['id'])): ?>
         <div>
             <label class="inline-flex items-center gap-2">
                 <input
@@ -468,11 +471,35 @@ function renderReferentForm(): void
                 >
                 <span><?= h(__('referent.active')) ?></span>
             </label>
-            <p class="text-sm text-gray-600 mt-1"><?= h(__('referent.active_hint')) ?></p>
         </div>
-        <?php else: ?>
-            <input type="hidden" name="active" value="0">
-            <p class="text-sm text-slate-600"><?= h(__('referent.create_inactive_hint')) ?></p>
+
+        <?php if (empty($referent['id'])): ?>
+        <hr>
+
+        <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
+        <p class="text-sm text-slate-600"><?= h(__('relationship.create_legacy_hint')) ?></p>
+
+        <div>
+            <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
+            <input
+                type="email"
+                name="client_email"
+                class="w-full border rounded px-3 py-2"
+                value="<?= h((string)$client['email']) ?>"
+            >
+        </div>
+
+        <div>
+            <label class="inline-flex items-center gap-2">
+                <input
+                    type="checkbox"
+                    name="client_active"
+                    value="1"
+                    <?= (int)$client['active'] === 1 ? 'checked' : '' ?>
+                >
+                <span><?= h(__('referent.client_active')) ?></span>
+            </label>
+        </div>
         <?php endif; ?>
 
         <button
@@ -499,13 +526,10 @@ function handleReferentSave(): void
     $username = trim((string)($_POST['username'] ?? ''));
     $localInbox = trim((string)($_POST['local_inbox'] ?? ''));
 
-    // New referents always start inactive until local mailbox, external account
-    // and client relationships are configured; UI omits the active checkbox on create.
-    if ($id <= 0) {
-        $active = 0;
-    } else {
-        $active = isset($_POST['active']) ? 1 : 0;
-    }
+    $active = isset($_POST['active']) ? 1 : 0;
+
+    $clientEmail = trim((string)($_POST['client_email'] ?? ''));
+    $clientActive = isset($_POST['client_active']) ? 1 : 0;
 
     $existingInbox = '';
     $existingOutbox = '';
@@ -597,6 +621,53 @@ function handleReferentSave(): void
             writeLog("Referent created: ID {$referentId}");
         }
 
+        if ($clientEmail !== '') {
+            $stmt = $pdo->prepare(
+                'SELECT id
+                 FROM clients
+                 WHERE referent_id = ?'
+            );
+            $stmt->execute([$referentId]);
+
+            $clientRow = $stmt->fetch();
+
+            if ($clientRow) {
+                $stmt = $pdo->prepare(
+                    'UPDATE clients
+                     SET email = ?,
+                         active = ?,
+                         updated_at = NOW()
+                     WHERE referent_id = ?'
+                );
+
+                $stmt->execute([
+                    $clientEmail,
+                    $clientActive,
+                    $referentId,
+                ]);
+
+                writeLog("Client updated for referent {$referentId}");
+            } else {
+                $stmt = $pdo->prepare(
+                    'INSERT INTO clients
+                    (
+                        email,
+                        referent_id,
+                        active
+                    )
+                    VALUES (?, ?, ?)'
+                );
+
+                $stmt->execute([
+                    $clientEmail,
+                    $referentId,
+                    $clientActive,
+                ]);
+
+                writeLog("Client created for referent {$referentId}");
+            }
+        // Если email пустой — ничего не делать с clients (не удалять)
+		}
         $pdo->commit();
 
         setFlash('success', __('referent.saved'));
@@ -1600,7 +1671,6 @@ function handleRelationshipSave(): void
             $stmt = $pdo->prepare(
                 'UPDATE clients
                  SET email = ?,
-                     display_name = ?,
                      external_client_email = ?,
                      local_client_email = ?,
                      local_referent_email = ?,
@@ -1612,7 +1682,6 @@ function handleRelationshipSave(): void
             );
             $stmt->execute([
                 $data['external_client_email'],
-                $data['display_name'] !== '' ? $data['display_name'] : null,
                 $data['external_client_email'],
                 $data['local_client_email'],
                 $data['local_referent_email'],
@@ -1626,14 +1695,13 @@ function handleRelationshipSave(): void
         } else {
             $stmt = $pdo->prepare(
                 'INSERT INTO clients (
-                    email, display_name, referent_id,
+                    email, referent_id,
                     external_client_email, local_client_email, local_referent_email,
                     external_account_id, local_client_maildir, active
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $data['external_client_email'],
-                $data['display_name'] !== '' ? $data['display_name'] : null,
                 $referentId,
                 $data['external_client_email'],
                 $data['local_client_email'],

@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/panel_brand.php';
+
 /**
  * Shared left sidebar for the panel (prototype order + collapse).
  */
@@ -94,7 +96,14 @@ function renderPanelSidebar(): void
     ?>
     <aside id="side" class="pm-side" aria-label="<?= h(__('nav.menu')) ?>">
         <div class="pm-brand">
-            <span class="pm-brand-text"><?= h(__('app.name')) ?></span>
+            <a href="/index.php?action=dashboard" class="pm-brand-link" title="<?= h(__('app.name')) ?>">
+                <img class="pm-brand-mark" src="<?= h(panelBrandUrl('logo-mark.png')) ?>" width="32" height="26" alt="">
+                <span class="pm-brand-wordmarks">
+                    <img class="pm-brand-delta" src="<?= h(panelBrandUrl('wordmark-delta.png')) ?>" width="168" height="52" alt="Delta">
+                    <img class="pm-brand-transit" src="<?= h(panelBrandUrl('wordmark-transit.png')) ?>" width="90" height="20" alt="TRANSIT">
+                </span>
+                <span class="pm-brand-text pm-brand-fallback"><?= h(__('app.name')) ?></span>
+            </a>
             <button type="button" id="sideToggle" class="pm-side-toggle" title="<?= h(__('nav.collapse')) ?>" aria-label="<?= h(__('nav.collapse')) ?>">☰</button>
         </div>
         <?php if (!empty($_SESSION['admin_username_display'])): ?>
