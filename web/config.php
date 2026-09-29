@@ -29,3 +29,11 @@ if (
 if (!defined('PUBLIC_BASE_URL')) {
     define('PUBLIC_BASE_URL', APP_BASE_URL);
 }
+
+// Optional: TCP probe targets for the panel internet-availability chip (issue #39).
+// Uncomment to replace the defaults (Cloudflare 1.1.1.1:443, Google 8.8.8.8:443, imap.gmail.com:993).
+// define('PANEL_INTERNET_PROBE_TARGETS', [
+//     ['host' => '1.1.1.1', 'port' => 443],
+//     ['host' => '8.8.8.8', 'port' => 443],
+//     ['host' => 'imap.gmail.com', 'port' => 993],
+// ]);
