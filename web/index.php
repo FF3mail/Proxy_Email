@@ -34,6 +34,7 @@ require_once __DIR__ . '/includes/panel_local_mail.php';
 require_once __DIR__ . '/includes/panel_modals.php';
 require_once __DIR__ . '/includes/referent_card_ui.php';
 require_once __DIR__ . '/includes/panel_nav.php';
+require_once __DIR__ . '/includes/internet_status.php';
 require_once __DIR__ . '/includes/directory_pages.php';
 require_once __DIR__ . '/includes/dashboard_ui.php';
 
@@ -169,6 +170,10 @@ switch ($action) {
 
     case 'dashboard':
         renderDashboard();
+        break;
+
+    case 'internet_status':
+        handleInternetStatusJson();
         break;
 
     case 'referent_list':
