@@ -1,98 +1,94 @@
 # PROMPT-80 — Referent card: verify external and local mailboxes on save
 
 **Issue:** [#40](https://github.com/FF3mail/Proxy_Email/issues/40)  
-**Branch:** `prompt-80-referent-mailbox-verify-on-save` (from `origin/master`)  
-**Scope:** Panel only (`web/`). No daemon poll/send changes.
+**PR:** [#42](https://github.com/FF3mail/Proxy_Email/pull/42)  
+**Branch:** `prompt-80-referent-mailbox-verify-on-save`  
+**Scope:** Panel only (`web/`). No daemon, schema, or iRedMail provisioning changes.
 
 ---
 
 ## 1. Context
 
-Operators configure four mailbox types on the Referent card. Before this work:
+Operators configure four mailbox types on the Referent card. Before PROMPT-80, external Referent credentials were stored without a live IMAP/SMTP login, external Client addresses were format-only, and local checks were inconsistent across save paths.
 
-| Mailbox | Save path | Prior check |
-|---------|-----------|-------------|
-| External Referent | `account_save` / `handleAccountSave` | Format only — no IMAP/SMTP login |
-| External Client | `relationship_save` | `FILTER_VALIDATE_EMAIL` only |
-| Local Referent | `referent_save` + `resolveReferentMaildir` | Maildir resolve (partial) |
-| Local Client / local referent on relationship | `relationship_save` | `activePhysicalMailboxExists()` |
-
-Misconfigured external credentials surfaced only later in daemon logs (see PROMPT-60 encryption/port mismatches).
+**Pre-hardening credential-binding bug (closed in the hardening series):**  
+`password_enc = COALESCE(?, password_enc)` meant that changing IMAP/SMTP host/port/encryption with a blank password kept the old secret bound to the **new** host — both for the login probe and for later daemon use. Section 2 closes that path at save time (reject / re-auth / revoke) before any network I/O or persist.
 
 ---
 
 ## 2. Architecture
 
-### Central module
+### Module
 
-`web/includes/mailbox_verify.php` — single entry point used by save handlers:
+`web/includes/mailbox_verify.php` — policy + probes:
 
-| Function | Role |
-|----------|------|
-| `verifyExternalReferentMailbox()` | IMAP + SMTP authenticated probe (plain or XOAUTH2) |
-| `verifyExternalClientMailbox()` | DNS MX (A/AAAA fallback) + SMTP `RCPT TO` (no DATA) |
-| `verifyLocalPhysicalMailbox()` | Active physical row in iRedMail `vmail.mailbox` |
-| `mailboxVerifyAccountNeedsProbe()` | Skip probe when edit does not change connection/auth fields |
-| `mailboxVerifyResolveAuthSecret()` | Blank password on edit → decrypt stored `password_enc`; OAuth uses stored access token when present |
-| `mailboxVerifySetHooks()` | Inject connect/DNS/local fakes for offline tests |
+| Area | Functions |
+|------|-----------|
+| Account policy | `mailboxVerifyPlanAccountSave`, `mailboxVerifyNormalizeConnectionIdentity`, `mailboxVerifyConnectionIdentityEquals` |
+| Skip-when-idle | `mailboxVerifyReferentNeedsLocalCheck`, `mailboxVerifyRelationshipNeedsChecks` |
+| Soft confirm | `mailboxVerifyRememberSoftFailure`, `mailboxVerifyConsumeSoftOverride` |
+| Rate limit | `mailboxVerifyConsumeProbeSlot` (10 / 60s, session) |
+| SSRF | `mailboxVerifyResolveTarget`, `mailboxVerifyAssertTargetAllowed`, CIDR matcher |
+| Probes | `verifyExternalReferentMailbox`, `verifyExternalClientMailbox`, `verifyLocalPhysicalMailbox` |
+| OAuth | `mailboxVerifyLoadExistingAccount`, `mailboxVerifyDeleteOauthTokens` |
+
+Hooks (`mailboxVerifySetHooks`) throw unless `MAILBOX_VERIFY_ALLOW_HOOKS` is defined (tests only — never under `web/`).
 
 ### Handler wiring (`web/index.php`)
 
-1. **`handleAccountSave`** — before INSERT/UPDATE, if probe needed: resolve secret → IMAP login → SMTP login. Fail → flash + keep form/modal (via `panelRedirectPreferReferentCard` / `return_to=referent_view`). OAuth2 **without** access token skips the live login probe so create → Authorize OAuth2 still works; probe runs once a token exists and settings change.
-2. **`handleRelationshipSave`** — local client/referent via `verifyLocalPhysicalMailbox()`; external client via `verifyExternalClientMailbox()` (fail closed on DNS/port-25 unavailability).
-3. **`handleReferentSave`** — local inbox via `verifyLocalPhysicalMailbox()` before maildir resolve (reuses `referent.mailbox_not_found` copy for missing rows).
+1. **`handleAccountSave`** — `mailboxVerifyPlanAccountSave` **before** any network/DB write:
+   - Plain + identity changed + blank password → `reject_reauth` (nothing probed, nothing persisted).
+   - Plain + unchanged identity + blank password → may decrypt stored secret for probe only.
+   - OAuth + identity changed + stored token → save hosts, **delete** `oauth_tokens` in the same transaction, warn `oauth_reauth_required` (no token sent to new hosts).
+   - Probe uses independent hop budgets; warnings (`plaintext_probe_skipped`, `oauth_token_expired`) allow save.
+2. **`handleRelationshipSave`** — format → external-account + uniqueness (cheap DB) → conditional local/external checks → soft override for inconclusive client probes (`confirm_unverified_client=1` + session hash, single use).
+3. **`handleReferentSave`** — local inbox verify only when `mailboxVerifyReferentNeedsLocalCheck` is true (skips when inactive or inbox unchanged).
+
+### SSRF / connect pinning
+
+- Resolve once (hook or `dns_get_record`); if **any** returned IP is blocked → `target_not_allowed`.
+- Connect to the pinned IP; TLS `peer_name` / SNI remain the **original hostname**.
+- Always blocked: loopback, link-local (incl. 169.254.169.254), unspecified, multicast, IPv4-mapped forms, etc.
+- Private ranges blocked for `rcpt`; for `imap`/`smtp` blocked unless `PANEL_MAILBOX_PROBE_ALLOW_PRIVATE` or `PANEL_MAILBOX_PROBE_ALLOWED_TARGETS`.
+- Ports: default `25,143,465,587,993,2525` for login; RCPT fixed to 25.
+
+### Client probe severity
+
+| Severity | Examples | Save behaviour |
+|----------|----------|----------------|
+| **hard** | RCPT 550/551/553, `mx_missing` | Refuse |
+| **soft** | 4xx, other 5xx, MAIL FROM rejected, EHLO rejected, timeout, network, target_not_allowed | Refuse once; offer “Save anyway” for the same address |
 
 ### Timeouts
 
-- Connect / I/O: ~5s each (`MAILBOX_VERIFY_CONNECT_TIMEOUT`, `MAILBOX_VERIFY_IO_TIMEOUT`)
-- Total budget per multi-hop probe: ~8s (`MAILBOX_VERIFY_TOTAL_BUDGET`)
-
-Optional envelope for RCPT probes: `PANEL_MAILBOX_PROBE_MAIL_FROM` (default empty → `MAIL FROM:<>`).
-
-### Security
-
-- Operator flash messages use i18n codes only — never passwords/tokens.
-- `mailboxVerifySanitizeLog()` redacts credential-like substrings before `writeLog`.
-- Probe secrets are unset after use in the account save path.
+- Per-hop budget: `MAILBOX_VERIFY_HOP_BUDGET` (default **8s**). IMAP and SMTP do **not** share one deadline (worst case ≈ 16s for referent login + separate budget for client RCPT).
+- `stream_set_timeout` uses remaining time to the hop deadline before each read.
+- **Hostname resolution by PHP is not covered by these timeouts**; we resolve once ourselves (SSRF section) before connect.
 
 ---
 
-## 3. i18n
+## 3. Config constants (`web/config.php` comments)
 
-New keys in `web/lang/en.php` and `web/lang/ru.php` under `mailbox_verify.*` covering:
-
-- IMAP/SMTP connect, TLS, auth rejected, timeout
-- MX missing, RCPT rejected / deferred, MAIL FROM rejected
-- Network/DNS unavailable (port 25 / resolver)
-- Local mailbox missing / vmail unavailable
-- Password required / decrypt failed / OAuth token messaging
+| Constant | Default | Role |
+|----------|---------|------|
+| `PANEL_MAILBOX_PROBE_ALLOW_PRIVATE` | `false` | Allow private IPs for IMAP/SMTP |
+| `PANEL_MAILBOX_PROBE_ALLOWED_TARGETS` | `[]` | Host/CIDR allow-list for private IMAP/SMTP |
+| `PANEL_MAILBOX_PROBE_ALLOWED_PORTS` | `25,143,465,587,993,2525` | Login probe ports |
+| `PANEL_MAILBOX_PROBE_ALLOW_PLAINTEXT_AUTH` | `false` | AUTH when `encryption=none` to non-loopback |
+| `PANEL_MAILBOX_PROBE_MAIL_FROM` | `''` (`<>`) | Envelope for RCPT probe |
+| `PANEL_MAILBOX_PROBE_EHLO_HOST` | FQDN / `mail-proxy.invalid` | EHLO/HELO name |
+| `PANEL_MAILBOX_PROBE_DNS_CANARY` | `iana.org` | Distinguish NXDOMAIN vs resolver down |
 
 ---
 
 ## 4. Test matrix
 
 Command: `php tests/panel_mailbox_verify_test.php`  
-All I/O is scripted via `mailboxVerifySetHooks` — **no live Gmail/Yandex/Outlook**.
+All I/O scripted via hooks — **no live sockets/DNS**.
 
-| # | Case | Expected |
-|---|------|----------|
-| 1 | Plain IMAP+SMTP login success | OK |
-| 2 | IMAP auth rejected | `imap_auth_rejected`, hop=imap |
-| 3 | SMTP auth rejected after IMAP OK | `smtp_auth_rejected`, hop=smtp |
-| 4 | IMAP connect timeout | `timeout` |
-| 5 | OAuth2 XOAUTH2 IMAP+SMTP | OK |
-| 6 | Client MX + RCPT 250 | OK |
-| 7 | No MX / A/AAAA | `mx_missing` |
-| 8 | RCPT 550 | `rcpt_rejected` |
-| 9 | Port 25 connection refused | `network_unavailable` (fail closed) |
-| 10 | DNS hook returns false | `network_unavailable` |
-| 11 | Local mailbox present / missing | OK / `local_missing` |
-| 12 | Needs-probe heuristics | create/change/password vs unchanged |
-| 13 | OAuth without token | `skip_probe` |
-| 14 | Log/message secret scrubbing | no plaintext secrets |
-| 15 | RCPT 451 greylist | `rcpt_deferred` (distinct) |
+Coverage includes: secret-binding (reject_reauth / stored / typed / OAuth revoke), SSRF (loopback, link-local, IPv4-mapped, private MX, mixed A records, bad ports, allow-list), control characters, IMAP AUTH PLAIN / literals / LOGINDISABLED / untagged / XOAUTH2 failure, SMTP LOGIN / unsupported / plaintext skip / STARTTLS-no-AUTH, client hard/soft + null MX + DNS canary helper, policy skip-when-inactive, independent hop budgets, rate limit, hooks guard (subprocess).
 
-**Result (local run):** `RESULT: all OK` (23 assertions).
+**Latest local run:** `RESULT: all OK` (123 checks).
 
 ---
 
@@ -100,41 +96,34 @@ All I/O is scripted via `mailboxVerifySetHooks` — **no live Gmail/Yandex/Outlo
 
 | Criterion | Status |
 |-----------|--------|
-| Branch from master | Done |
-| Invalid external Referent credentials rejected with IMAP vs SMTP message | Done |
-| External Client without MX / rejected RCPT fails explicitly | Done |
-| Non-existent local mailboxes rejected on referent + relationship paths | Done |
-| Passwords/secrets stripped from errors/logs | Done |
-| Automated tests offline / CI-safe | Done |
-| Report at `docs/reports/PROMPT-80-…` | Done |
+| Blank password + any of 6 identity fields changed → reject, no connect, no DB write | Done |
+| No probe to loopback/link-local | Done |
+| Inactive / unchanged addresses skip network and vmail lookup | Done |
+| Logs/messages never contain secrets or blocked target hosts | Done |
+| Offline tests / `php -l` clean | Done |
 
 ---
 
 ## 6. Residual risks
 
-1. **Outbound port 25** — many VPS providers block it. Client existence checks then fail closed with `mailbox_verify.network_unavailable`. Operators must allow outbound 25 from the panel host, or accept that external-client saves cannot complete until network policy allows the probe.
-2. **Greylisting** — temporary 4xx on `RCPT TO` yields `rcpt_deferred` (save refused). Retry later; not treated as proof of existence.
-3. **OAuth create-before-authorize** — first save without access token skips login probe. A later edit that changes connection fields (or any probe trigger once a token exists) re-runs IMAP/SMTP auth.
-4. **TLS certificate validation** — production connects verify peer certificates; broken chains fail as connect/TLS errors (intentional).
-5. **Catch-all MX** — some domains accept any RCPT; probe can false-positive “exists”.
-6. **No auto-provisioning** — panel still never creates iRedMail mailboxes.
+1. **Outbound port 25** — soft-fail + optional “Save anyway” when blocked.
+2. **Greylisting / catch-all MX** — soft or false-positive existence.
+3. **Default null MAIL FROM** — some MXs reject `<>` (soft: `rcpt_mailfrom_rejected`).
+4. **Opportunistic STARTTLS on RCPT probe** — **not** implemented; residual risk for cleartext RCPT on port 25.
+5. **PHP DNS resolution latency** — outside hop I/O timeouts (mitigated by resolve-once + SSRF gate).
+6. **OAuth create-before-authorize** — first save without token skips login probe; identity change revokes tokens and requires re-authorize.
+7. **No auto-provisioning** of iRedMail mailboxes.
 
 ---
 
-## 7. Files touched
+## 7. Files touched (hardening series)
 
 | File | Change |
 |------|--------|
-| `web/includes/mailbox_verify.php` | **New** verification module |
-| `web/index.php` | Require module; probe in account / relationship / referent save |
-| `web/lang/en.php`, `web/lang/ru.php` | `mailbox_verify.*` strings |
-| `tests/panel_mailbox_verify_test.php` | Offline unit suite |
+| `web/includes/mailbox_verify.php` | Policy, SSRF, protocol hardening |
+| `web/index.php` | Plan-before-probe, reorder, soft confirm, skip inactive |
+| `web/includes/referent_card_ui.php` | Password hint; Save-anyway checkbox |
+| `web/config.php` | Document probe constants |
+| `web/lang/en.php`, `web/lang/ru.php` | New `mailbox_verify.*` keys |
+| `tests/panel_mailbox_verify_test.php` | Expanded offline suite |
 | `docs/reports/PROMPT-80-referent-mailbox-verify-on-save.md` | This report |
-
----
-
-## Out of scope (unchanged)
-
-- Daemon IMAP/SMTP poll/send logic
-- Creating iRedMail mailboxes from the panel
-- Dashboard internet LED (issue #39)
