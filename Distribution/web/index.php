@@ -31,6 +31,12 @@ require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
 require_once __DIR__ . '/includes/relationship_editor.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
+require_once __DIR__ . '/includes/panel_modals.php';
+require_once __DIR__ . '/includes/referent_card_ui.php';
+require_once __DIR__ . '/includes/panel_nav.php';
+require_once __DIR__ . '/includes/directory_pages.php';
+require_once __DIR__ . '/includes/dashboard_ui.php';
+require_once __DIR__ . '/includes/panel_help.php';
 
 use MailProxy\Cryptor;
 
@@ -55,6 +61,8 @@ $postActionsRequiringCsrf = [
     'oauth_initiate',
     'operator_create',
     'operator_deactivate',
+    'operator_update',
+    'operator_delete',
     'relationship_save',
     'relationship_delete',
 ];
@@ -71,7 +79,7 @@ if (!in_array($action, $preAuthActions, true)) {
     requirePanelAdmin();
 }
 
-if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate'], true)) {
+if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate', 'operator_update', 'operator_delete'], true)) {
     requireMasterAdmin();
 }
 
@@ -105,6 +113,7 @@ function renderHeader(string $title): void
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= h($title) ?> — <?= h(__('app.title_suffix')) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/panel-modal.css">
     <style>
         .lang-link { color: #94a3b8; font-size: 0.75rem; text-decoration: none; }
         .lang-link:hover { color: #fff; }
@@ -113,57 +122,9 @@ function renderHeader(string $title): void
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
-<div class="flex min-h-screen">
-
-    <aside class="w-64 bg-slate-800 text-white">
-        <div class="p-6 border-b border-slate-700">
-            <h1 class="text-xl font-bold"><?= h(__('app.name')) ?></h1>
-            <?php if (!empty($_SESSION['admin_username_display'])): ?>
-                <p class="text-xs text-slate-300 mt-2"><?= h((string)$_SESSION['admin_username_display']) ?></p>
-            <?php endif; ?>
-            <div class="mt-3" aria-label="<?= h(__('common.language')) ?>">
-                <?php renderLanguageSelector(); ?>
-            </div>
-        </div>
-
-        <nav class="p-4 space-y-2">
-            <a href="/index.php?action=dashboard"
-               <?= ($action ?? '') === 'dashboard' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.dashboard')) ?></a>
-            <a href="/index.php?action=referent_list"
-               <?= in_array($action ?? '', ['referent_list', 'referents', 'referent_form', 'referent_view', 'relationship_form', 'relationship_backfill'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.referents')) ?></a>
-            <a href="/index.php?action=relationship_backfill"
-               <?= ($action ?? '') === 'relationship_backfill' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.backfill')) ?></a>
-            <a href="/index.php?action=account_list"
-               <?= in_array($action ?? '', ['account_list', 'accounts', 'account_form'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.accounts')) ?></a>
-            <a href="/index.php?action=provider_list"
-               <?= in_array($action ?? '', ['provider_list', 'provider_form', 'providers'], true) ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>><?= h(__('nav.providers')) ?></a>
-            <a href="/monitor.php"
-               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'monitor.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
-               <?= h(__('nav.monitor')) ?>
-            </a>
-            <a href="/relationship-status.php"
-               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'relationship-status.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
-               <?= h(__('nav.relationship_status')) ?>
-            </a>
-            <a href="/logs.php"
-               <?= basename($_SERVER['SCRIPT_NAME'] ?? '') === 'logs.php' ? 'class="active font-semibold text-white"' : 'class="text-slate-300 hover:text-white"' ?>>
-               Логи
-            </a>
-            <?php if (isPanelMasterDisplay()): ?>
-            <a href="/index.php?action=operator_list"
-               <?= in_array($action ?? '', ['operator_list'], true) ? 'class="active"' : '' ?>>
-               <?= h(__('nav.operators')) ?>
-            </a>
-            <?php endif; ?>
-            <form method="post" action="/index.php" class="pt-4">
-                <input type="hidden" name="action" value="logout">
-                <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                <button type="submit" class="text-left text-slate-300 hover:text-white text-sm"><?= h(__('nav.logout')) ?></button>
-            </form>
-        </nav>
-    </aside>
-
-    <main class="flex-1 p-6">
+<div class="app-shell">
+    <?php renderPanelSidebar(); ?>
+    <main class="app-main">
         <?php if ($flash): ?>
             <div class="<?= $flash['type'] === 'success'
                 ? 'bg-green-100 border border-green-400 text-green-700'
@@ -209,6 +170,18 @@ switch ($action) {
         handleOperatorDeactivate();
         break;
 
+    case 'operator_update':
+        handleOperatorUpdate();
+        break;
+
+    case 'operator_delete':
+        handleOperatorDelete();
+        break;
+
+    case 'help':
+        renderHelpPage();
+        break;
+
     case 'dashboard':
         renderDashboard();
         break;
@@ -220,7 +193,18 @@ switch ($action) {
 
     case 'account_list':
     case 'accounts':
-        renderAccountList();
+    case 'internet_accounts':
+        renderInternetAccountsDirectory();
+        break;
+
+    case 'local_account_list':
+    case 'local_accounts':
+        renderLocalAccountsDirectory();
+        break;
+
+    case 'client_list':
+    case 'clients':
+        renderClientsDirectory();
         break;
 
     case 'referent_form':
@@ -305,213 +289,17 @@ switch ($action) {
 
 function renderDashboard(): void
 {
-    $pdo = getPdo();
-
-    $stmt = $pdo->prepare(
-		'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
-				c.id as client_id, c.email as client_email, c.active as c_active,
-				ea.id as ea_id, ea.email as ea_email, ea.username as ea_username,
-				ea.auth_type, ea.provider,
-				ea.imap_host, ea.imap_port, ea.imap_encryption,
-				ea.smtp_host, ea.smtp_port, ea.smtp_encryption,
-				ea.active as ea_active,
-				ot.expires_at, ot.updated_at as token_updated
-		 FROM referents r
-		 LEFT JOIN clients c ON c.referent_id = r.id
-		 LEFT JOIN external_accounts ea ON ea.referent_id = r.id
-		 LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
-		 ORDER BY r.id'
-	);
-    $stmt->execute();
-
-    $rows = $stmt->fetchAll();
-
-    renderHeader(__('dashboard.title'));
-    ?>
-    <h2 class="text-2xl font-bold mb-6"><?= h(__('dashboard.title')) ?></h2>
-    <div class="flex flex-wrap gap-3 mb-6">
-        <a href="index.php?action=referent_list" class="bg-slate-700 text-white px-4 py-2 rounded">Референты →</a>
-        <a href="index.php?action=account_list" class="bg-slate-700 text-white px-4 py-2 rounded">Внешние аккаунты →</a>
-        <a href="index.php?action=referent_form" class="bg-blue-600 text-white px-4 py-2 rounded"><?= h(__('dashboard.create_referent')) ?></a>
-    </div>
-    <div class="bg-white rounded shadow overflow-x-auto">
-        <table class="min-w-full">
-            <thead class="bg-slate-100">
-            <tr>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_referent')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_client')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_external')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_imap')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_smtp')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_auth')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_token_status')) ?></th>
-                <th class="px-4 py-2"><?= h(__('dashboard.col_activity')) ?></th>
-                <th class="px-4 py-2"><?= h(__('common.actions')) ?></th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($rows as $row): ?>
-                <tr class="border-t">
-                    <td class="px-4 py-2"><?= h($row['username']) ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['client_email']) ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['ea_email']) ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['imap_host']) ?>:<?= h((string)$row['imap_port']) ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['smtp_host']) ?>:<?= h((string)$row['smtp_port']) ?></td>
-                    <td class="px-4 py-2"><?= h($row['auth_type']) ?></td>
-                    <td class="px-4 py-2">
-                        <?php
-                        if ($row['auth_type'] === 'oauth2' && $row['expires_at']) {
-                            $expires = strtotime($row['expires_at']);
-                            echo $expires > time()
-                                ? h(__('dashboard.token_active_until', ['date' => $row['expires_at']]))
-                                : h(__('dashboard.token_expired'));
-                        } else {
-                            echo h(__('common.dash'));
-                        }
-                        ?>
-                    </td>
-                    <td class="px-4 py-2">
-                        <?= (int)$row['r_active'] === 1 ? h(__('dashboard.referent_on')) : h(__('dashboard.referent_off')) ?><br>
-                        <?= (int)$row['c_active'] === 1 ? h(__('dashboard.client_on')) : h(__('dashboard.client_off')) ?><br>
-                        <?= (int)$row['ea_active'] === 1 ? h(__('dashboard.account_on')) : h(__('dashboard.account_off')) ?>
-                    </td>
-                            <?php renderReferentRowActions($row, 'dashboard'); ?>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php
-    renderFooter();
+    renderDashboardUi();
 }
 
 function renderReferentList(): void
 {
-    $pdo = getPdo();
-    $stmt = $pdo->query(
-        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
-                c.id as client_id, c.email as client_email, c.active as c_active,
-                ea.id as ea_id, ea.email as ea_email, ea.active as ea_active
-         FROM referents r
-         LEFT JOIN clients c ON c.referent_id = r.id
-         LEFT JOIN external_accounts ea ON ea.referent_id = r.id
-         ORDER BY r.id'
-    );
-    $rows = $stmt->fetchAll();
-
-    renderHeader(__('nav.referents'));
-    ?>
-    <h2 class="text-2xl font-bold mb-2"><?= h(__('nav.referents')) ?></h2>
-    <p class="text-slate-600 mb-6">Все референты в системе. Референт — локальный почтовый ящик на iRedMail, связанный с внешним аккаунтом.</p>
-    <div class="mb-6">
-        <a href="index.php?action=referent_form" class="bg-blue-600 text-white px-4 py-2 rounded">Создать референта</a>
-    </div>
-    <?php if ($rows === []): ?>
-        <div class="bg-white rounded shadow p-8 text-center text-slate-600">
-            Референтов пока нет. <a href="index.php?action=referent_form" class="text-blue-600 underline">Создать первого</a>
-        </div>
-    <?php else: ?>
-    <div class="bg-white rounded shadow overflow-x-auto">
-        <table class="min-w-full">
-            <thead class="bg-slate-100">
-            <tr>
-                <th class="px-4 py-2 text-left">ID</th>
-                <th class="px-4 py-2 text-left">Имя</th>
-                <th class="px-4 py-2 text-left">Email (local_inbox)</th>
-                <th class="px-4 py-2 text-left">Клиент</th>
-                <th class="px-4 py-2 text-left">Статус</th>
-                <th class="px-4 py-2 text-left">Действия</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($rows as $row): ?>
-                <tr class="border-t">
-                    <td class="px-4 py-2"><?= (int)$row['id'] ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['username']) ?></td>
-                    <td class="px-4 py-2 font-mono text-sm"><?= h((string)$row['local_inbox']) ?></td>
-                    <td class="px-4 py-2"><?= h((string)($row['client_email'] ?: '—')) ?></td>
-                    <td class="px-4 py-2">
-                        <?= (int)$row['r_active'] === 1 ? 'Активен' : 'Отключён' ?>
-                    </td>
-                    <td class="px-4 py-2"><?php renderReferentRowActions($row, 'referent_list'); ?></td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php endif;
-    renderFooter();
+    renderReferentListUi();
 }
 
 function renderAccountList(): void
 {
-    $pdo = getPdo();
-    $stmt = $pdo->query(
-        'SELECT ea.id, ea.referent_id, ea.email, ea.username, ea.auth_type, ea.provider,
-                ea.imap_host, ea.imap_port, ea.smtp_host, ea.smtp_port, ea.active as ea_active,
-                r.username as referent_name, r.local_inbox,
-                ot.expires_at
-         FROM external_accounts ea
-         INNER JOIN referents r ON r.id = ea.referent_id
-         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
-         ORDER BY ea.id'
-    );
-    $rows = $stmt->fetchAll();
-
-    renderHeader(__('nav.accounts'));
-    ?>
-    <h2 class="text-2xl font-bold mb-2"><?= h(__('nav.accounts')) ?></h2>
-    <p class="text-slate-600 mb-6">Внешние почтовые аккаунты (IMAP/SMTP или OAuth2). Демон использует их для синхронизации с локальным ящиком референта.</p>
-    <?php if ($rows === []): ?>
-        <div class="bg-white rounded shadow p-8 text-center text-slate-600">
-            Внешних аккаунтов нет.
-            <?php
-            $refStmt = $pdo->query('SELECT id, username FROM referents ORDER BY id LIMIT 1');
-            $firstRef = $refStmt->fetch();
-            if ($firstRef): ?>
-                <a href="index.php?action=account_form&referent_id=<?= (int)$firstRef['id'] ?>" class="text-blue-600 underline">Создать для референта «<?= h((string)$firstRef['username']) ?>»</a>
-            <?php else: ?>
-                Сначала <a href="index.php?action=referent_form" class="text-blue-600 underline">создайте референта</a>.
-            <?php endif; ?>
-        </div>
-    <?php else: ?>
-    <div class="bg-white rounded shadow overflow-x-auto">
-        <table class="min-w-full">
-            <thead class="bg-slate-100">
-            <tr>
-                <th class="px-4 py-2 text-left">ID</th>
-                <th class="px-4 py-2 text-left">Email</th>
-                <th class="px-4 py-2 text-left">Референт</th>
-                <th class="px-4 py-2 text-left">IMAP</th>
-                <th class="px-4 py-2 text-left">SMTP</th>
-                <th class="px-4 py-2 text-left">Auth</th>
-                <th class="px-4 py-2 text-left">Статус</th>
-                <th class="px-4 py-2 text-left">Действия</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($rows as $row): ?>
-                <tr class="border-t">
-                    <td class="px-4 py-2"><?= (int)$row['id'] ?></td>
-                    <td class="px-4 py-2 font-mono text-sm"><?= h((string)$row['email']) ?></td>
-                    <td class="px-4 py-2">
-                        <a href="index.php?action=referent_view&id=<?= (int)$row['referent_id'] ?>" class="text-blue-600 hover:underline">
-                            <?= h((string)$row['referent_name']) ?>
-                        </a>
-                        <div class="text-xs text-slate-500"><?= h((string)$row['local_inbox']) ?></div>
-                    </td>
-                    <td class="px-4 py-2 text-sm"><?= h((string)$row['imap_host']) ?>:<?= (int)$row['imap_port'] ?></td>
-                    <td class="px-4 py-2 text-sm"><?= h((string)$row['smtp_host']) ?>:<?= (int)$row['smtp_port'] ?></td>
-                    <td class="px-4 py-2"><?= h((string)$row['auth_type']) ?></td>
-                    <td class="px-4 py-2"><?= (int)$row['ea_active'] === 1 ? 'Активен' : 'Отключён' ?></td>
-                    <td class="px-4 py-2"><?php renderAccountRowActions($row, 'account_list'); ?></td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php endif;
-    renderFooter();
+    renderInternetAccountsDirectory();
 }
 
 /**
@@ -591,12 +379,7 @@ function renderReferentForm(): void
         'username' => '',
         'local_inbox' => '',
         'local_outbox' => '',
-        'active' => 1,
-    ];
-
-    $client = [
-        'email' => '',
-        'active' => 1,
+        'active' => 0,
     ];
 
     if (!empty($_GET['id'])) {
@@ -611,19 +394,6 @@ function renderReferentForm(): void
 
         if ($row) {
             $referent = $row;
-
-            $stmt = $pdo->prepare(
-                'SELECT *
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([(int)$referent['id']]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $client = $clientRow;
-            }
         }
     }
 
@@ -631,7 +401,12 @@ function renderReferentForm(): void
 
     ?>
     <div class="mb-4">
+        <?php if (!empty($referent['id'])): ?>
+        <a href="index.php?action=referent_view&id=<?= (int)$referent['id'] ?>" class="text-blue-600 hover:underline">← К карточке референта</a>
+        · <a href="index.php?action=referent_list" class="text-blue-600 hover:underline">К списку</a>
+        <?php else: ?>
         <a href="index.php?action=referent_list" class="text-blue-600 hover:underline">← К списку референтов</a>
+        <?php endif; ?>
     </div>
     <h2 class="text-2xl font-bold mb-6">
         <?= !empty($referent['id']) ? h(__('referent.edit')) : h(__('referent.new')) ?>
@@ -682,6 +457,7 @@ function renderReferentForm(): void
         </div>
         <?php endif; ?>
 
+        <?php if (!empty($referent['id'])): ?>
         <div>
             <label class="inline-flex items-center gap-2">
                 <input
@@ -692,35 +468,11 @@ function renderReferentForm(): void
                 >
                 <span><?= h(__('referent.active')) ?></span>
             </label>
+            <p class="text-sm text-gray-600 mt-1"><?= h(__('referent.active_hint')) ?></p>
         </div>
-
-        <?php if (empty($referent['id'])): ?>
-        <hr>
-
-        <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
-        <p class="text-sm text-slate-600"><?= h(__('relationship.create_legacy_hint')) ?></p>
-
-        <div>
-            <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
-            <input
-                type="email"
-                name="client_email"
-                class="w-full border rounded px-3 py-2"
-                value="<?= h((string)$client['email']) ?>"
-            >
-        </div>
-
-        <div>
-            <label class="inline-flex items-center gap-2">
-                <input
-                    type="checkbox"
-                    name="client_active"
-                    value="1"
-                    <?= (int)$client['active'] === 1 ? 'checked' : '' ?>
-                >
-                <span><?= h(__('referent.client_active')) ?></span>
-            </label>
-        </div>
+        <?php else: ?>
+            <input type="hidden" name="active" value="0">
+            <p class="text-sm text-slate-600"><?= h(__('referent.create_inactive_hint')) ?></p>
         <?php endif; ?>
 
         <button
@@ -747,10 +499,13 @@ function handleReferentSave(): void
     $username = trim((string)($_POST['username'] ?? ''));
     $localInbox = trim((string)($_POST['local_inbox'] ?? ''));
 
-    $active = isset($_POST['active']) ? 1 : 0;
-
-    $clientEmail = trim((string)($_POST['client_email'] ?? ''));
-    $clientActive = isset($_POST['client_active']) ? 1 : 0;
+    // New referents always start inactive until local mailbox, external account
+    // and client relationships are configured; UI omits the active checkbox on create.
+    if ($id <= 0) {
+        $active = 0;
+    } else {
+        $active = isset($_POST['active']) ? 1 : 0;
+    }
 
     $existingInbox = '';
     $existingOutbox = '';
@@ -769,6 +524,9 @@ function handleReferentSave(): void
         $normalizedInbox = normalizeReferentEmail($localInbox);
     } catch (ReferentMaildirException $e) {
         setFlash('error', $e->getUserMessage());
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
+        }
         header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
         exit();
     }
@@ -780,6 +538,9 @@ function handleReferentSave(): void
             $localOutbox = resolveReferentMaildir($normalizedInbox);
         } catch (ReferentMaildirException $e) {
             setFlash('error', $e->getUserMessage());
+            if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
+            }
             header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
             exit();
         }
@@ -836,53 +597,6 @@ function handleReferentSave(): void
             writeLog("Referent created: ID {$referentId}");
         }
 
-        if ($clientEmail !== '') {
-            $stmt = $pdo->prepare(
-                'SELECT id
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([$referentId]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $stmt = $pdo->prepare(
-                    'UPDATE clients
-                     SET email = ?,
-                         active = ?,
-                         updated_at = NOW()
-                     WHERE referent_id = ?'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $clientActive,
-                    $referentId,
-                ]);
-
-                writeLog("Client updated for referent {$referentId}");
-            } else {
-                $stmt = $pdo->prepare(
-                    'INSERT INTO clients
-                    (
-                        email,
-                        referent_id,
-                        active
-                    )
-                    VALUES (?, ?, ?)'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $referentId,
-                    $clientActive,
-                ]);
-
-                writeLog("Client created for referent {$referentId}");
-            }
-        // Если email пустой — ничего не делать с clients (не удалять)
-		}
         $pdo->commit();
 
         setFlash('success', __('referent.saved'));
@@ -896,6 +610,13 @@ function handleReferentSave(): void
         setFlash('error', exceptionUserMessage($e));
     }
 
+    $savedId = isset($referentId) ? (int) $referentId : (int) ($_POST['id'] ?? 0);
+    if ($savedId > 0 && (string) ($_POST['return_to'] ?? '') === 'referent_view') {
+        redirectUsingReturnTo('referent_view', ['id' => $savedId], $savedId);
+    }
+    if ($savedId > 0) {
+        redirectTo('referent_view', ['id' => $savedId, 'tab' => 'overview']);
+    }
     redirectTo('referent_list');
 }
 function renderAccountForm(): void
@@ -959,8 +680,8 @@ function renderAccountForm(): void
     renderHeader(__('account.title'));
     ?>
     <div class="mb-4">
-        <a href="index.php?action=account_list" class="text-blue-600 hover:underline">← К списку аккаунтов</a>
-        · <a href="index.php?action=referent_view&id=<?= $referentId ?>" class="text-blue-600 hover:underline">Референт</a>
+        <a href="index.php?action=referent_view&id=<?= $referentId ?>&tab=external" class="text-blue-600 hover:underline">← К карточке референта</a>
+        · <a href="index.php?action=account_list" class="text-blue-600 hover:underline">К списку аккаунтов</a>
     </div>
     <h2 class="text-2xl font-bold mb-6">
         <?= h(__('account.heading')) ?>
@@ -978,6 +699,9 @@ function renderAccountForm(): void
         <input type="hidden" name="referent_id" value="<?= $referentId ?>">
         <input type="hidden" name="account_id" value="<?= h((string)$account['id']) ?>">
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
+        <input type="hidden" name="return_to" value="referent_view">
+        <input type="hidden" name="return_id" value="<?= $referentId ?>">
+        <input type="hidden" name="tab" value="external">
 
         <div>
             <label class="block mb-1"><?= h(__('account.email')) ?></label>
@@ -1199,6 +923,12 @@ function handleAccountSave(): void
 	
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         setFlash('error', __('account.invalid_email'));
+        if ($referentId > 0) {
+            panelRedirectPreferReferentCard($referentId, 'account_form', [
+                'referent_id' => $referentId,
+                'account_id' => $accountId > 0 ? $accountId : null,
+            ]);
+        }
         redirectTo('dashboard');
     }
 
@@ -1230,11 +960,17 @@ function handleAccountSave(): void
     if ($accountId === 0) {
         if ($authType === 'plain' && $password === '') {
             setFlash('error', 'Для plain-авторизации необходимо указать пароль при создании аккаунта');
+            if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+            }
             header('Location: index.php?action=account_form&referent_id=' . $referentId);
             exit();
         }
         if ($authType === 'oauth2' && ($clientId === '' || $clientSecret === '')) {
             setFlash('error', 'Для OAuth2 необходимо указать Client ID и Client Secret при создании аккаунта');
+            if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+            }
             header('Location: index.php?action=account_form&referent_id=' . $referentId);
             exit();
         }
@@ -1284,7 +1020,7 @@ function handleAccountSave(): void
 
             if ($stmt->rowCount() === 0) {
                 setFlash('error', __('account.access_denied'));
-                redirectTo('dashboard');
+                panelRedirectPreferReferentCard($referentId, 'dashboard');
             }
 
             writeLog("External account updated: ID {$accountId}");
@@ -1340,6 +1076,13 @@ function handleAccountSave(): void
         setFlash('error', exceptionUserMessage($e));
     }
 
+    $rid = (int) ($_POST['referent_id'] ?? 0);
+    if ((string) ($_POST['return_to'] ?? '') === 'referent_view' && $rid > 0) {
+        redirectUsingReturnTo('referent_view', ['id' => $rid], $rid);
+    }
+    if ($rid > 0) {
+        redirectTo('referent_view', ['id' => $rid, 'tab' => 'external']);
+    }
     redirectTo('account_list');
 }
 
@@ -1400,15 +1143,22 @@ function handleToggleActive(): void
     if ($return === 'accounts') {
         $return = 'account_list';
     }
+    setFlash('success', __('error.status_changed'));
+
     if ($return === 'referent_form' || $return === 'referent_view') {
-        $refId = (int)($_POST['referent_id'] ?? 0);
+        $refId = (int) ($_POST['referent_id'] ?? 0);
         if ($refId > 0) {
-            redirectTo($return, ['id' => $refId]);
+            $params = ['id' => $refId];
+            if ($return === 'referent_view') {
+                $params['tab'] = panelNormalizeTab(
+                    isset($_POST['tab']) ? (string) $_POST['tab'] : null
+                );
+            }
+            redirectTo($return, $params);
         }
         $return = 'referent_list';
     }
 
-    setFlash('success', __('error.status_changed'));
     redirectTo($return);
 }
 
@@ -1418,7 +1168,8 @@ function renderEntityToggleButton(
     int $active,
     string $label,
     string $returnAction = 'dashboard',
-    ?int $referentId = null
+    ?int $referentId = null,
+    ?string $tab = null
 ): void {
     $isOn = $active === 1;
     $actionLabel = $isOn ? 'Выкл' : 'Вкл';
@@ -1432,6 +1183,9 @@ function renderEntityToggleButton(
         <?php if ($referentId !== null && $referentId > 0): ?>
             <input type="hidden" name="referent_id" value="<?= $referentId ?>">
         <?php endif; ?>
+        <?php if ($tab !== null && $tab !== ''): ?>
+            <input type="hidden" name="tab" value="<?= h($tab) ?>">
+        <?php endif; ?>
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
         <button type="submit" class="<?= $btnClass ?> text-white px-2 py-1 rounded text-sm" title="<?= h($label) ?>">
             <?= h($label) ?>: <?= h($actionLabel) ?>
@@ -1442,118 +1196,7 @@ function renderEntityToggleButton(
 
 function renderReferentView(): void
 {
-    $pdo = getPdo();
-    $id = (int)($_GET['id'] ?? 0);
-
-    if ($id <= 0) {
-        setFlash('error', 'Не указан референт');
-        redirectTo('referent_list');
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active as r_active,
-                c.id as client_id, c.email as client_email, c.active as c_active,
-                ea.id as ea_id, ea.email as ea_email, ea.username as ea_username,
-                ea.auth_type, ea.provider, ea.imap_host, ea.imap_port, ea.imap_encryption,
-                ea.smtp_host, ea.smtp_port, ea.smtp_encryption, ea.active as ea_active,
-                ot.expires_at
-         FROM referents r
-         LEFT JOIN clients c ON c.referent_id = r.id
-         LEFT JOIN external_accounts ea ON ea.referent_id = r.id
-         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
-         WHERE r.id = ?
-         LIMIT 1'
-    );
-    $stmt->execute([$id]);
-    $row = $stmt->fetch();
-
-    if (!$row) {
-        setFlash('error', 'Референт не найден');
-        redirectTo('referent_list');
-    }
-
-    $localMail = loadLocalMailClientSettings();
-
-    renderHeader('Почтовый клиент — ' . (string)$row['username']);
-    ?>
-    <div class="mb-4">
-        <a href="index.php?action=referent_list" class="text-blue-600 hover:underline">← К списку референтов</a>
-    </div>
-
-    <h2 class="text-2xl font-bold mb-2">Настройка почтового клиента</h2>
-    <p class="text-slate-600 mb-6">
-        Референт: <strong><?= h((string)$row['username']) ?></strong>
-        — <?= (int)$row['r_active'] === 1 ? 'активен' : 'отключён' ?>
-    </p>
-
-    <div class="grid gap-6 lg:grid-cols-2">
-        <div class="bg-white rounded shadow p-6">
-            <h3 class="text-lg font-semibold mb-4">Локальный ящик (iRedMail)</h3>
-            <p class="text-sm text-slate-600 mb-4">
-                Эти параметры нужны для настройки Thunderbird, Outlook и других клиентов
-                для доступа к локальному ящику референта на сервере DELTA-транзит.
-            </p>
-            <dl class="space-y-3 text-sm">
-                <div><dt class="font-medium text-slate-500">Email / логин</dt>
-                    <dd class="font-mono"><?= h((string)$row['local_inbox']) ?></dd></div>
-                <div><dt class="font-medium text-slate-500">Пароль</dt>
-                    <dd>Задаётся в iRedMail при создании почтового ящика. Панель не хранит и не показывает пароль.</dd></div>
-                <div><dt class="font-medium text-slate-500">IMAP</dt>
-                    <dd class="font-mono"><?= h($localMail['imap_host']) ?>:<?= (int)$localMail['imap_port'] ?> (<?= h(formatMailEncryption($localMail['imap_encryption'])) ?>)</dd></div>
-                <div><dt class="font-medium text-slate-500">SMTP</dt>
-                    <dd class="font-mono"><?= h($localMail['smtp_host']) ?>:<?= (int)$localMail['smtp_port'] ?> (<?= h(formatMailEncryption($localMail['smtp_encryption'])) ?>)</dd></div>
-                <?php if (!empty($row['local_outbox'])): ?>
-                <div><dt class="font-medium text-slate-500">Maildir (системный)</dt>
-                    <dd class="font-mono text-xs break-all"><?= h((string)$row['local_outbox']) ?></dd></div>
-                <?php endif; ?>
-            </dl>
-            <p class="text-xs text-slate-500 mt-4">
-                Сервер IMAP/SMTP можно переопределить в <code>/etc/mail-proxy/panel.conf</code> секция <code>[local_mail]</code>.
-            </p>
-        </div>
-
-        <div class="bg-white rounded shadow p-6">
-            <h3 class="text-lg font-semibold mb-4">Маршрутизация входящей почты</h3>
-            <p class="text-sm text-slate-600 mb-4">
-                <?= h(__('relationship.view_routing_hint')) ?>
-            </p>
-            <a href="index.php?action=referent_form&id=<?= $id ?>" class="text-blue-600 underline text-sm">
-                <?= h(__('relationship.manage_link')) ?>
-            </a>
-        </div>
-
-        <div class="bg-white rounded shadow p-6 lg:col-span-2">
-            <h3 class="text-lg font-semibold mb-4">Внешний почтовый аккаунт (исходящая/входящая синхронизация)</h3>
-            <?php if (!empty($row['ea_id'])): ?>
-            <p class="text-sm text-slate-600 mb-4">
-                Демон опрашивает внешний IMAP и отправляет исходящую почту через внешний SMTP.
-                Пароли и OAuth-токены хранятся в зашифрованном виде и не отображаются.
-            </p>
-            <dl class="grid md:grid-cols-2 gap-4 text-sm">
-                <div><dt class="font-medium text-slate-500">Email</dt><dd class="font-mono"><?= h((string)$row['ea_email']) ?></dd></div>
-                <div><dt class="font-medium text-slate-500">Логин IMAP/SMTP</dt><dd class="font-mono"><?= h((string)($row['ea_username'] ?: $row['ea_email'])) ?></dd></div>
-                <div><dt class="font-medium text-slate-500">Авторизация</dt><dd><?= h((string)$row['auth_type']) ?><?= $row['provider'] ? ' (' . h((string)$row['provider']) . ')' : '' ?></dd></div>
-                <div><dt class="font-medium text-slate-500">Статус</dt><dd><?= (int)$row['ea_active'] === 1 ? 'Активен' : 'Отключён' ?></dd></div>
-                <div><dt class="font-medium text-slate-500">IMAP</dt><dd class="font-mono"><?= h((string)$row['imap_host']) ?>:<?= (int)$row['imap_port'] ?> (<?= h(formatMailEncryption((string)$row['imap_encryption'])) ?>)</dd></div>
-                <div><dt class="font-medium text-slate-500">SMTP</dt><dd class="font-mono"><?= h((string)$row['smtp_host']) ?>:<?= (int)$row['smtp_port'] ?> (<?= h(formatMailEncryption((string)$row['smtp_encryption'])) ?>)</dd></div>
-                <?php if ($row['auth_type'] === 'oauth2' && $row['expires_at']): ?>
-                <div><dt class="font-medium text-slate-500">OAuth2 токен</dt><dd><?= h((string)$row['expires_at']) ?> (<?= strtotime((string)$row['expires_at']) > time() ? 'активен' : 'истёк' ?>)</dd></div>
-                <?php endif; ?>
-            </dl>
-            <div class="mt-4 flex gap-3">
-                <a href="index.php?action=account_form&referent_id=<?= $id ?>&account_id=<?= (int)$row['ea_id'] ?>"
-                   class="bg-amber-500 text-white px-4 py-2 rounded">Редактировать внешний аккаунт</a>
-            </div>
-            <?php else: ?>
-            <p class="text-sm text-amber-700 mb-4">Внешний аккаунт не настроен. Без него демон не сможет синхронизировать почту с удалённым сервером.</p>
-            <a href="index.php?action=account_form&referent_id=<?= $id ?>"
-               class="bg-blue-600 text-white px-4 py-2 rounded inline-block">Создать внешний аккаунт</a>
-            <?php endif; ?>
-        </div>
-    </div>
-    <?php
-    renderRelationshipListSection($id, 'view');
-    renderFooter();
+    renderReferentCardUi();
 }
 
 function handleReferentDelete(): void
@@ -1608,7 +1251,10 @@ function handleAccountDelete(): void
 
     writeLog('External account deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', 'Внешний аккаунт удалён');
-    redirectTo('account_list');
+    if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+        redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+    }
+    redirectTo('referent_view', ['id' => $referentId, 'tab' => 'external']);
 }
 
 function renderRelationshipForm(): void
@@ -1649,7 +1295,7 @@ function renderRelationshipForm(): void
         $existing = $stmt->fetch();
         if (!$existing) {
             setFlash('error', __('error.record_not_found'));
-            redirectTo('referent_form', ['id' => $referentId]);
+            redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
         }
         $row = $existing;
     }
@@ -1672,7 +1318,7 @@ function renderRelationshipForm(): void
                 ← <?= h(__('backfill.back_to_list')) ?>
             </a>
         <?php else: ?>
-            <a href="index.php?action=referent_form&id=<?= $referentId ?>" class="text-blue-600 hover:underline">
+            <a href="index.php?action=referent_view&id=<?= $referentId ?>&tab=clients" class="text-blue-600 hover:underline">
                 ← <?= h(__('relationship.back_to_referent')) ?>
             </a>
         <?php endif; ?>
@@ -1692,6 +1338,10 @@ function renderRelationshipForm(): void
         <input type="hidden" name="referent_id" value="<?= $referentId ?>">
         <?php if ($fromBackfill): ?>
             <input type="hidden" name="return_to" value="backfill">
+        <?php else: ?>
+            <input type="hidden" name="return_to" value="referent_view">
+            <input type="hidden" name="return_id" value="<?= $referentId ?>">
+            <input type="hidden" name="tab" value="clients">
         <?php endif; ?>
         <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
 
@@ -1780,7 +1430,7 @@ function renderRelationshipForm(): void
             <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded">
                 <?= h(__('common.save')) ?>
             </button>
-            <a href="index.php?action=referent_form&id=<?= $referentId ?>"
+            <a href="index.php?action=referent_view&id=<?= $referentId ?>&tab=clients"
                class="bg-slate-500 text-white px-6 py-2 rounded inline-block">
                 <?= h(__('common.cancel')) ?>
             </a>
@@ -1813,7 +1463,7 @@ function handleRelationshipSave(): void
         $stmt->execute([$id, $referentId]);
         if (!$stmt->fetch()) {
             setFlash('error', __('error.record_not_found'));
-            redirectTo('referent_form', ['id' => $referentId]);
+            redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
         }
     }
 
@@ -1821,6 +1471,9 @@ function handleRelationshipSave(): void
 
     if ($data['any_filled'] && !$data['all_filled']) {
         setFlash('error', __('relationship.error.all_or_nothing'));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1829,6 +1482,9 @@ function handleRelationshipSave(): void
 
     if (!$data['all_filled']) {
         setFlash('error', __('relationship.error.all_or_nothing'));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1847,15 +1503,18 @@ function handleRelationshipSave(): void
             setFlash('error', __('relationship.error.invalid_email', [
                 'field' => __('relationship.field.' . $field),
             ]));
-            redirectTo('relationship_form', array_filter([
+            panelRedirectPreferReferentCard($referentId, 'relationship_form', [
                 'referent_id' => $referentId,
                 'id' => $id > 0 ? $id : null,
-            ]));
+            ]);
         }
     }
 
     if ($data['local_client_email'] === $data['local_referent_email']) {
         setFlash('error', __('relationship.error.same_local_mailboxes'));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1868,22 +1527,25 @@ function handleRelationshipSave(): void
             setFlash('error', __('relationship.error.mailbox_not_provisioned', [
                 'email' => $data['local_client_email'],
             ]));
-            redirectTo('relationship_form', array_filter([
+            panelRedirectPreferReferentCard($referentId, 'relationship_form', [
                 'referent_id' => $referentId,
                 'id' => $id > 0 ? $id : null,
-            ]));
+            ]);
         }
         if (!activePhysicalMailboxExists($data['local_referent_email'])) {
             setFlash('error', __('relationship.error.mailbox_not_provisioned', [
                 'email' => $data['local_referent_email'],
             ]));
-            redirectTo('relationship_form', array_filter([
+            panelRedirectPreferReferentCard($referentId, 'relationship_form', [
                 'referent_id' => $referentId,
                 'id' => $id > 0 ? $id : null,
-            ]));
+            ]);
         }
     } catch (ReferentMaildirException $e) {
         setFlash('error', $e->getUserMessage());
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1891,6 +1553,9 @@ function handleRelationshipSave(): void
     } catch (Throwable $e) {
         writeLog('Relationship mailbox check failed: ' . $e->getMessage());
         setFlash('error', __('relationship.error.vmail_unavailable'));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1904,6 +1569,9 @@ function handleRelationshipSave(): void
     );
     if ($accountError !== null) {
         setFlash('error', $accountError);
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1918,6 +1586,9 @@ function handleRelationshipSave(): void
     );
     if ($collision !== null) {
         setFlash('error', $collision);
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1929,6 +1600,7 @@ function handleRelationshipSave(): void
             $stmt = $pdo->prepare(
                 'UPDATE clients
                  SET email = ?,
+                     display_name = ?,
                      external_client_email = ?,
                      local_client_email = ?,
                      local_referent_email = ?,
@@ -1940,6 +1612,7 @@ function handleRelationshipSave(): void
             );
             $stmt->execute([
                 $data['external_client_email'],
+                $data['display_name'] !== '' ? $data['display_name'] : null,
                 $data['external_client_email'],
                 $data['local_client_email'],
                 $data['local_referent_email'],
@@ -1953,13 +1626,14 @@ function handleRelationshipSave(): void
         } else {
             $stmt = $pdo->prepare(
                 'INSERT INTO clients (
-                    email, referent_id,
+                    email, display_name, referent_id,
                     external_client_email, local_client_email, local_referent_email,
                     external_account_id, local_client_maildir, active
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $data['external_client_email'],
+                $data['display_name'] !== '' ? $data['display_name'] : null,
                 $referentId,
                 $data['external_client_email'],
                 $data['local_client_email'],
@@ -1983,6 +1657,9 @@ function handleRelationshipSave(): void
         } else {
             setFlash('error', __('relationship.error.save_failed'));
         }
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
@@ -1990,16 +1667,22 @@ function handleRelationshipSave(): void
     } catch (Throwable $e) {
         writeLog('Relationship save error: ' . $e->getMessage());
         setFlash('error', exceptionUserMessage($e));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
         redirectTo('relationship_form', array_filter([
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
         ]));
     }
 
-    if ((string)($_POST['return_to'] ?? '') === 'backfill') {
+    if ((string) ($_POST['return_to'] ?? '') === 'backfill') {
         redirectTo('relationship_backfill');
     }
-    redirectTo('referent_form', ['id' => $referentId]);
+    if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+        redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+    }
+    redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
 }
 
 function handleRelationshipDelete(): void
@@ -2020,13 +1703,16 @@ function handleRelationshipDelete(): void
     $row = $stmt->fetch();
     if (!$row) {
         setFlash('error', __('error.record_not_found'));
-        redirectTo('referent_form', ['id' => $referentId]);
+        redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
     }
 
     $stmt = $pdo->prepare('DELETE FROM clients WHERE id = ? AND referent_id = ?');
     $stmt->execute([$id, $referentId]);
     writeLog('ClientRelationship deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', __('relationship.deleted'));
-    redirectTo('referent_form', ['id' => $referentId]);
+    if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+        redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+    }
+    redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
 }
 

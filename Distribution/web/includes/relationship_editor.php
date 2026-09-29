@@ -288,6 +288,7 @@ function fetchExternalAccountsForRelationshipForm(
 
 /**
  * @return array{
+ *   display_name: string,
  *   external_client_email: string,
  *   local_client_email: string,
  *   local_referent_email: string,
@@ -300,6 +301,10 @@ function fetchExternalAccountsForRelationshipForm(
  */
 function parseRelationshipFormPost(array $post): array
 {
+    $displayName = trim((string)($post['display_name'] ?? ''));
+    if (mb_strlen($displayName) > 255) {
+        $displayName = mb_substr($displayName, 0, 255);
+    }
     $externalClient = normalizeRelationshipEmail((string)($post['external_client_email'] ?? ''));
     $localClient = normalizeRelationshipEmail((string)($post['local_client_email'] ?? ''));
     $localReferent = normalizeRelationshipEmail((string)($post['local_referent_email'] ?? ''));
@@ -311,6 +316,15 @@ function parseRelationshipFormPost(array $post): array
     }
     $active = isset($post['active']) ? 1 : 0;
 
+    // Auto-resolve mailbox data path from the local client address when empty.
+    if ($maildir === '' && $localClient !== '') {
+        try {
+            $maildir = normalizeRelationshipMaildirPath(resolveReferentMaildir($localClient));
+        } catch (Throwable $e) {
+            // leave empty — validation below will surface a clear error
+        }
+    }
+
     $parts = [$externalClient, $localClient, $localReferent, $maildir];
     $filledCount = 0;
     foreach ($parts as $p) {
@@ -321,7 +335,6 @@ function parseRelationshipFormPost(array $post): array
     if ($accountId !== null) {
         $filledCount++;
     }
-    $requiredSlots = 5; // four addresses/maildir + account
     $anyFilled = $filledCount > 0;
     $allFilled = $externalClient !== ''
         && $localClient !== ''
@@ -330,6 +343,7 @@ function parseRelationshipFormPost(array $post): array
         && $accountId !== null;
 
     return [
+        'display_name' => $displayName,
         'external_client_email' => $externalClient,
         'local_client_email' => $localClient,
         'local_referent_email' => $localReferent,
@@ -573,34 +587,39 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
 {
     $pdo = getPdo();
     $rows = fetchRelationshipsForReferent($pdo, $referentId);
+    $csrf = h((string) ($_SESSION['csrf_token'] ?? ''));
+    renderPanelModalStyles();
     ?>
     <div class="bg-white rounded shadow p-6 mt-6" id="relationship-list">
         <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h3 class="text-lg font-semibold"><?= h(__('relationship.list_title')) ?></h3>
             <a href="index.php?action=relationship_form&referent_id=<?= $referentId ?>"
-               class="bg-blue-600 text-white px-4 py-2 rounded text-sm">
+               class="pm-btn pm-btn-primary">
                 <?= h(__('relationship.add')) ?>
             </a>
         </div>
         <p class="text-sm text-slate-600 mb-4"><?= h(__('relationship.list_hint')) ?></p>
 
         <?php if ($rows === []): ?>
-            <div class="border border-dashed border-slate-300 rounded p-6 text-center text-slate-600"
-                 data-testid="relationship-empty">
-                <?= h(__('relationship.empty')) ?>
+            <div class="pm-empty" data-testid="relationship-empty">
+                <?= h(__('relationship.empty')) ?><br>
+                <a href="index.php?action=relationship_form&referent_id=<?= $referentId ?>"
+                   class="pm-btn pm-btn-primary" style="margin-top:10px">
+                    <?= h(__('relationship.add')) ?>
+                </a>
             </div>
         <?php else: ?>
             <div class="overflow-x-auto">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-100">
+                <table class="pm-table min-w-full text-sm" data-pm-table="1">
+                    <thead>
                     <tr>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_external_client')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_local_client')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_local_referent')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_external_account')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_active')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('relationship.col_status')) ?></th>
-                        <th class="px-3 py-2 text-left"><?= h(__('common.actions')) ?></th>
+                        <th data-sort="external"><?= h(__('relationship.col_external_client')) ?></th>
+                        <th data-sort="local_client"><?= h(__('relationship.col_local_client')) ?></th>
+                        <th data-sort="local_ref"><?= h(__('relationship.col_local_referent')) ?></th>
+                        <th data-sort="ea"><?= h(__('relationship.col_external_account')) ?></th>
+                        <th data-sort="active"><?= h(__('relationship.col_active')) ?></th>
+                        <th data-sort="status"><?= h(__('relationship.col_status')) ?></th>
+                        <th><?= h(__('common.actions')) ?></th>
                     </tr>
                     </thead>
                     <tbody>
@@ -613,6 +632,9 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
                             'legacy' => 'text-slate-600',
                             default => 'text-slate-700',
                         };
+                        $extLabel = $legacy
+                            ? (string) $row['email']
+                            : (string) ($row['external_client_email'] ?: '—');
                         ?>
                         <tr class="border-t" data-relationship-id="<?= (int)$row['id'] ?>"
                             data-status="<?= h($status['code']) ?>">
@@ -643,7 +665,7 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
                             </td>
                             <td class="px-3 py-2">
                                 <div class="flex flex-wrap gap-2">
-                                    <a class="bg-amber-500 text-white px-2 py-1 rounded text-xs"
+                                    <a class="pm-btn pm-btn-sm"
                                        href="index.php?action=relationship_form&referent_id=<?= $referentId ?>&id=<?= (int)$row['id'] ?>">
                                         <?= h(__('common.edit')) ?>
                                     </a>
@@ -653,20 +675,16 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
                                         (int)$row['id'],
                                         (int)$row['active'],
                                         __('relationship.toggle_label'),
-                                        $context === 'view' ? 'referent_view' : 'referent_form',
-                                        $referentId
+                                        'referent_view',
+                                        $referentId,
+                                        'clients'
                                     );
                                     ?>
-                                    <form method="post" action="index.php?action=relationship_delete" class="inline"
-                                          onsubmit="return confirm('<?= h(__('relationship.delete_confirm')) ?>');">
-                                        <input type="hidden" name="action" value="relationship_delete">
-                                        <input type="hidden" name="id" value="<?= (int)$row['id'] ?>">
-                                        <input type="hidden" name="referent_id" value="<?= $referentId ?>">
-                                        <input type="hidden" name="csrf_token" value="<?= h($_SESSION['csrf_token'] ?? '') ?>">
-                                        <button type="submit" class="bg-red-600 text-white px-2 py-1 rounded text-xs">
-                                            <?= h(__('common.delete')) ?>
-                                        </button>
-                                    </form>
+                                    <button type="button" class="pm-btn pm-btn-sm pm-btn-danger"
+                                            data-rel-del-id="<?= (int)$row['id'] ?>"
+                                            data-rel-del-label="<?= h($extLabel) ?>">
+                                        <?= h(__('common.delete')) ?>
+                                    </button>
                                 </div>
                             </td>
                         </tr>
@@ -676,11 +694,52 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
             </div>
         <?php endif; ?>
     </div>
+
+    <dialog class="pm-dialog" id="dlg-rel-list-delete" aria-modal="true" data-pm-nodirty="1">
+        <form method="post" action="index.php?action=relationship_delete" id="form-rel-list-delete">
+            <div class="pm-mh">
+                <h2><?= h(__('relationship.delete_title')) ?></h2>
+                <button type="button" class="pm-x" data-pm-close aria-label="<?= h(__('common.cancel')) ?>">×</button>
+            </div>
+            <div class="pm-mb">
+                <p style="margin:0" id="rel-list-del-text"><?= h(__('relationship.delete_confirm')) ?></p>
+                <input type="hidden" name="action" value="relationship_delete">
+                <input type="hidden" name="id" id="rel_list_del_id" value="">
+                <input type="hidden" name="referent_id" value="<?= $referentId ?>">
+                <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
+                <input type="hidden" name="return_to" value="referent_view">
+                <input type="hidden" name="return_id" value="<?= $referentId ?>">
+                <input type="hidden" name="tab" value="clients">
+            </div>
+            <div class="pm-mf"><span></span><div class="pm-r">
+                <button type="button" class="pm-btn" data-pm-close><?= h(__('common.cancel')) ?></button>
+                <button type="submit" class="pm-btn pm-btn-danger-solid" data-pm-focus><?= h(__('common.delete')) ?></button>
+            </div></div>
+        </form>
+    </dialog>
+    <script>
+    (function () {
+      var tpl = <?= json_encode(__('relationship.delete_body'), JSON_UNESCAPED_UNICODE) ?>;
+      document.querySelectorAll('[data-rel-del-id]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          document.getElementById('rel_list_del_id').value = btn.getAttribute('data-rel-del-id') || '';
+          var label = btn.getAttribute('data-rel-del-label') || '';
+          document.getElementById('rel-list-del-text').textContent =
+            (tpl || '').replace('{name}', label || '—');
+          if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-rel-list-delete'));
+        });
+      });
+    })();
+    </script>
     <?php
+    renderPanelModalScripts(null);
 }
 
 /**
- * Cross-referent legacy backlog (PROMPT-57). Discovery only — Migrate is GET to relationship_form.
+ * Cross-referent incomplete-relationship triage (PROMPT-57).
+ * Discovery only — Migrate is GET to relationship_form.
  */
 function renderLegacyRelationshipBackfill(): void
 {
@@ -691,10 +750,13 @@ function renderLegacyRelationshipBackfill(): void
     $total = $backlog['total'];
 
     renderHeader(__('backfill.title'));
+    renderPanelModalStyles();
     ?>
-    <h2 class="text-2xl font-bold mb-2"><?= h(__('backfill.title')) ?></h2>
-    <p class="text-slate-600 mb-2"><?= h(__('backfill.hint')) ?></p>
-    <p class="mb-6 text-sm font-medium" data-testid="backfill-count">
+    <div class="pm-head">
+        <h1><?= h(__('backfill.title')) ?></h1>
+    </div>
+    <p class="pm-hint"><?= h(__('backfill.hint')) ?></p>
+    <p class="pm-hint" data-testid="backfill-count">
         <?= h(__('backfill.count', [
             'legacy' => (string)$legacyCount,
             'total' => (string)$total,
@@ -702,35 +764,38 @@ function renderLegacyRelationshipBackfill(): void
     </p>
 
     <?php if ($legacy === []): ?>
-        <div class="bg-white rounded shadow p-8 text-center text-slate-600" data-testid="backfill-empty">
+        <div class="pm-empty" data-testid="backfill-empty">
             <?= h(__('backfill.empty')) ?>
         </div>
     <?php else: ?>
-        <div class="bg-white rounded shadow overflow-x-auto" data-testid="backfill-table">
-            <table class="min-w-full text-sm">
-                <thead class="bg-slate-100">
+        <div class="pm-card pm-table-wrap" data-testid="backfill-table">
+            <table class="pm-table" data-pm-table="1">
+                <thead>
                 <tr>
-                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_referent')) ?></th>
-                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_legacy_email')) ?></th>
-                    <th class="px-4 py-2 text-left"><?= h(__('backfill.col_active')) ?></th>
-                    <th class="px-4 py-2 text-left"><?= h(__('common.actions')) ?></th>
+                    <th data-sort="referent"><?= h(__('backfill.col_referent')) ?></th>
+                    <th data-sort="email"><?= h(__('backfill.col_legacy_email')) ?></th>
+                    <th data-sort="active"><?= h(__('backfill.col_active')) ?></th>
+                    <th><?= h(__('common.actions')) ?></th>
                 </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($legacy as $row): ?>
-                    <tr class="border-t" data-legacy-client-id="<?= (int)$row['id'] ?>">
-                        <td class="px-4 py-2">
+                <?php foreach ($legacy as $i => $row): ?>
+                    <tr class="<?= $i === 0 ? 'pm-sel' : '' ?>"
+                        data-legacy-client-id="<?= (int)$row['id'] ?>">
+                        <td>
                             <?= h((string)$row['referent_username']) ?>
-                            <div class="text-xs text-slate-500">referent_id=<?= (int)$row['referent_id'] ?></div>
+                            <div class="pm-help">referent_id=<?= (int)$row['referent_id'] ?></div>
                         </td>
-                        <td class="px-4 py-2 font-mono"><?= h((string)$row['email']) ?></td>
-                        <td class="px-4 py-2">
-                            <?= (int)$row['active'] === 1
-                                ? h(__('relationship.active_yes'))
-                                : h(__('relationship.active_no')) ?>
+                        <td class="pm-mono"><?= h((string)$row['email']) ?></td>
+                        <td>
+                            <?php if ((int)$row['active'] === 1): ?>
+                                <span class="pm-chip pm-chip-ok"><?= h(__('relationship.active_yes')) ?></span>
+                            <?php else: ?>
+                                <span class="pm-chip pm-chip-off"><?= h(__('relationship.active_no')) ?></span>
+                            <?php endif; ?>
                         </td>
-                        <td class="px-4 py-2">
-                            <a class="bg-blue-600 text-white px-3 py-1 rounded text-sm"
+                        <td>
+                            <a class="pm-btn pm-btn-sm"
                                href="index.php?action=relationship_form&referent_id=<?= (int)$row['referent_id'] ?>&id=<?= (int)$row['id'] ?>&from=backfill"
                                data-testid="backfill-migrate">
                                 <?= h(__('backfill.migrate')) ?>
@@ -742,5 +807,6 @@ function renderLegacyRelationshipBackfill(): void
             </table>
         </div>
     <?php endif;
+    renderPanelModalScripts(null);
     renderFooter();
 }

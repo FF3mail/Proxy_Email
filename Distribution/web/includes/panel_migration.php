@@ -33,6 +33,7 @@ function bootstrapPanelAuth(): void
     $done = true;
 
     ensurePanelAdminsSchema();
+    ensureClientDisplayNameColumn();
     validatePanelAuthStartup();
 }
 
@@ -143,4 +144,33 @@ function validatePanelAuthStartup(): void
         . 'seed master via interactive installer (sudo ./delta-transit-install.sh); '
         . 'non-interactive runs abort without auto-generating credentials'
     );
+}
+
+/**
+ * Idempotent: ensure clients.display_name exists (UX client label column).
+ */
+function ensureClientDisplayNameColumn(): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+
+    try {
+        $pdo = getPdo();
+        $stmt = $pdo->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'clients'
+               AND COLUMN_NAME = 'display_name'"
+        );
+        if ((int) $stmt->fetchColumn() > 0) {
+            return;
+        }
+        $pdo->exec('ALTER TABLE clients ADD COLUMN display_name VARCHAR(255) NULL AFTER email');
+        writeLog('Panel migration: added clients.display_name');
+    } catch (Throwable $e) {
+        writeLog('Panel migration display_name failed: ' . $e->getMessage());
+    }
 }
