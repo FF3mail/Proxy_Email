@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS referents (
 CREATE TABLE IF NOT EXISTS clients (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
+    display_name VARCHAR(255) NULL,
     referent_id INT UNSIGNED NOT NULL,
     external_client_email VARCHAR(255) NULL,
     local_client_email VARCHAR(255) NULL,

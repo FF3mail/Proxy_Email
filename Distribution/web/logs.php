@@ -10,6 +10,8 @@ initPanelI18n();
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/panel_migration.php';
 require_once __DIR__ . '/includes/log_viewer.php';
+require_once __DIR__ . '/includes/panel_modals.php';
+require_once __DIR__ . '/includes/panel_nav.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
@@ -37,29 +39,46 @@ $sourceLabel = match ($source) {
 <title>Просмотр логов — DELTA-транзит</title>
 <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px; background: #f4f6f8; color: #333; }
-    .nav { background: #2c3e50; padding: 10px 20px; display: flex; gap: 20px; align-items: center; }
-    .nav a { color: #ecf0f1; text-decoration: none; }
-    .nav a:hover { color: #3498db; }
-    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-    h1 { font-size: 22px; margin-bottom: 16px; }
-    .controls { background: #fff; padding: 16px; border-radius: 6px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .controls label { font-size: 13px; }
-    .controls select, .controls input { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
-    .btn { display: inline-block; padding: 6px 14px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 13px; }
-    .log-box { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word; }
-    .error { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; color: #856404; margin-bottom: 16px; }
-    .meta { color: #666; font-size: 12px; margin-bottom: 12px; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 14px; line-height: 1.45;
+      background: var(--pm-bg, #f1f5f9); color: var(--pm-text, #0f172a);
+    }
+    h1 { font-size: 22px; margin: 0 0 14px; font-weight: 700; color: var(--pm-text, #0f172a); }
+    .controls {
+      background: var(--pm-surface, #fff); padding: 16px; border-radius: 8px;
+      border: 1px solid var(--pm-border, #e2e8f0); margin-bottom: 16px;
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    }
+    .controls label { font-size: 13px; color: var(--pm-muted, #64748b); font-weight: 600; }
+    .controls select, .controls input {
+      padding: 8px 10px; border: 1px solid var(--pm-border, #e2e8f0);
+      border-radius: 6px; font: inherit; color: inherit; background: #fff; margin-left: 6px;
+    }
+    .btn {
+      display: inline-block; padding: 7px 14px; background: var(--pm-accent, #3f6d9e);
+      color: #fff; border: none; border-radius: 6px; cursor: pointer;
+      text-decoration: none; font-size: 14px;
+    }
+    .log-box {
+      background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px;
+      font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+      max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      border: 1px solid var(--pm-border, #e2e8f0);
+    }
+    .error {
+      background: var(--pm-warn-bg, #f7edd6); border: 1px solid #e8d7a8;
+      padding: 12px; border-radius: 6px; color: var(--pm-warn, #9a6b12); margin-bottom: 16px;
+    }
+    .meta { color: var(--pm-muted, #64748b); font-size: 13px; margin-bottom: 12px; }
 </style>
+<link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
 <body>
-<nav class="nav">
-    <a href="/index.php">Панель управления</a>
-    <a href="/monitor.php">Мониторинг</a>
-    <a href="/relationship-status.php">Статус связей</a>
-    <a href="/logs.php" style="color:#3498db;font-weight:600;">Логи</a>
-</nav>
-<div class="container">
+<div class="app-shell">
+<?php renderPanelSidebar(); ?>
+<main class="app-main">
+<div class="container" style="max-width:none;margin:0;padding:0">
     <h1>Просмотр логов</h1>
 
     <form method="get" action="/logs.php" class="controls">
@@ -91,6 +110,8 @@ $sourceLabel = match ($source) {
             }
         ?></div>
     <?php endif; ?>
+</div>
+</main>
 </div>
 </body>
 </html>
