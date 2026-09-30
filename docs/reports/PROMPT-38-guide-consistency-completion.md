@@ -14,7 +14,7 @@ All ten files under `docs/guide/` were read against the current tree on `prompt-
 
 - `delta-transit-install.sh`
 - `configure_limits.sh`
-- `verify-install-regression.sh`
+- `scripts/verify-install-regression.sh`
 - `mail-proxy-daemon.py`
 - `web/` (PHP panel auth, allow-list, CSRF)
 
@@ -37,14 +37,14 @@ All ten files under `docs/guide/` were read against the current tree on `prompt-
 | `07-troubleshooting.md` §7.6 | 403 = IP only | 403 is allow-list; LAN users still need login | **Fixed** — note on second layer |
 | `03-installation.md` §3.5 vs PDF §4.1 | (cross-check requested) | See section below | **Consistent** — no doc change |
 | `08-security.md` §8.5 | “доверенный TLS” without naming certbot | Certbot is installer path, not a separate security feature | **Deferred** — §3.6/§5.2 now cover TLS sources; §8.5 generic advice still valid |
-| `06-operations.md` | `verify-install-regression.sh` after changes | Script checks service, nginx, db.conf, 210M body, `/var/vmail` ownership — matches | **OK** — no change |
+| `06-operations.md` | `scripts/verify-install-regression.sh` after changes | Script checks service, nginx, db.conf, 210M body, `/var/vmail` ownership — matches | **OK** — no change |
 | `09-backup-restore.md` | Critical objects list | Matches paths in installer and runtime | **OK** — no change |
 | `01-overview.md` §1.3 | ~60 s IMAP poll, 20 workers, queues 5000/1000 | `IMAP_POLL_INTERVAL=60`, `IMAP_WORKER_COUNT=20`, queue sizes in `mail-proxy-daemon.py` | **OK** |
 | `04-configuration.md` §4.6 | Daemon constants table | Matches `mail-proxy-daemon.py` defaults | **OK** |
 | `05-web-panel.md` §5.2 | Login lockout “5 attempts / 15 min” | `PANEL_LOGIN_MAX_FAILURES=5`, `PANEL_LOGIN_WINDOW_SECONDS=900` in `web/includes/auth.php` | **OK** |
 | `03-installation.md` §3.3 | Master prompts in Preflight; non-TTY abort | `preflight_panel_master_readiness()` + `abort_panel_master_no_tty()` | **OK** (PROMPT-37) |
 | `03-installation.md` §3.5 | `configure_limits.sh` interactive steps | Lines 396–402: hidden MySQL password, mailbox list / `--all-referents`, `Домен:` | **OK** (PROMPT-37) |
-| `verify-install-regression.sh` | Referenced in §3.6 / checklist | 8 checks including vmail ownership (PROMPT-34) — doc does not overclaim extra panel-auth checks | **OK** — script has no `panel_admins` check (by design) |
+| `scripts/verify-install-regression.sh` | Referenced in §3.6 / checklist | 8 checks including vmail ownership (PROMPT-34) — doc does not overclaim extra panel-auth checks | **OK** — script has no `panel_admins` check (by design) |
 
 ---
 

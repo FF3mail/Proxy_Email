@@ -73,7 +73,7 @@ Piped input: empty MySQL password (socket auth), `--all-referents`, domain `test
 
 Repeated across restarts during validation/configure_limits.
 
-### `verify-install-regression.sh` — exit **0**
+### `scripts/verify-install-regression.sh` — exit **0**
 
 ```
 [PASS] mail-proxy.service is active (running)
@@ -135,7 +135,7 @@ Instances of `$( … | … )` reviewed in `delta-transit-install.sh`:
 
 ## 3. `mail-proxy.service` reaches `active (running)`?
 
-**Yes.** Confirmed by `systemctl status`, `verify-install-regression.sh`, and journal startup lines.
+**Yes.** Confirmed by `systemctl status`, `scripts/verify-install-regression.sh`, and journal startup lines.
 
 ---
 
