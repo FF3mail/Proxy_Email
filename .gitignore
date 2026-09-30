@@ -32,3 +32,15 @@ Thumbs.db
 
 # Local deploy bundle for testers (generated, not versioned)
 /Distribution/
+
+# SSH keys and local key folders (never commit)
+/.keys/
+.keys/
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.ppk
+*.pub-private
+known_hosts
+authorized_keys
