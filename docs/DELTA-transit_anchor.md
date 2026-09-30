@@ -408,11 +408,15 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
 | **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit; ~~daemon log permission drift (Issue #23)~~ → **закрыто PROMPT-78** (§19) |
 
+**PROMPT-68 (план готовности к cutover):** предпосылки, runbook, откат и чеклист go/no-go для целевого состояния `relationship_live` / `relationship_live` / `relationship_only` — [`docs/reports/PROMPT-68-cutover-readiness-plan.md`](reports/PROMPT-68-cutover-readiness-plan.md). Документ составлен, когда переключение режимов было только процесс-глобальным; поэтапный cutover теперь выполняется через per-referent overrides (§13, §§16–18).
+
+**PROMPT-70:** симметричные коллизии путей Maildir (два relationship / outbox референта) должны блокироваться на этапе provisioning и не являются поддерживаемым runtime-случаем — см. [`docs/reports/PROMPT-70-provisioning-path-guard.md`](reports/PROMPT-70-provisioning-path-guard.md).
+
 ---
 
 ## 13. Decision record — per-referent mode granularity (PROMPT-71)
 
-**Status:** Accepted direction (design only; not implemented).  
+**Status:** Accepted direction (design only; not implemented). *Уточнение:* формулировка «design only; not implemented» — историческая для PROMPT-71 и на практике снята; см. superseding note в этом разделе и §§16–18.  
 **Full analysis:** [`docs/reports/PROMPT-71-mode-granularity-decision.md`](reports/PROMPT-71-mode-granularity-decision.md)  
 **Verified against:** `origin/master` @ `b1fb42a`
 
@@ -476,6 +480,15 @@ or cutover execution in the same PROMPT.
 **Measured at N=50 (lab VPS):** IMAP poller DB 94 ms; sync DB portion 121 ms; collision checks ~3 ms; log-tail 100% coverage at 35% shadow density (degrades to 53% at 10%). IMAP network poll latency **not measured**.
 
 **PROMPT-71 record above is preserved for audit; this note supersedes only the scale-based deferral rationale and PROMPT-72 scope pointer.**
+
+---
+
+## 14. Пилотный cutover — референт №1 (PROMPT-75) [исторический]
+
+**Полный отчёт:** [`docs/reports/PROMPT-75-pilot-cutover-referent-1.md`](reports/PROMPT-75-pilot-cutover-referent-1.md)
+
+Первый live-пилот референта №1 от 2026-09-14 описан в этом отчёте (режимы и вердикт — как указано там).
+Текущие режимы и вердикт пилота — в §18 и §19, не в этом разделе.
 
 ---
 
