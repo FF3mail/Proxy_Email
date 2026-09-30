@@ -75,7 +75,7 @@ assert_contains($ru, "'nav.backfill'", 'RU nav.backfill');
 assert_contains($en, "'nav.backfill'", 'EN nav.backfill');
 assert_contains($ru, "'backfill.count'", 'RU backfill.count');
 assert_contains($en, "'backfill.count'", 'EN backfill.count');
-assert_contains($en, 'still on the legacy model', 'EN progress sentence');
+assert_contains($en, 'still missing the full address set', 'EN progress sentence');
 
 // Daemon: backfill is panel-only; live routing uses relationship_lookup (PROMPT-79.1)
 assert_contains($daemon, 'relationship_lookup', 'daemon uses relationship_lookup');
