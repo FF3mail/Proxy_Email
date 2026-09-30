@@ -75,7 +75,7 @@ DELTA-transit/
 ├── logrotate-mail-proxy
 ├── schema.sql
 ├── requirements.txt
-└── test_large_attachment.py
+└── tests/test_large_attachment.py
 ```
 
 | Файл | Назначение |

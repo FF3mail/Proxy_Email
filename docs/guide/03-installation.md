@@ -152,8 +152,8 @@ systemctl status mail-proxy mariadb nginx postfix dovecot
 ### Регрессионный скрипт
 
 ```bash
-chmod +x verify-install-regression.sh
-./verify-install-regression.sh
+chmod +x scripts/verify-install-regression.sh
+./scripts/verify-install-regression.sh
 ```
 
 Ожидается вывод `[PASS]` по всем пунктам. При `[FAIL]` — см. [07-troubleshooting.md](07-troubleshooting.md).

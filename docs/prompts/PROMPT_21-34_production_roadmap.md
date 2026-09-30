@@ -815,10 +815,10 @@ Response format:
    tested against Epic A's test VPS.
 2. Chosen approach and unified diff.
 3. Before/after peak memory measurement for a single 150 MB test message
-   (use test_large_attachment.py or an IMAP-side equivalent — note that
-   test_large_attachment.py currently only exercises the outbound SMTP
+   (use tests/test_large_attachment.py or an IMAP-side equivalent — note that
+   tests/test_large_attachment.py currently only exercises the outbound SMTP
    path, not IMAP fetch; state clearly if a new IMAP-side test script was
-   needed and add it alongside test_large_attachment.py, not inside it).
+   needed and add it alongside tests/test_large_attachment.py, not inside it).
 4. Regression tests confirming normal-sized mail (no attachment) still
    flows correctly end-to-end.
 ```

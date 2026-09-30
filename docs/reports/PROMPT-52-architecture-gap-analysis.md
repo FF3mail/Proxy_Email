@@ -156,7 +156,7 @@ local Client mailbox → Maildir → watchdog → identify Client by To
 | Referent form (single client email) | `web/index.php` | **REWORK** | Need multi-relationship four-address UI |
 | External account form | web | **ADAPT** | Bind account to Client relationship |
 | `maildir_resolver.php` | web | **ADAPT** | Resolve Maildir for local_client and local_referent addresses |
-| `test_large_attachment.py` | tests | **KEEP** (infra smoke) | SMTP size only; not routing |
+| `tests/test_large_attachment.py` | tests | **KEEP** (infra smoke) | SMTP size only; not routing |
 | Panel PHP tests | `tests/*` | **KEEP** for panel auth/routing; **gap** for daemon |
 
 **REPLACE used sparingly:** only the *missing* spam-delete / MIME-construction *behaviors* (new modules or methods), not entire transport classes.
@@ -282,7 +282,7 @@ Local Maildir → watcher → outbound queue → [Outbound Router/Transform] →
 - Daemon uses `email.message_from_binary_file` / `BytesHeaderParser` for **headers only**.
 - **No** `walk()`, `get_payload`, `MIMEMultipart`, or attachment extraction in `mail-proxy-daemon.py`.
 - Both directions stream **entire RFC822**.
-- `test_large_attachment.py` shows stdlib MIME **generation** is already used elsewhere in the repo (`MIMEMultipart`, `MIMEBase`, `encoders`).
+- `tests/test_large_attachment.py` shows stdlib MIME **generation** is already used elsewhere in the repo (`MIMEMultipart`, `MIMEBase`, `encoders`).
 
 ### 9.2 Library sufficiency
 
@@ -361,7 +361,7 @@ Spam deletion must use IMAP `\Deleted` + `EXPUNGE` (or provider-specific trash) 
 | Client identification inbound | None asserting `From` | Identify by **From** | **Missing** |
 | Unknown sender | None | Delete | **Missing** |
 | Relationship lookup | None | Four-address map | **Missing** |
-| Attachment extraction | `test_large_attachment.py` generates MIME only | Extract + rebuild | **Missing** |
+| Attachment extraction | `tests/test_large_attachment.py` generates MIME only | Extract + rebuild | **Missing** |
 | New local message | None | Required | **Missing** |
 | Local Maildir detection | Implicit ops scripts | Watch client Maildirs | **Missing** |
 | Outbound Client ID | None | By **To** | **Missing** |
@@ -545,7 +545,7 @@ DO NOT REWRITE unless evidence later requires it:
 2. `docs/DELTA-transit_anchor.md`  
 3. `docs/Ckeck-list_00.md`  
 4. `schema.sql` + VPS `DESCRIBE`/`SHOW TABLES`  
-5. `tests/*`, `test_large_attachment.py`  
+5. `tests/*` (including `tests/test_large_attachment.py`)  
 6. `docs/reports/PROMPT-51-…`, PROMPT-48/49/50 (context; customer model from approved spec)  
 7. Read-only SSH inspection of test VPS `192.0.2.10`  
 8. `web/index.php`, `web/includes/maildir_resolver.php`, `web/includes/panel_migration.php`
