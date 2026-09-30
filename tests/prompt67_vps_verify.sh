@@ -92,7 +92,7 @@ deploy_files
 log "=== TEST 2a: dual mode relationship maildir pickup ==="
 set_modes shadow shadow dual
 TOKEN_A="${TOKEN_BASE}-DUAL"
-inject_to_path "clientloc1@testvps.loc" "clientint1@frona.ru" "$TOKEN_A" "$CLIENTLOC1_NEW"
+inject_to_path "clientloc1@testvps.loc" "client-a@lab-a.example.test" "$TOKEN_A" "$CLIENTLOC1_NEW"
 wait_log "$TOKEN_A"
 wait_log 'Watchdog: new email file for relationship'
 wait_log '\[OUTBOUND_WATCH_DUAL\].*not_visible_via_referent_outbox' || true
@@ -106,7 +106,7 @@ log "=== TEST 2c: rollback referent_only ==="
 set_modes shadow shadow referent_only
 grep 'OUTBOUND_WATCH_MODE=referent_only' "$DAEMON_LOG" | tail -1 | tee -a "$LOG"
 TOKEN_B="${TOKEN_BASE}-ROLLBACK"
-inject_to_path "clientloc1@testvps.loc" "clientint1@frona.ru" "$TOKEN_B" "$REFLOC1_OUT"
+inject_to_path "clientloc1@testvps.loc" "client-a@lab-a.example.test" "$TOKEN_B" "$REFLOC1_OUT"
 wait_log "$TOKEN_B"
 wait_log 'Watchdog: new email file for referent' || true
 

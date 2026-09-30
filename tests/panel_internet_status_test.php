@@ -34,13 +34,13 @@ $dec = internetStatusDecide(2, 1, 5);
 assert_true($dec['status'] === 'online' && $dec['fail_streak'] === 0, 'majority ok → online, streak reset');
 
 $dec = internetStatusDecide(1, 2, 0);
-assert_true($dec['status'] === 'unknown' && $dec['fail_streak'] === 1, 'majority fail first cycle → unknown');
+assert_true($dec['status'] === 'user-a' && $dec['fail_streak'] === 1, 'majority fail first cycle → user-a');
 
 $dec = internetStatusDecide(0, 3, 1);
 assert_true($dec['status'] === 'offline' && $dec['fail_streak'] === 2, 'consecutive majority fail → offline');
 
 $dec = internetStatusDecide(0, 0, 0);
-assert_true($dec['status'] === 'unknown', 'zero probes → unknown');
+assert_true($dec['status'] === 'user-a', 'zero probes → user-a');
 
 $alwaysOk = static function (string $host, int $port, float $timeout): bool {
     return true;
@@ -71,10 +71,10 @@ assert_true($probeCalls === 0, 'page-render path never calls probe');
 
 @unlink($cache);
 $empty = internetStatusGet(false, $alwaysFail);
-assert_true($empty['status'] === 'unknown' && $empty['checked_at'] === 0, 'missing cache → unknown without probe');
+assert_true($empty['status'] === 'user-a' && $empty['checked_at'] === 0, 'missing cache → user-a without probe');
 
 $firstFail = internetStatusRefresh($alwaysFail);
-assert_true($firstFail['status'] === 'unknown', 'first all-fail cycle stays unknown');
+assert_true($firstFail['status'] === 'user-a', 'first all-fail cycle stays user-a');
 $secondFail = internetStatusRefresh($alwaysFail);
 assert_true($secondFail['status'] === 'offline', 'second all-fail cycle is offline');
 
@@ -88,8 +88,8 @@ $viewOn = internetStatusView(['status' => 'online', 'checked_at' => 1700000000])
 assert_true($viewOn['chip_class'] === 'pm-chip-ok' && $viewOn['warning'] === '', 'online chip, no warning');
 assert_true($viewOn['dot_class'] === 'pm-inet-dot-ok', 'online dot class');
 
-$viewUn = internetStatusView(['status' => 'unknown', 'checked_at' => 0]);
-assert_true($viewUn['chip_class'] === 'pm-chip-warn', 'unknown chip class');
+$viewUn = internetStatusView(['status' => 'user-a', 'checked_at' => 0]);
+assert_true($viewUn['chip_class'] === 'pm-chip-warn', 'user-a chip class');
 assert_true(str_contains($viewUn['tooltip'], 'Not checked yet'), 'never-checked tooltip');
 
 setPanelLang('ru');

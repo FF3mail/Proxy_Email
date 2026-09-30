@@ -69,8 +69,8 @@ def _msg(
 ) -> bytes:
     """Build message; default Subject = space-joined ARCHIVE names only (D7)."""
     mixed = MIMEMultipart('mixed', policy=policy.SMTP)
-    mixed['From'] = 'clientint1@frona.ru'
-    mixed['To'] = 'refint1@frona.ru'
+    mixed['From'] = 'client-a@lab-a.example.test'
+    mixed['To'] = 'referent-a@lab-a.example.test'
     mixed['Message-ID'] = '<PROMPT792D@testvps.loc>'
     archives = [
         n
@@ -93,13 +93,13 @@ def _dto(maildir: str = '/tmp/Maildir') -> ClientRelationshipDTO:
     return ClientRelationshipDTO(
         relationship_id=1,
         referent_id=1,
-        external_client_email='clientint1@frona.ru',
+        external_client_email='client-a@lab-a.example.test',
         local_client_email='clientloc1@testvps.loc',
         local_referent_email='refloc1@testvps.loc',
         external_account_id=1,
-        external_referent_email='refint1@frona.ru',
+        external_referent_email='referent-a@lab-a.example.test',
         local_client_maildir=maildir,
-        account={'id': 1, 'email': 'refint1@frona.ru'},
+        account={'id': 1, 'email': 'referent-a@lab-a.example.test'},
         referent={'id': 1, 'username': 'Test', 'local_inbox': 'refloc1@testvps.loc'},
     )
 
@@ -246,8 +246,8 @@ class ClassifySubjectRulesTest(unittest.TestCase):
 
         # Folded Subject via raw RFC822 (policy forbids CR/LF on __setitem__)
         raw = (
-            b'From: clientint1@frona.ru\r\n'
-            b'To: refint1@frona.ru\r\n'
+            b'From: client-a@lab-a.example.test\r\n'
+            b'To: referent-a@lab-a.example.test\r\n'
             b'Subject: a.zip\r\n b.rar\r\n'
             b'MIME-Version: 1.0\r\n'
             b'Content-Type: multipart/mixed; boundary="bnd"\r\n'
@@ -455,9 +455,9 @@ class DaemonInbound792dTest(unittest.TestCase):
             dto=dto,
             relationship_id=1,
             referent_name='Test',
-            client_name='clientint1@frona.ru',
+            client_name='client-a@lab-a.example.test',
             local_mailbox='refloc1@testvps.loc',
-            external_mailbox='clientint1@frona.ru',
+            external_mailbox='client-a@lab-a.example.test',
         )
         handler._relationship_lookup = MagicMock()
         handler._relationship_lookup.classify_inbound = MagicMock(
@@ -470,7 +470,7 @@ class DaemonInbound792dTest(unittest.TestCase):
         return handler._deliver_to_local_smtp(
             path,
             {'id': 1, 'username': 'Test', 'local_inbox': 'refloc1@testvps.loc'},
-            {'id': 1, 'email': 'refint1@frona.ru'},
+            {'id': 1, 'email': 'referent-a@lab-a.example.test'},
         )
 
     def test_split_delivers(self) -> None:
@@ -610,8 +610,8 @@ def _part(name=None, *, disposition='attachment', payload=b'data', maintype='app
 
 def _mixed(parts, subject='x'):
     mixed = MIMEMultipart('mixed', policy=policy.SMTP)
-    mixed['From'] = 'clientint1@frona.ru'
-    mixed['To'] = 'refint1@frona.ru'
+    mixed['From'] = 'client-a@lab-a.example.test'
+    mixed['To'] = 'referent-a@lab-a.example.test'
     mixed['Subject'] = subject
     mixed.attach(MIMEText('', 'plain', 'utf-8', policy=policy.SMTP))
     for p in parts:

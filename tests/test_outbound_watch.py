@@ -211,13 +211,13 @@ class RelationshipWatchRegistryTest(unittest.TestCase):
         dto = ClientRelationshipDTO(
             relationship_id=1,
             referent_id=1,
-            external_client_email='clientint1@frona.ru',
+            external_client_email='client-a@lab-a.example.test',
             local_client_email='clientloc1@testvps.loc',
             local_referent_email='refloc1@testvps.loc',
             external_account_id=1,
-            external_referent_email='refint1@frona.ru',
+            external_referent_email='referent-a@lab-a.example.test',
             local_client_maildir='/var/vmail/clientloc1/Maildir',
-            account={'id': 1, 'email': 'refint1@frona.ru'},
+            account={'id': 1, 'email': 'referent-a@lab-a.example.test'},
             referent={'id': 1, 'local_inbox': 'refloc1@testvps.loc'},
         )
         plan = plan_outbound_delivery(
