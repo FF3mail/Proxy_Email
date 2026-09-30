@@ -29,3 +29,6 @@ Thumbs.db
 *.log
 *.bak
 *.tmp
+
+# Local deploy bundle for testers (generated, not versioned)
+/Distribution/
