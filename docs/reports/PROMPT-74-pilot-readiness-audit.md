@@ -3,7 +3,7 @@
 **Branch:** `prompt-74-pilot-readiness-audit` (from `origin/master` @ `7e627a4`)  
 **Type:** Audit + controlled deploy-to-parity (no data wipe, no pilot activation)  
 **Date:** 2026-09-14  
-**Host:** `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)
+**Host:** `192.0.2.10` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)
 
 ---
 
@@ -69,8 +69,8 @@ Could not query — columns did not exist. `SELECT` failed with `Unknown column 
 
 ```text
 id  referent_id  external_client_email   local_client_email        local_referent_email   active
-1   1            clientint1@frona.ru     clientloc1@testvps.loc    refloc1@testvps.loc    1
-2   1            clientint2@bofoma.net   clientloc2@testvps.loc    refloc2@testvps.loc    1
+1   1            client-a@lab-a.example.test     clientloc1@testvps.loc    refloc1@testvps.loc    1
+2   1            client-b@lab-b.example.test   clientloc2@testvps.loc    refloc2@testvps.loc    1
 ```
 
 Both PROMPT-61 relationships **present and active**. Data intact.
@@ -211,7 +211,7 @@ Referent #1: all three override columns **NULL** in DB; computed effective modes
 ## 7. Known baseline snapshot (for PROMPT-75)
 
 > **Dated:** 2026-09-14T06:45:32Z (post single restart)  
-> **Host:** `192.168.125.116` (`mail.testvps.loc`)
+> **Host:** `192.0.2.10` (`mail.testvps.loc`)
 
 | Field | Value |
 |-------|-------|
@@ -221,8 +221,8 @@ Referent #1: all three override columns **NULL** in DB; computed effective modes
 | **Daemon startup log** | `INBOUND_ROUTING_MODE=shadow OUTBOUND_ROUTING_MODE=shadow OUTBOUND_WATCH_MODE=referent_only (requested=referent_only) RELATIONSHIP_LOOKUP_SHADOW=on` |
 | **Referent #1 overrides** | `inbound_routing_mode=NULL`, `outbound_routing_mode=NULL`, `outbound_watch_mode=NULL` |
 | **Referent #1 effective modes** | `inbound=shadow`, `outbound=shadow`, `watch=referent_only` (daemon log: `[REFERENT_EFFECTIVE_MODES] referent_id=1 ...`) |
-| **Relationship A** | `id=1`, `clientloc1@testvps.loc` ↔ `clientint1@frona.ru`, `active=1` |
-| **Relationship B** | `id=2`, `clientloc2@testvps.loc` ↔ `clientint2@bofoma.net`, `active=1` |
+| **Relationship A** | `id=1`, `clientloc1@testvps.loc` ↔ `client-a@lab-a.example.test`, `active=1` |
+| **Relationship B** | `id=2`, `clientloc2@testvps.loc` ↔ `client-b@lab-b.example.test`, `active=1` |
 | **Routing mode** | Global shadow (inbound + outbound); referent_only watch |
 | **Pilot cutover** | **Not started** — baseline only |
 

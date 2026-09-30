@@ -1,7 +1,7 @@
 # PROMPT-32 — Live validation of `prompt-24-panel-auth`
 
 **Project:** DELTA-transit (mail-proxy)  
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Panel:** `https://panel.mail.testvps.loc`  
 **Branch:** `prompt-24-panel-auth`  
 **Commit tested:** `95d1b2edb6b758abf4c68c27bfe2ff428a47bda0` (`95d1b2e`)  

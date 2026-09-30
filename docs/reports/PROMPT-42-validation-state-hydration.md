@@ -189,7 +189,7 @@ Before PR #7/#8, cases (2) failed with empty strings → false positives. After 
 
 ## 8. Tests performed
 
-### A. Validation-only on deployed VPS (`192.168.125.116`)
+### A. Validation-only on deployed VPS (`192.0.2.10`)
 
 ```bash
 DELTA_VALIDATION_ONLY=1 ./delta-transit-install.sh

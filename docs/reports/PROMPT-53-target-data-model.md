@@ -385,7 +385,7 @@ WHERE c.local_client_email = ?
 referent.local_inbox     ≈ local-looking address (@testvps.loc)
 referent.local_outbox    = Maildir path for that inbox
 clients.email            ≈ local-looking address (@testvps.loc)
-external_accounts.email  ≈ external mailbox (e.g. @frona.ru)
+external_accounts.email  ≈ external mailbox (e.g. @lab-a.example.test)
 ```
 
 ### Deterministic mappings

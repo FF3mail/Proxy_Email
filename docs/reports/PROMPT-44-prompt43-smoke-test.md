@@ -1,7 +1,7 @@
 # PROMPT-44 — Push executable-bit fix and PROMPT-43 smoke test
 
 **Date:** 2026-09-08  
-**Host:** `192.168.125.116` (`~/Proxy_Email`)  
+**Host:** `192.0.2.10` (`~/Proxy_Email`)  
 **Final commit on `master`:** `7849786`
 
 ---

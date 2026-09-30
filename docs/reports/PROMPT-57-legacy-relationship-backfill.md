@@ -29,7 +29,7 @@ Changes not staged for commit:
 	modified:   web/lang/ru.php
 
 Untracked files:
-	... (unrelated docs/.keys/__pycache__/ …)
+	... (unrelated docs/.keys/<deploy-key> …)
 	tests/panel_legacy_backfill_test.php
 	tests/panel_legacy_backfill_test.py
 	docs/reports/PROMPT-57-legacy-relationship-backfill.md   (this file, once written)

@@ -79,10 +79,10 @@ $ openssl x509 -in c.pem -noout -text | grep -A1 "Subject Alternative Name"
 ### IPv4 literal URL host (defensive path)
 
 ```text
-$ openssl req ... -subj "/CN=192.168.1.50" -addext "subjectAltName=IP:192.168.1.50"
+$ openssl req ... -subj "/CN=192.0.2.10" -addext "subjectAltName=IP:192.0.2.10"
 $ openssl x509 -in c2.pem -noout -text | grep -A1 "Subject Alternative Name"
             X509v3 Subject Alternative Name:
-                IP Address:192.168.1.50
+                IP Address:192.0.2.10
 ```
 
 ### Early-return / reuse path

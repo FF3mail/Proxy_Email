@@ -210,9 +210,9 @@ Ran 50 tests in 0.045s — OK
 
 | Item | Value |
 |------|-------|
-| Host | `192.168.125.116` (`mail.testvps.loc`) |
+| Host | `192.0.2.10` (`mail.testvps.loc`) |
 | Model | Direct copy to `/usr/local/bin/` (not git checkout) |
-| Deploy script | `.keys/prompt65_vps_deploy_test.sh` (untracked) |
+| Deploy script | `.keys/<helper-script>` (untracked) |
 
 ---
 
@@ -232,10 +232,10 @@ Ran 50 tests in 0.045s — OK
 | Check | Result |
 |-------|--------|
 | Token | `PROMPT65-1789054236-REL-A` |
-| Injected | `From: clientloc1@testvps.loc` → `To: clientint1@frona.ru` into refloc1 outbox |
+| Injected | `From: clientloc1@testvps.loc` → `To: client-a@lab-a.example.test` into refloc1 outbox |
 | Daemon routing | `relationship_id=1 external_account_id=1` |
-| SMTP | `Connecting to external SMTP frona.ru:465 for refint1@frona.ru` |
-| External IMAP proof | **FOUND** in `clientint1@frona.ru` INBOX (`frona.ru:993`) |
+| SMTP | `Connecting to external SMTP lab-a.example.test:465 for referent-a@lab-a.example.test` |
+| External IMAP proof | **FOUND** in `client-a@lab-a.example.test` INBOX (`lab-a.example.test:993`) |
 
 ---
 
@@ -244,10 +244,10 @@ Ran 50 tests in 0.045s — OK
 | Check | Result |
 |-------|--------|
 | Token | `PROMPT65-1789054236-REL-B` |
-| Injected | `From: clientloc2@testvps.loc` → `To: clientint2@bofoma.net` |
+| Injected | `From: clientloc2@testvps.loc` → `To: client-b@lab-b.example.test` |
 | Daemon routing | `relationship_id=2 external_account_id=2` |
-| SMTP | `Connecting to external SMTP bofoma.net:465 for refint2@bofoma.net` |
-| External IMAP proof | **FOUND** in `clientint2@bofoma.net` INBOX (`bofoma.net:993`) |
+| SMTP | `Connecting to external SMTP lab-b.example.test:465 for referent-b@lab-b.example.test` |
+| External IMAP proof | **FOUND** in `client-b@lab-b.example.test` INBOX (`lab-b.example.test:993`) |
 
 ---
 
@@ -255,12 +255,12 @@ Ran 50 tests in 0.045s — OK
 
 | Token | Expected mailbox | IMAP result |
 |-------|------------------|-------------|
-| `PROMPT65-1789054236-ISO-A` (client A) | `clientint2@bofoma.net` | **MISSING** |
-| `PROMPT65-1789054236-ISO-B` (client B) | `clientint1@frona.ru` | **MISSING** |
+| `PROMPT65-1789054236-ISO-A` (client A) | `client-b@lab-b.example.test` | **MISSING** |
+| `PROMPT65-1789054236-ISO-B` (client B) | `client-a@lab-a.example.test` | **MISSING** |
 
 ```text
-A → account 1 (refint1@frona.ru) ✓
-B → account 2 (refint2@bofoma.net) ✓
+A → account 1 (referent-a@lab-a.example.test) ✓
+B → account 2 (referent-b@lab-b.example.test) ✓
 A ≠ account 2 ✓
 B ≠ account 1 ✓
 ```

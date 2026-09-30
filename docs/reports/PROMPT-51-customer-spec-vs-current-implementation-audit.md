@@ -20,7 +20,7 @@ This report compares the **approved customer bidirectional attachment-routing al
 | `schema.sql` | CODE-OBSERVED |
 | `mail-proxy-daemon.py` (repo + deployed copy on test VPS) | CODE-OBSERVED |
 | `web/index.php`, `web/lang/*.php` | CODE-OBSERVED |
-| Test VPS `192.168.125.116` — `SELECT` / `DESCRIBE` / `SHOW INDEX` only | DB-OBSERVED |
+| Test VPS `192.0.2.10` — `SELECT` / `DESCRIBE` / `SHOW INDEX` only | DB-OBSERVED |
 | PROMPT-48/49/50 reports | HISTORICAL (re-verified against current source) |
 
 **Not performed:** live mail send/delete tests (would modify mail state).
@@ -97,7 +97,7 @@ Test VPS `mail_proxy` at audit time:
 
 | referent_id | local_inbox | client_email (`clients.email`) | external_account |
 |-------------|-------------|-------------------------------|------------------|
-| 3 | `refloc1@testvps.loc` | `clientloc1@testvps.loc` | `refint1@frona.ru` |
+| 3 | `refloc1@testvps.loc` | `clientloc1@testvps.loc` | `referent-a@lab-a.example.test` |
 | 4 | `refloc2@testvps.loc` | `clientloc2@testvps.loc` | *(none)* |
 
 Two referents each with one client — **not** one referent with two client relationships as in the customer Ivan example.

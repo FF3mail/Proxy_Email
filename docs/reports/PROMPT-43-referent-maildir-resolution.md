@@ -39,7 +39,7 @@ Table `referents` (`schema.sql`):
 
 **Not** the naive `{domain}/{user}/Maildir` pattern.
 
-iRedMail on `192.168.125.116` uses **hashed directory tiers** under storage node `vmail1`:
+iRedMail on `192.0.2.10` uses **hashed directory tiers** under storage node `vmail1`:
 
 ```text
 /var/vmail/vmail1/<domain>/<c>/<l>/<i>/<mailbox-dir>/Maildir
@@ -130,7 +130,7 @@ email input
 
 ## 8. Tests performed
 
-Lab VPS `192.168.125.116`, PHP CLI tests after deploying `web/` and provisioning `vmail-lookup.conf`.
+Lab VPS `192.0.2.10`, PHP CLI tests after deploying `web/` and provisioning `vmail-lookup.conf`.
 
 | Test | Expected | Result |
 |------|----------|--------|

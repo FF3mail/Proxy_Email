@@ -23,7 +23,7 @@
 
 ### Host
 
-- **VPS:** `192.168.125.116` (`mail.testvps.loc`)
+- **VPS:** `192.0.2.10` (`mail.testvps.loc`)
 - **Panel URL in config:** `https://panel.testvps.loc`
 - **Nginx vhost:** `/etc/nginx/sites-available/mail-proxy.conf`
 
