@@ -52,7 +52,7 @@ if ($mode === 'save_client2') {
         'id' => '2',
         'referent_id' => '3',
         'return_to' => 'backfill',
-        'external_client_email' => 'external-sender@frona.ru',
+        'external_client_email' => 'external-a@lab-a.example.test',
         'local_client_email' => 'clientloc1@testvps.loc',
         'local_referent_email' => 'refloc1@testvps.loc',
         'external_account_id' => '1',

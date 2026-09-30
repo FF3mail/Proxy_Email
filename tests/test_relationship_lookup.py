@@ -326,7 +326,7 @@ class RelationshipLookupTestCase(unittest.TestCase):
         )
         conn.close()
         self.assertIsNone(
-            self.lookup.resolve_inbound(acc, 'unknown@partner.com')
+            self.lookup.resolve_inbound(acc, 'user-a@partner.com')
         )
 
     def test_wrong_external_account_id_returns_none(self) -> None:
