@@ -31,11 +31,11 @@ Removed suites: `test_relationship_shadow`, `test_referent_mode_overrides`.
 PHP panel tests removed: `panel_referent_modes_test.php`, `panel_relationship_status_test.php`.  
 `scale_log_coverage_bench.php` exits 0 with skip message (PROMPT-79.2).
 
-## VPS (lab `192.168.125.116`)
+## VPS (lab `192.0.2.10`)
 
 | Step | Result |
 |------|--------|
-| SSH via `.keys/Test_vps openSSH` | **OK** |
+| SSH via `.keys/<deploy-key> openSSH` | **OK** |
 | Installed `/etc/systemd/system/mail-proxy.service.d/routing.conf` | **OK** |
 | `systemctl daemon-reload && restart mail-proxy` | **active** |
 | Log evidence | `INBOUND_ROUTING_MODE=relationship_live OUTBOUND_ROUTING_MODE=relationship_live OUTBOUND_WATCH_MODE=relationship_only` |

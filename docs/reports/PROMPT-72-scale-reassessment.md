@@ -6,7 +6,7 @@
 
 **Harness artifacts:** `tests/scale_verification_harness.py`, `tests/scale_verification_harness.sh`, `tests/scale_collision_bench.php`, `tests/scale_log_coverage_bench.php`
 
-**Measurement host:** lab VPS `192.168.125.116` (MariaDB via unix socket, PHP 8.3 PDO, Python 3.12 + `mysql-connector-python`). Log-coverage bench run locally (PHP 8.5.10, in-memory only).
+**Measurement host:** lab VPS `192.0.2.10` (MariaDB via unix socket, PHP 8.3 PDO, Python 3.12 + `mysql-connector-python`). Log-coverage bench run locally (PHP 8.5.10, in-memory only).
 
 ---
 

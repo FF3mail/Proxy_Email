@@ -10,8 +10,8 @@
 
 | Attempt | Result |
 |---------|--------|
-| `ssh root@192.168.125.116` (default agent, no key) | `Permission denied (publickey,password)` — same as PROMPT-66 |
-| `ssh -i <lab deploy key> root@192.168.125.116 hostname` | **SUCCESS** — host `mail`, user `root` |
+| `ssh <ssh-user>@<lab-vps>` (default agent, no key) | `Permission denied (publickey,password)` — same as PROMPT-66 |
+| `ssh -i <lab deploy key> <ssh-user>@<lab-vps> hostname` | **SUCCESS** — host `mail`, user `root` |
 
 Access restored using the existing lab VPS OpenSSH key already present in the local workspace (not committed; `.keys/` remains excluded from git).
 
@@ -19,7 +19,7 @@ Operational note: first `systemctl restart mail-proxy` after deploy hit `ExecSta
 
 ---
 
-## 2. Live evidence (192.168.125.116)
+## 2. Live evidence (192.0.2.10)
 
 Harness: `tests/prompt67_vps_verify.sh` (tracked; no credentials).
 

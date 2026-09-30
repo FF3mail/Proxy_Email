@@ -522,7 +522,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-17 |
-| **Host** | Lab VPS `192.168.125.116` |
+| **Host** | Lab VPS `192.0.2.10` |
 | **Code merge** | `1d5f8c1` (PR #21, PROMPT-77) deployed to VPS |
 | **Isolation** | Shadow-first deploy (overrides cleared → deploy → restart on shadow → then live flip) |
 | **Live flip** | `2026-09-17T07:30:16Z` — `relationship_live` / `relationship_live` / `referent_only` |
@@ -558,7 +558,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-18 (pilot) / 2026-09-21 (observation closure) |
-| **Host** | Lab VPS `192.168.125.116` |
+| **Host** | Lab VPS `192.0.2.10` |
 | **Code** | `6718ce6` (PR #22) deployed; binaries match repo — no drift vs `origin/master` code |
 | **PEEK gate** | **PASS** — independent `BODY.PEEK[]`; UNSEEN retained |
 | **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`2026-09-18T12:04:28Z`) |

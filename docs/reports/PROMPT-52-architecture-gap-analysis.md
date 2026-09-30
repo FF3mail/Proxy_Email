@@ -375,7 +375,7 @@ Spam deletion must use IMAP `\Deleted` + `EXPUNGE` (or provider-specific trash) 
 
 ## 13. VPS observations (read-only)
 
-**Host:** `mail` / `192.168.125.116`  
+**Host:** `mail` / `192.0.2.10`  
 **Performed:** `systemctl show`, `ls`, `md5sum`, `grep` constants, `mysql` `SHOW`/`DESCRIBE`/`SELECT` only.  
 **Not performed:** restarts, writes, mail send/delete, schema changes.
 
@@ -387,7 +387,7 @@ Spam deletion must use IMAP `\Deleted` + `EXPUNGE` (or provider-specific trash) 
 | Deploy tree git | `/root/Proxy_Email` at `960f8da` (older than this branch’s `18c6858`) |
 | Worker constants | IMAP/SMTP workers 20/20; queues 5000/1000; DB pool 12; poll 60s — match anchor |
 | Schema | Same six tables; no relationship columns; `external_accounts.client_id` is OAuth **client id string**, not FK |
-| Sample data | Referent 3: `refloc1@testvps.loc` + client `clientloc1@testvps.loc` + ext `refint1@frona.ru`; Referent 4: client only, no external account |
+| Sample data | Referent 3: `refloc1@testvps.loc` + client `clientloc1@testvps.loc` + ext `referent-a@lab-a.example.test`; Referent 4: client only, no external account |
 
 **Separation:** Repository analysis drives architectural conclusions; VPS confirms production-like deployment still runs the **referent-centric relay** schema and service topology.
 
@@ -547,5 +547,5 @@ DO NOT REWRITE unless evidence later requires it:
 4. `schema.sql` + VPS `DESCRIBE`/`SHOW TABLES`  
 5. `tests/*`, `test_large_attachment.py`  
 6. `docs/reports/PROMPT-51-…`, PROMPT-48/49/50 (context; customer model from approved spec)  
-7. Read-only SSH inspection of test VPS `192.168.125.116`  
+7. Read-only SSH inspection of test VPS `192.0.2.10`  
 8. `web/index.php`, `web/includes/maildir_resolver.php`, `web/includes/panel_migration.php`

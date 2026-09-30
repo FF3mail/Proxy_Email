@@ -1,7 +1,7 @@
 # PROMPT 20.1 — Base mail system verification report
 
 **Project:** DELTA-transit (mail-proxy)  
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Date:** 2026-09-03  
 **Mode:** Infrastructure verification (Epic 0 backfill)
 

@@ -25,7 +25,7 @@ Path normalization reuses the same hygiene as `maildir_resolver.php` (`preg_repl
 
 ## 2. PROMPT-67-accepted case / lab re-save (Task 3)
 
-**Live VPS query** (`192.168.125.116`, `referent_id=1`):
+**Live VPS query** (`192.0.2.10`, `referent_id=1`):
 
 ```text
 1  /var/vmail/vmail1/testvps.loc/c/l/i/clientloc1-2026.09.01.10.50.00/Maildir

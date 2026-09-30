@@ -29,7 +29,7 @@ Untracked files:
 	relationship_shadow.py
 	tests/test_relationship_shadow.py
 	docs/reports/PROMPT-58-inbound-shadow-mode.md   (this file, once written)
-	... (unrelated docs/.keys/__pycache__/ omitted)
+	... (unrelated docs/.keys/<deploy-key> omitted)
 ```
 
 **Starting commit:** `dee2f060fd8a43a4cdc2f6b152bc1048a53d8004` (PROMPT-57 tip).  

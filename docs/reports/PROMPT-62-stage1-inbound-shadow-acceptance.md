@@ -35,7 +35,7 @@ Anchor document: `docs/DELTA-transit_anchor.md` (v3.3).
 |-------|-------|
 | Local commit SHA | `d2a7b94d74af4038269548ad8c53f62a7d6cea4f` |
 | VPS deployed daemon commit | `9772d8cc61be9e97596eda7f9bfa5c504f1ec1e2` (PROMPT-58 shadow code) |
-| Test VPS | `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`) |
+| Test VPS | `192.0.2.10` (`mail.testvps.loc`, panel `https://panel.testvps.loc`) |
 | Python (VPS venv) | 3.12.3 |
 | MariaDB (VPS) | 10.11.14 |
 | Daemon service | `mail-proxy` active (running) |
@@ -59,15 +59,15 @@ No secrets are recorded in this report.
 
 | id | email | referent_id | IMAP | SMTP | encryption |
 |----|-------|-------------|------|------|------------|
-| 1 | `refint1@frona.ru` | 1 | `frona.ru:993` | `frona.ru:465` | **ssl** / **ssl** |
-| 2 | `refint2@bofoma.net` | 1 | `bofoma.net:993` | `bofoma.net:465` | **ssl** / **ssl** |
+| 1 | `referent-a@lab-a.example.test` | 1 | `lab-a.example.test:993` | `lab-a.example.test:465` | **ssl** / **ssl** |
+| 2 | `referent-b@lab-b.example.test` | 1 | `lab-b.example.test:993` | `lab-b.example.test:465` | **ssl** / **ssl** |
 
 ### Client relationships
 
 | id | external_client_email | local_client_email | local_referent_email | external_account_id | local_client_maildir (truncated) | active |
 |----|----------------------|--------------------|----------------------|---------------------|----------------------------------|--------|
-| 1 | `clientint1@frona.ru` | `clientloc1@testvps.loc` | `refloc1@testvps.loc` | 1 | `.../clientloc1-2026.09.01.10.50.00/Maildir` | 1 |
-| 2 | `clientint2@bofoma.net` | `clientloc2@testvps.loc` | `refloc2@testvps.loc` | 2 | `.../clientloc2-2026.09.09.12.26.00/Maildir` | 1 |
+| 1 | `client-a@lab-a.example.test` | `clientloc1@testvps.loc` | `refloc1@testvps.loc` | 1 | `.../clientloc1-2026.09.01.10.50.00/Maildir` | 1 |
+| 2 | `client-b@lab-b.example.test` | `clientloc2@testvps.loc` | `refloc2@testvps.loc` | 2 | `.../clientloc2-2026.09.09.12.26.00/Maildir` | 1 |
 
 Legacy `clients.email` equals `external_client_email` for both rows (panel save convention).
 
@@ -94,7 +94,7 @@ Recent daemon behaviour (2026-09-10 12:39–13:29 UTC) demonstrates full IMAP pa
 |-------|----------|
 | DNS/network | Poll cycle enqueues tasks every ~60s; no egress failures |
 | TLS negotiation | `imap_encryption=ssl` → `IMAP4_SSL`; no `timed out` on STARTTLS in recent logs |
-| Authentication | `Found N unread messages for refint1@frona.ru` / `refint2@bofoma.net` |
+| Authentication | `Found N unread messages for referent-a@lab-a.example.test` / `referent-b@lab-b.example.test` |
 | Mailbox selection | UNSEEN search returns messages; `mail.close()` / `logout()` complete |
 | UNSEEN retrieval | Messages fetched, written to temp file, delivered |
 | Message processing | `[RELATIONSHIP_SHADOW]` lines emitted per message; `\Seen` set after delivery |
@@ -102,10 +102,10 @@ Recent daemon behaviour (2026-09-10 12:39–13:29 UTC) demonstrates full IMAP pa
 Verbatim poll + process window (PROMPT-61 injection correlation):
 
 ```text
-2026-09-10 12:39:06 [INFO] (ImapWorker-8) Polling external IMAP account: refint1@frona.ru
-2026-09-10 12:39:06 [INFO] (ImapWorker-8) Found 3 unread messages for refint1@frona.ru
-2026-09-10 12:39:06 [INFO] (ImapWorker-3) Polling external IMAP account: refint2@bofoma.net
-2026-09-10 12:39:06 [INFO] (ImapWorker-3) Found 1 unread messages for refint2@bofoma.net
+2026-09-10 12:39:06 [INFO] (ImapWorker-8) Polling external IMAP account: referent-a@lab-a.example.test
+2026-09-10 12:39:06 [INFO] (ImapWorker-8) Found 3 unread messages for referent-a@lab-a.example.test
+2026-09-10 12:39:06 [INFO] (ImapWorker-3) Polling external IMAP account: referent-b@lab-b.example.test
+2026-09-10 12:39:06 [INFO] (ImapWorker-3) Found 1 unread messages for referent-b@lab-b.example.test
 ```
 
 PROMPT-61 Task 1 also confirmed stored `ssl` on port 465 for SMTP (out of scope for shadow, but same encryption-class fix).
@@ -158,29 +158,29 @@ Controlled inbound messages injected during PROMPT-61 SMTP verification (`/tmp/p
 
 | Case | Evidence token (subject prefix) | Actual lookup input | Legacy result | Relationship result | Comparison | Delivery |
 | ---- | ------------------------------- | ------------------- | ------------- | ------------------- | ---------- | -------- |
-| A — positive match rel 1 | `PROMPT61-SMTP-ext-c1-to-ref1-*` | account=1, From=`clientint1@frona.ru` | dropped (To=`refint1@frona.ru`, no `clients.email` match) | **relationship_id=1** | **DIVERGE — relationship match but legacy did not deliver** | `refloc1@testvps.loc` (fallback) |
-| B — positive match rel 2 | `PROMPT61-SMTP-ext-c2-to-ref2-*` | account=2, From=`clientint2@bofoma.net` | dropped | **relationship_id=2** | **DIVERGE — relationship match but legacy did not deliver** | `refloc1@testvps.loc` (fallback) |
-| C — cross-relationship | *(unit test; see below)* | account=2, From=`clientint1@frona.ru` | dropped | **no match** | **AGREE** (both miss) | fallback |
-| D — unknown sender | *(live MAILER-DAEMON traffic)* | account=1, From=`MAILER-DAEMON@mail.frona.ru` | dropped | **no match** | **AGREE** | fallback |
+| A — positive match rel 1 | `PROMPT61-SMTP-ext-c1-to-ref1-*` | account=1, From=`client-a@lab-a.example.test` | dropped (To=`referent-a@lab-a.example.test`, no `clients.email` match) | **relationship_id=1** | **DIVERGE — relationship match but legacy did not deliver** | `refloc1@testvps.loc` (fallback) |
+| B — positive match rel 2 | `PROMPT61-SMTP-ext-c2-to-ref2-*` | account=2, From=`client-b@lab-b.example.test` | dropped | **relationship_id=2** | **DIVERGE — relationship match but legacy did not deliver** | `refloc1@testvps.loc` (fallback) |
+| C — cross-relationship | *(unit test; see below)* | account=2, From=`client-a@lab-a.example.test` | dropped | **no match** | **AGREE** (both miss) | fallback |
+| D — unknown sender | *(live user-a traffic)* | account=1, From=`user-a@mail.lab-a.example.test` | dropped | **no match** | **AGREE** | fallback |
 
 ### Verbatim shadow lines (Cases A & B)
 
 ```text
-2026-09-10 12:39:06 [INFO] (ImapWorker-3) [RELATIONSHIP_SHADOW] account=refint2@bofoma.net sender=clientint2@bofoma.net legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=matched relationship_id=2 marker=DIVERGE — relationship match but legacy did not deliver
-2026-09-10 12:39:07 [INFO] (ImapWorker-8) [RELATIONSHIP_SHADOW] account=refint1@frona.ru sender=clientint1@frona.ru legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=matched relationship_id=1 marker=DIVERGE — relationship match but legacy did not deliver
+2026-09-10 12:39:06 [INFO] (ImapWorker-3) [RELATIONSHIP_SHADOW] account=referent-b@lab-b.example.test sender=client-b@lab-b.example.test legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=matched relationship_id=2 marker=DIVERGE — relationship match but legacy did not deliver
+2026-09-10 12:39:07 [INFO] (ImapWorker-8) [RELATIONSHIP_SHADOW] account=referent-a@lab-a.example.test sender=client-a@lab-a.example.test legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=matched relationship_id=1 marker=DIVERGE — relationship match but legacy did not deliver
 ```
 
 ### Verbatim shadow line (Case D — unknown sender)
 
 ```text
-2026-09-10 12:39:06 [INFO] (ImapWorker-8) [RELATIONSHIP_SHADOW] account=refint1@frona.ru sender=MAILER-DAEMON@mail.frona.ru legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=no match marker=AGREE
+2026-09-10 12:39:06 [INFO] (ImapWorker-8) [RELATIONSHIP_SHADOW] account=referent-a@lab-a.example.test sender=user-a@mail.lab-a.example.test legacy=dropped legacy_rcpts=refloc1@testvps.loc lookup=no match marker=AGREE
 ```
 
 ### Case C evidence
 
-Live injection of `clientint1@frona.ru` → `refint2@bofoma.net` was not re-run in this session (credential-sourcing blocked on agent). Contract + unit tests confirm:
+Live injection of `client-a@lab-a.example.test` → `referent-b@lab-b.example.test` was not re-run in this session (credential-sourcing blocked on agent). Contract + unit tests confirm:
 
-- `resolve_inbound(2, 'clientint1@frona.ru')` → `None` (`test_wrong_external_account_id_returns_none`)
+- `resolve_inbound(2, 'client-a@lab-a.example.test')` → `None` (`test_wrong_external_account_id_returns_none`)
 - Shadow: `test_wrong_account_lookup_miss_agrees_with_legacy_miss` → `AGREE`
 
 ---
@@ -211,7 +211,7 @@ Per-message log prefix: `[RELATIONSHIP_SHADOW]` with `account`, `sender`, `legac
 }
 ```
 
-**`processed = 219` (> 0).** The two `diverge_relationship_match_legacy_no_deliver` counts correspond exactly to Cases A and B (PROMPT-61 clientint inbound messages). Remaining traffic is real inbound (MAILER-DAEMON bounces, etc.) classified AGREE.
+**`processed = 219` (> 0).** The two `diverge_relationship_match_legacy_no_deliver` counts correspond exactly to Cases A and B (PROMPT-61 client-a inbound messages). Remaining traffic is real inbound (user-a bounces, etc.) classified AGREE.
 
 Correlation tokens: `PROMPT61-SMTP-ext-c1-to-ref1-*`, `PROMPT61-SMTP-ext-c2-to-ref2-*`, plus sender addresses in shadow log lines above.
 
@@ -281,7 +281,7 @@ None blocking Stage 1 acceptance.
 - [x] Test messages reflect external inbound semantics (From + polled account)
 - [x] Positive relationship matches verified (rel 1 and rel 2)
 - [x] Negative / cross-relationship verified (unit + contract)
-- [x] Unknown sender verified (MAILER-DAEMON, AGREE)
+- [x] Unknown sender verified (user-a, AGREE)
 - [x] Evidence tokens captured
 - [x] Shadow statistics path/schema documented and captured
 - [x] Legacy delivery authoritative

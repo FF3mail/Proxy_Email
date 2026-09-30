@@ -1,7 +1,7 @@
 # PROMPT 22 — Installer dry-run report (clean continuous pass)
 
 **Project:** DELTA-transit (mail-proxy)  
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Date:** 2026-09-03  
 **Branch / commit tested:** `prompt-22.1-nginx-conflict-check` @ `d12945649b4d1a3422d18d6ebee5f699fde5768d`  
 **Panel URL:** `https://panel.mail.testvps.loc`  

@@ -3,7 +3,7 @@
 > **Current G3 rollup (read this first):** [PROMPT-79-2o-consolidated-status.md](PROMPT-79-2o-consolidated-status.md) — single PASS/FAIL/NOT VERIFIED table for backend K1–K5 + panel 79.2l/m/n, re-verified @ `a472e90` on 2026-09-25. This 79.2g file remains the historical lab matrix log.
 
 **Date:** 2026-09-24 (UTC)  
-**Lab host:** `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
+**Lab host:** `192.0.2.10` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
 **Branch under test:** `prompt-79-2c-inbound-multi-attach-split` @ `5cd6c23c6d0e597d260045103a7ca6fc30ead8c5`  
 **RUNID:** `20260924T093629` — header `X-Lab-Test: 79-2g-20260924T093629`  
 **Mode:** VERIFY ONLY (no code changes, no merge)
@@ -31,9 +31,9 @@
 | Effective routing (`systemctl show`) | `INBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_WATCH_MODE=relationship_only` |
 | Poll interval (code constants) | `IMAP_POLL_INTERVAL = 60` |
 | Unit tests @ `5cd6c23` on VPS | **157 run, 11 skipped, 0 failures** |
-| Polled accounts | `refint1@frona.ru`, `refint2@bofoma.net` (both active) |
-| Relationships | `clientint1@frona.ru` → `clientloc1@testvps.loc` / `refloc1@testvps.loc`; `clientint2@bofoma.net` → `clientloc2` / `refloc2` |
-| IMAP INBOX inventory (BODY.PEEK probe, read-only) | `refint1`: TOTAL=44 UNSEEN=0; `refint2`: TOTAL=6 UNSEEN=0; `clientint1`: TOTAL=6 UNSEEN=5; `clientint2`: TOTAL=5 UNSEEN=4 — **lab test domains only** |
+| Polled accounts | `referent-a@lab-a.example.test`, `referent-b@lab-b.example.test` (both active) |
+| Relationships | `client-a@lab-a.example.test` → `clientloc1@testvps.loc` / `refloc1@testvps.loc`; `client-b@lab-b.example.test` → `clientloc2` / `refloc2` |
+| IMAP INBOX inventory (BODY.PEEK probe, read-only) | `referent-a`: TOTAL=44 UNSEEN=0; `referent-b`: TOTAL=6 UNSEEN=0; `client-a`: TOTAL=6 UNSEEN=5; `client-b`: TOTAL=5 UNSEEN=4 — **lab test domains only** |
 | Journal pre-test rows | 13 |
 | Journal backup | `/root/prompt79-2g-backup-20260924T093441Z/mail_passage_journal.sql` (6039 bytes) |
 | Pre-migration `SHOW CREATE` | `event_type` ENUM(`delivered`,`disposed`); no `detail` column |
@@ -76,7 +76,7 @@
 
 ## Step 4 — Inbound matrix
 
-**Primary path:** SMTP from `clientint1@frona.ru` → `refint1@frona.ru`.  
+**Primary path:** SMTP from `client-a@lab-a.example.test` → `referent-a@lab-a.example.test`.  
 **Fallback path B:** IMAP APPEND to referent INBOX (no `\Seen`).  
 **Evidence logs:** `/tmp/prompt79_2g_matrix_run.log`, `/tmp/prompt79_2g_l18.log`, daemon window in `/tmp/prompt79_2g_log_window.sh` output.
 
@@ -114,7 +114,7 @@ Injected to client watch `Maildir/new` (`clientloc1` path). Journal:
 
 | Case | Expected | Observed | Verdict |
 |------|----------|----------|---------|
-| **O01** | 1× outbound `delivered` + receipt at `clientint1@frona.ru` | **2×** `delivered` rows (10:04:07 and 10:08:59 UTC); internet receipt not re-checked via IMAP | **FAIL** duplicate journal — D4 |
+| **O01** | 1× outbound `delivered` + receipt at `client-a@lab-a.example.test` | **2×** `delivered` rows (10:04:07 and 10:08:59 UTC); internet receipt not re-checked via IMAP | **FAIL** duplicate journal — D4 |
 | **O02** | `disallowed_extension` + notify referent | **2×** `disposed` rows; `notified=1` | **FAIL** duplicate — D4 |
 | **O03** | `multiple_attachments` + notify | **2×** `disposed` rows; `notified=1` | **FAIL** duplicate — D4 |
 
@@ -228,7 +228,7 @@ Post-run journal event counts (this RUNID only): see VPS query in appendix; inbo
 
 (79.2g prose “~90 s” was wrong; spacing between duplicate processing passes is **~4m51s**.)
 
-**b) Effects (79.2g):** `clientint1@frona.ru` INBOX copies with `Message-ID` `79-2g-20260924T093629-O01@lab.test` → **0** (delivery may use different IDs or copies already expunged). Referent local maildir messages mentioning O02/O03 MIDs → **0** (notifications use template text without MID).
+**b) Effects (79.2g):** `client-a@lab-a.example.test` INBOX copies with `Message-ID` `79-2g-20260924T093629-O01@lab.test` → **0** (delivery may use different IDs or copies already expunged). Referent local maildir messages mentioning O02/O03 MIDs → **0** (notifications use template text without MID).
 
 **c) Injection method (79.2g):** `/tmp/prompt79_2g_outbound.sh` — **one** `write_bytes` per case to `clientloc1/.../Maildir/new/{O01,O02,O03}.eml` (no SMTP, no second copy). **One file per scenario** in `new/` at inject time.
 
@@ -265,8 +265,8 @@ Test messages **deleted** from referent INBOX after observation. **PASS** — ma
 
 ### H6 — Cleanup
 
-**IMAP LIST:** both `clientint1@frona.ru` and `refint1@frona.ru` — `INBOX`, `Sent`, `Drafts`, `Trash`, `Junk` (no localized Sent alias beyond `\Sent`).  
-**Removed:** **11** messages from `refint1` INBOX with `X-Lab-Test: 79-2g-*` (ids 45–55). **Remaining:** 79.2g journal rows preserved; fan-out files in `refloc1/.../Maildir/new` not bulk-deleted.
+**IMAP LIST:** both `client-a@lab-a.example.test` and `referent-a@lab-a.example.test` — `INBOX`, `Sent`, `Drafts`, `Trash`, `Junk` (no localized Sent alias beyond `\Sent`).  
+**Removed:** **11** messages from `referent-a` INBOX with `X-Lab-Test: 79-2g-*` (ids 45–55). **Remaining:** 79.2g journal rows preserved; fan-out files in `refloc1/.../Maildir/new` not bulk-deleted.
 
 ### H7 — Panel
 
@@ -327,7 +327,7 @@ Atomic drop only (write `Maildir/tmp` → rename into `Maildir/new`): `K1-202609
 | Journal | **Exactly 1** `delivered` outbound row `id=76`, `notified=0`, MID `<79-2k-…-K1@lab.test>` |
 | Daemon | **1×** `Watchdog: new email`; **1×** `[OUTBOUND_ROUTING]`; file **Deleted processed** at 06:59:29Z (no second pass by +5min) |
 | Maildir/new | File **gone** after process |
-| `clientint1` receipt | **INBOX count=1**; From=`refint1@frona.ru`; To=`clientint1@frona.ru`; Subject=`k1-20260925T065928Z.zip`; attachment SHA-256 matches inject hash `9fc1e3bf…e973d3` |
+| `client-a` receipt | **INBOX count=1**; From=`referent-a@lab-a.example.test`; To=`client-a@lab-a.example.test`; Subject=`k1-20260925T065928Z.zip`; attachment SHA-256 matches inject hash `9fc1e3bf…e973d3` |
 
 ### K2 — Real `message/rfc822` after 79.2j — **PASS**
 
@@ -366,8 +366,8 @@ Confirm skipped filter toggles the set and `detail` renders as plain text (no br
 
 | Action | Result |
 |--------|--------|
-| Removed (X-Lab-Test=`79-2k-20260925T065928Z`) | `refint1` INBOX uids 45–47 (K2C Seen + K5L01/L09 Seen sources) |
-| Remaining with TAG | **0** across clientint1/refint1 INBOX/Sent/Drafts/Trash/Junk |
+| Removed (X-Lab-Test=`79-2k-20260925T065928Z`) | `referent-a` INBOX uids 45–47 (K2C Seen + K5L01/L09 Seen sources) |
+| Remaining with TAG | **0** across client-a/referent-a INBOX/Sent/Drafts/Trash/Junk |
 | K3 temp config | N/A |
 | Daemon | Left running on **`5597a48`** |
 
@@ -389,7 +389,7 @@ Journal rows for this RUNID retained (ids 76–85).
 ## PROMPT-79.2k-2 — K3 addendum (partial SMTP on disposable copy)
 
 **Date:** 2026-09-25 (UTC)  
-**Host:** `192.168.125.116` (`hostname=mail`) — **operator-confirmed disposable exact copy** of the lab (safe to reset/destroy; not the shared ongoing lab). Uptime at start ~18 min (recently booted clone; retained prior 79.2k rollback/evidence on disk).  
+**Host:** `192.0.2.10` (`hostname=mail`) — **operator-confirmed disposable exact copy** of the lab (safe to reset/destroy; not the shared ongoing lab). Uptime at start ~18 min (recently booted clone; retained prior 79.2k rollback/evidence on disk).  
 **Commit:** `5597a482fcf5a92c40e0b120a1df7f8dc6140b35`  
 **RUNID:** `20260925T080618Z` — `X-Lab-Test: 79-2k2-20260925T080618Z`  
 **Evidence:** `/root/prompt79-2k2-evidence-20260925T080618Z.log`, sink `/root/prompt79-2k2-sink-20260925T080618Z.log`  

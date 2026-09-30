@@ -67,7 +67,7 @@ Updated all panel-auth `mysql` callers that used `PARAM_DB_PASS` directly:
 
 ### Host
 
-`192.168.125.116` (`mail.testvps.loc`) — fully installed Epic A lab VPS with existing `/etc/mail-proxy/db.conf` and active `panel_admins` master.
+`192.0.2.10` (`mail.testvps.loc`) — fully installed Epic A lab VPS with existing `/etc/mail-proxy/db.conf` and active `panel_admins` master.
 
 ### BEFORE (master script)
 
