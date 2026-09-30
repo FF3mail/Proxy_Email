@@ -32,7 +32,7 @@ assert_true($web !== null && str_ends_with($web, 'web_admin.log'), 'web log path
 // Traversal / arbitrary source rejected
 assert_true(resolvePanelLogPath('../../../etc/passwd') === null, 'reject traversal source key');
 assert_true(resolvePanelLogPath('') === null, 'reject empty source');
-assert_true(resolvePanelLogPath('syslog') === null, 'reject user-a source');
+assert_true(resolvePanelLogPath('syslog') === null, 'reject unknown source');
 
 // Line count bounds
 assert_true(normalizePanelLogLines(10) === PANEL_LOG_LINES_MIN, 'clamp min lines');
