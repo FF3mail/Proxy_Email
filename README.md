@@ -3,7 +3,7 @@
 Corporate mail proxy gateway between external IMAP/SMTP accounts and local referent Maildirs (iRedMail).
 
 **Status:** Production Candidate / pilot  
-**Source of truth:** [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md)
+**Source of truth:** [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) (anchor **v4.4**)
 
 ## Architecture
 

@@ -8,7 +8,7 @@
 | Документ | Назначение |
 |----------|------------|
 | [../DELTA_transit_admin_guide.pdf](../DELTA_transit_admin_guide.pdf) | Формальный справочник администратора (PDF, WeasyPrint) |
-| [../DELTA-transit_anchor.md](../DELTA-transit_anchor.md) | Внутренний архитектурный якорь для разработки и агентов |
+| [../DELTA-transit_anchor.md](../DELTA-transit_anchor.md) | Внутренний архитектурный якорь (**v4.4**) для разработки и агентов |
 | [../Ckeck-list_00.md](../Ckeck-list_00.md) | Исторический чек-лист пилота (может отставать от кода) |
 
 > **Источник истины при расхождении:** код и скрипты (`delta-transit-install.sh`, `configure_limits.sh`).

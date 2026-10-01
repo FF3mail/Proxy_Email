@@ -20,7 +20,7 @@
 
 | Документ | Назначение |
 |----------|------------|
-| [DELTA-transit_anchor.md](DELTA-transit_anchor.md) | **Source of truth:** архитектура, схема, безопасность, критерии production, закрытие PROMPT |
+| [DELTA-transit_anchor.md](DELTA-transit_anchor.md) | **Source of truth (v4.4):** архитектура, схема, безопасность, критерии production, закрытие PROMPT |
 
 ---
 
