@@ -42,3 +42,6 @@ Before requesting review:
 - Do not replace ordinary words (status values, labels, enum names) when anonymizing; tests must pass identically before and after.
 - One issue = one branch = one PR to master; no stacked PRs unless the operator explicitly approves it.
 - Merging is done by the operator only.
+- Security audit material (reports with findings, severity labels, or file:line references to security-sensitive code, including read-only audits) is NOT committed or pushed to this public repository, not even on temporary branches. Keep it in private notes or a private repository.
+- Public commits, issues and PRs that fix security problems describe the change neutrally (for example "harden input handling in X") and do not describe the weakness or how to exploit it until the fix is deployed.
+- Work freezes declared by the operator also apply to branches and reports: no new branches or pushes except tasks issued by the operator.
