@@ -44,3 +44,6 @@ id_dsa*
 *.pub-private
 known_hosts
 authorized_keys
+
+# Local Cursor IDE/agent configuration (may contain tokens, never commit)
+/.cursor/
