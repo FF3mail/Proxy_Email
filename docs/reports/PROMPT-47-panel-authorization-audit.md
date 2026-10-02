@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-09  
 **Branch:** `prompt-47-panel-authorization-audit`  
-**VPS:** `192.168.125.116` (`panel.testvps.loc`)  
+**VPS:** `192.0.2.10` (`panel.testvps.loc`)  
 **Status:** Complete
 
 ## Executive summary
@@ -299,8 +299,8 @@ Design requirements from `docs/reports/PROMPT-23-design.md`:
 
 ## VPS runtime verification
 
-**Host:** `192.168.125.116`  
-**Script:** `.keys/prompt47_vps_verify.sh`  
+**Host:** `192.0.2.10`  
+**Script:** `.keys/<helper-script>`  
 **Date:** 2026-09-09
 
 | Test | Result |

@@ -7,6 +7,8 @@ require_once __DIR__ . '/panel_brand.php';
  * Shared left sidebar for the panel (prototype order + collapse).
  */
 
+require_once __DIR__ . '/internet_status.php';
+
 /**
  * @return list<array{href: string, label: string, active: bool, icon: string, master_only?: bool, logout?: bool}>
  */
@@ -112,6 +114,7 @@ function renderPanelSidebar(): void
         <div class="pm-side-lang" aria-label="<?= h(__('common.language')) ?>">
             <?php renderLanguageSelector(); ?>
         </div>
+        <?php renderInternetStatusChip(internetStatusView(internetStatusGet(false)), 'sidebar'); ?>
         <nav class="pm-side-nav">
             <?php foreach ($items as $item):
                 if (!empty($item['master_only']) && !isPanelMasterDisplay()) {
@@ -153,4 +156,5 @@ function renderPanelSidebar(): void
     })();
     </script>
     <?php
+    renderInternetStatusPollScript();
 }

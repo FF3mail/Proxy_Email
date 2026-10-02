@@ -166,19 +166,19 @@ class TestRebuildOutboundEchoMechanism(unittest.TestCase):
         dto = ClientRelationshipDTO(
             relationship_id=1,
             referent_id=1,
-            external_client_email='clientint1@frona.ru',
+            external_client_email='client-a@lab-a.example.test',
             local_client_email='clientloc1@testvps.loc',
             local_referent_email='refloc1@testvps.loc',
             external_account_id=1,
-            external_referent_email='refint1@frona.ru',
+            external_referent_email='referent-a@lab-a.example.test',
             local_client_maildir='/var/vmail/clientloc1/Maildir',
-            account={'id': 1, 'email': 'refint1@frona.ru'},
+            account={'id': 1, 'email': 'referent-a@lab-a.example.test'},
             referent={'id': 1, 'local_inbox': 'refloc1@testvps.loc'},
         )
 
         raw_external = (
-            b'From: clientint1@frona.ru\r\n'
-            b'To: refint1@frona.ru\r\n'
+            b'From: client-a@lab-a.example.test\r\n'
+            b'To: referent-a@lab-a.example.test\r\n'
             b'Subject: raw\r\n'
             b'MIME-Version: 1.0\r\n'
             b'Content-Type: text/plain\r\n'
@@ -187,7 +187,7 @@ class TestRebuildOutboundEchoMechanism(unittest.TestCase):
         )
         raw_msg = email.message_from_bytes(raw_external)
         raw_from = extract_outbound_identity_from_message(raw_msg)
-        self.assertEqual(normalize_email(raw_from), 'clientint1@frona.ru')
+        self.assertEqual(normalize_email(raw_from), 'client-a@lab-a.example.test')
 
         def resolve_outbound(identity: str) -> Optional[ClientRelationshipDTO]:
             if normalize_email(identity) == normalize_email(dto.local_client_email):
@@ -201,8 +201,8 @@ class TestRebuildOutboundEchoMechanism(unittest.TestCase):
         self.assertEqual(raw_plan.skip_reason, 'no_relationship_match')
 
         mixed = MIMEMultipart('mixed', policy=policy.SMTP)
-        mixed['From'] = 'clientint1@frona.ru'
-        mixed['To'] = 'refint1@frona.ru'
+        mixed['From'] = 'client-a@lab-a.example.test'
+        mixed['To'] = 'referent-a@lab-a.example.test'
         mixed.attach(MIMEText('x', 'plain', 'utf-8', policy=policy.SMTP))
         part = MIMEBase('application', 'octet-stream', policy=policy.SMTP)
         part.set_payload(b'payload')

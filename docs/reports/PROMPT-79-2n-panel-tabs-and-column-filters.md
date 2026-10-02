@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-25  
 **Branch:** `prompt-79-2c-inbound-multi-attach-split` (PR #33, no merge)  
-**Lab:** disposable copy `192.168.125.116` (hostname=`mail`; available; panel backup `/root/prompt79-2n-panel-backup-20260925T102434Z`)
+**Lab:** disposable copy `192.0.2.10` (hostname=`mail`; available; panel backup `/root/prompt79-2n-panel-backup-20260925T102434Z`)
 
 ---
 

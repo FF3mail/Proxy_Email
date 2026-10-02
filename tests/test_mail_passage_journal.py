@@ -246,7 +246,7 @@ class RelationshipDisposePlanTest(unittest.TestCase):
             classify_outbound=lambda _e: RelationshipClassifyResult(
                 status=STATUS_NO_MATCH
             ),
-            from_address='unknown@local',
+            from_address='user-a@local',
         )
         self.assertEqual(plan.skip_reason, SKIP_NO_RELATIONSHIP)
 

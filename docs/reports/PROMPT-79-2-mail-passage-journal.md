@@ -49,7 +49,7 @@ Modified: `mail-proxy-daemon.py`, `relationship_lookup.py`, `relationship_routin
 
 ## VPS / deploy (PROMPT-79.2-deploy-verify — 2026-09-23)
 
-**Host:** lab VPS `192.168.125.116` · MariaDB **10.11.14** · PHP **8.3.6** · rollback `/root/prompt792_rollback_20260923T083046Z`
+**Host:** lab VPS `192.0.2.10` · MariaDB **10.11.14** · PHP **8.3.6** · rollback `/root/prompt792_rollback_20260923T083046Z`
 
 ### Step 0–1 preconditions / snapshot
 
@@ -84,8 +84,8 @@ Pre-restart ERROR burst explained by prior `[MESSAGE_REBUILD] zero_attachments` 
 
 | # | Case | Evidence |
 |---|------|----------|
-| 4.1 | Outbound zero attachments | journal id **5**: `disposed`/`outbound`/`zero_attachments`/`notified=1`; maildir file deleted; §4 notify delivered to `refloc1` (dovecot hdr.subject «Ошибка доставки — clientint1@frona.ru») |
-| 4.2 | Inbound silent dispose | ids **1–4**: inbound `disposed` with `zero_attachments`/`multiple_attachments`, **`notified=0`** (auto-dispose of prior UNSEEN after restart). Synthetic external SMTP for crafted `no_relationship` sender rejected (`550 User unknown` on frona.ru) — silent inbound dispose still proven; reason `no_relationship` not exercised live |
+| 4.1 | Outbound zero attachments | journal id **5**: `disposed`/`outbound`/`zero_attachments`/`notified=1`; maildir file deleted; §4 notify delivered to `refloc1` (dovecot hdr.subject «Ошибка доставки — client-a@lab-a.example.test») |
+| 4.2 | Inbound silent dispose | ids **1–4**: inbound `disposed` with `zero_attachments`/`multiple_attachments`, **`notified=0`** (auto-dispose of prior UNSEEN after restart). Synthetic external SMTP for crafted `no_relationship` sender rejected (`550 User unknown` on lab-a.example.test) — silent inbound dispose still proven; reason `no_relationship` not exercised live |
 | 4.2b | Outbound inactive | id **6** first attempt `notified=0` due to `_referent_handler_data` returning only `{id}` → notify skipped. Fix deployed; id **10** `relationship_inactive`/`notified=1`. Clients.id=1 restored `active=1` |
 | 4.3 | Fan-out N journal rows | **Deferred (tracked)** — not verified on real daemon path. See deploy-verify-fixups Task 1. Helper/writer contract only (ids 8-9, 12-13). |
 | 4.4 | Valid `.ZIP` vs subject `.zip` | id **11** (and earlier id **7**): `delivered`/`outbound`, no disposal; file removed from `new/` |

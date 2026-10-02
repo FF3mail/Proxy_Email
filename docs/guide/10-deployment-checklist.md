@@ -184,7 +184,7 @@ grep -E "IMAP size skip|Invalid (auth_type|imap_encryption)" /var/log/mail-proxy
 ```bash
 stat -c '%U:%G' /var/vmail
 doveconf mail_uid mail_gid
-./verify-install-regression.sh
+./scripts/verify-install-regression.sh
 ```
 
 ---
@@ -218,7 +218,7 @@ doveconf mail_uid mail_gid
 - [ ] Входящая и исходящая почта работают на тестовых референтах
 - [ ] OAuth (если нужен) работает
 - [ ] Нет критических ошибок в логах
-- [ ] `verify-install-regression.sh` — 0 failures
+- [ ] `scripts/verify-install-regression.sh` — 0 failures
 - [ ] Резервная копия crypto.key подтверждена
 
 ---

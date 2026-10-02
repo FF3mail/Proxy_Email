@@ -1,7 +1,7 @@
 # PROMPT-78 — Durable daemon log permissions (Issue #23)
 
 **Date:** 2026-09-21  
-**Host (diagnostics):** Lab VPS `192.168.125.116` (`mail.testvps.loc`)  
+**Host (diagnostics):** Lab VPS `192.0.2.10` (`mail.testvps.loc`)  
 **Branch:** `prompt-78-daemon-log-permissions`  
 **Issue:** [#23](https://github.com/FF3mail/Proxy_Email/issues/23)
 

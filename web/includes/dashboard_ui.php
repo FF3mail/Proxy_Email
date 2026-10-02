@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/panel_daemon_status.php';
 require_once __DIR__ . '/log_tail.php';
+require_once __DIR__ . '/internet_status.php';
 
 function dashboardTruncate(string $text, int $max): string
 {
@@ -258,6 +259,7 @@ function renderDashboardUi(): void
     $daemon = getDaemonStatus();
     $host = dashboardHostResources();
     $issues = dashboardRecentLogIssues(5);
+    $internet = internetStatusView(internetStatusGet(false));
 
     $flash = $GLOBALS['flash'] ?? null;
     // Keep banner flash on dashboard (not toast-only).
@@ -351,6 +353,8 @@ function renderDashboardUi(): void
             <dl class="pm-dl">
                 <dt><?= h(__('dashboard.daemon_status')) ?></dt>
                 <dd><span class="pm-chip <?= h($chip) ?>"><?= h($stLabel) ?></span></dd>
+                <dt><?= h(__('dashboard.internet')) ?></dt>
+                <dd><?php renderInternetStatusChip($internet, 'dashboard'); ?></dd>
                 <dt><?= h(__('dashboard.daemon_pid')) ?></dt>
                 <dd class="pm-mono"><?= $daemon['pid'] !== null ? (int) $daemon['pid'] : 'n/a' ?></dd>
                 <dt><?= h(__('dashboard.daemon_uptime')) ?></dt>
@@ -364,6 +368,9 @@ function renderDashboardUi(): void
                     ? h($host['disk_free_human']) . ($host['disk_total_human'] ? ' / ' . h($host['disk_total_human']) : '')
                     : 'n/a' ?></dd>
             </dl>
+            <p class="pm-hint" data-internet-warning
+               style="color:var(--pm-danger);margin:10px 0 0"
+               <?= $internet['status'] === 'offline' ? '' : 'hidden' ?>><?= h((string) $internet['warning']) ?></p>
 
             <h3 style="font-size:14px;margin:16px 0 8px"><?= h(__('dashboard.recent_issues')) ?></h3>
             <?php if ($issues === []): ?>

@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-10  
 **Branch:** `prompt-47-panel-authorization-audit`  
-**Target host:** `192.168.125.116` (`https://panel.testvps.loc`)  
+**Target host:** `192.0.2.10` (`https://panel.testvps.loc`)  
 **Mode:** Operational reset + HTTP panel configuration (test VPS only)
 
 ---
@@ -16,7 +16,7 @@
 | 3 — HTTP login as master | **Complete** |
 | 4 — Referent «Васильев Василий Васильевич» | **Complete** (id=1) |
 | 5 — Two clients + external accounts + relationships | **Complete** |
-| 6 — Automation credentials on VPS | **Complete** (`/etc/mail-proxy/test-automation-credentials.env`, mode 600) |
+| 6 — Automation credentials on VPS | **Complete** (`/etc/mail-proxy/<test-credentials-env>`, mode 600) |
 
 **Credential hygiene:** No plaintext passwords in this report or in git. VPS helper scripts live under `.keys/` (untracked).
 
@@ -60,8 +60,8 @@ The web panel **cannot** create a `role=master` account via HTTP (by design — 
 
 | id | email | IMAP | SMTP | encryption |
 |----|-------|------|------|------------|
-| 1 | `refint1@frona.ru` | `frona.ru:993` | `frona.ru:465` | **ssl** / **ssl** |
-| 2 | `refint2@bofoma.net` | `bofoma.net:993` | `bofoma.net:465` | **ssl** / **ssl** |
+| 1 | `referent-a@lab-a.example.test` | `lab-a.example.test:993` | `lab-a.example.test:465` | **ssl** / **ssl** |
+| 2 | `referent-b@lab-b.example.test` | `lab-b.example.test:993` | `lab-b.example.test:465` | **ssl** / **ssl** |
 
 (`ssl` on 993/465 — avoids PROMPT-60 STARTTLS timeout on implicit-TLS ports.)
 
@@ -71,8 +71,8 @@ The web panel **cannot** create a `role=master` account via HTTP (by design — 
 
 | Client label* | id | external_client | local_client | local_referent | external_account_id |
 |---------------|-----|-----------------|--------------|----------------|---------------------|
-| ООО «Альфа» | 1 | `clientint1@frona.ru` | `clientloc1@testvps.loc` | `refloc1@testvps.loc` | 1 |
-| ООО «Браво» | 2 | `clientint2@bofoma.net` | `clientloc2@testvps.loc` | `refloc2@testvps.loc` | 2 |
+| ООО «Альфа» | 1 | `client-a@lab-a.example.test` | `clientloc1@testvps.loc` | `refloc1@testvps.loc` | 1 |
+| ООО «Браво» | 2 | `client-b@lab-b.example.test` | `clientloc2@testvps.loc` | `refloc2@testvps.loc` | 2 |
 
 \*Legal names are operational labels only; the schema stores email addresses, not company titles.
 
@@ -82,9 +82,9 @@ All relationship saves passed iRedMail mailbox preconditions (physical `vmail.ma
 
 ## 6. Test automation credentials (VPS only)
 
-File: `/etc/mail-proxy/test-automation-credentials.env` (root, mode `600`).
+File: `/etc/mail-proxy/<test-credentials-env>` (root, mode `600`).
 
-Contains non-panel mail credentials for automated tests (external client inboxes, local referent inboxes, refint addresses). **Panel password is intentionally not stored in this file** — pass via env at script runtime.
+Contains non-panel mail credentials for automated tests (external client inboxes, local referent inboxes, referent-a addresses). **Panel password is intentionally not stored in this file** — pass via env at script runtime.
 
 ---
 

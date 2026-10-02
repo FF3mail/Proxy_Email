@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-10  
 **Branch:** `prompt-47-panel-authorization-audit`  
-**Target host:** `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
+**Target host:** `192.0.2.10` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
 **Starting point:** PROMPT-59 tip (`9772d8c`), Stage 1 shadow mode left running  
 **Mode:** Diagnostic + panel HTTP testing (no daemon code changes)
 
@@ -25,7 +25,7 @@
 
 ### Conclusion
 
-**The cause is a stored encryption-mode mismatch: `external_accounts.imap_encryption='tls'` makes the daemon open a cleartext IMAP session on port 993 and call `STARTTLS`, but `frona.ru:993` only speaks implicit TLS (`IMAP4_SSL`).** The `starttls()` handshake never completes; after `IMAP_TIMEOUT=60` the daemon logs `IMAP session exception for refint1@frona.ru: timed out`. Thunderbird works because it uses SSL/TLS on port 993 (implicit TLS), not STARTTLS on an already-TLS port.
+**The cause is a stored encryption-mode mismatch: `external_accounts.imap_encryption='tls'` makes the daemon open a cleartext IMAP session on port 993 and call `STARTTLS`, but `lab-a.example.test:993` only speaks implicit TLS (`IMAP4_SSL`).** The `starttls()` handshake never completes; after `IMAP_TIMEOUT=60` the daemon logs `IMAP session exception for referent-a@lab-a.example.test: timed out`. Thunderbird works because it uses SSL/TLS on port 993 (implicit TLS), not STARTTLS on an already-TLS port.
 
 This is a **configuration/data problem**, not a VPS egress failure, not “IMAP server down”, and not a Cryptor bug.
 
@@ -34,21 +34,21 @@ This is a **configuration/data problem**, not a VPS egress failure, not “IMAP 
 Stored target (from DB, secrets redacted):
 
 ```text
-id=1  email=refint1@frona.ru  imap_host=frona.ru  imap_port=993  imap_encryption=tls
+id=1  email=referent-a@lab-a.example.test  imap_host=lab-a.example.test  imap_port=993  imap_encryption=tls
 auth_type=plain  password_enc present (len=68)  active=1  referent_id=3
 ```
 
 DNS + TCP from VPS:
 
 ```text
-$ getent hosts frona.ru
-176.122.23.13   frona.ru
+$ getent hosts lab-a.example.test
+203.0.113.10   lab-a.example.test
 
-$ python3 TCP connect frona.ru:993 (10s timeout)
+$ python3 TCP connect lab-a.example.test:993 (10s timeout)
 TCP OK
 
-$ openssl s_client -connect frona.ru:993 -quiet (10s)
-depth=0 CN = www.frona.ru
+$ openssl s_client -connect lab-a.example.test:993 -quiet (10s)
+depth=0 CN = www.lab-a.example.test
 ( TLS handshake completes — implicit TLS on 993 )
 ```
 
@@ -58,7 +58,7 @@ depth=0 CN = www.frona.ru
 
 | Field | Stored in DB | Thunderbird-equivalent on 993 |
 |-------|--------------|----------------------------------|
-| Host | `frona.ru` | Same (resolves `176.122.23.13`) |
+| Host | `lab-a.example.test` | Same (resolves `203.0.113.10`) |
 | Port | `993` | Same |
 | Encryption | **`tls` (STARTTLS after plain greeting)** | **`ssl` (implicit TLS / “SSL/TLS” in account settings)** |
 
@@ -84,8 +84,8 @@ Daemon mapping (`mail-proxy-daemon.py`):
 Run on VPS (`/tmp/prompt60_imap_diagnose.sh`, `/tmp/prompt60_imap_modes.sh`):
 
 ```text
-IMAP4_SSL on frona.ru:993 → connected, greeting ok
-IMAP4 + STARTTLS on frona.ru:993 → TimeoutError: timed out   ← matches daemon
+IMAP4_SSL on lab-a.example.test:993 → connected, greeting ok
+IMAP4 + STARTTLS on lab-a.example.test:993 → TimeoutError: timed out   ← matches daemon
 ```
 
 Cryptor decrypt of stored `password_enc` via daemon module:
@@ -94,21 +94,21 @@ Cryptor decrypt of stored `password_enc` via daemon module:
 decrypt OK len=20 (password not printed)
 ```
 
-**Credential login with owner-provided password not yet run** (awaiting `REFINT1_IMAP_PASS` via env). Given STARTTLS fails before `login()`, a successful manual login with `imap_encryption=ssl` would further confirm the encryption flag is the sole blocker; decrypt already works.
+**Credential login with owner-provided password not yet run** (awaiting `REFERENT_A_IMAP_PASS` via env). Given STARTTLS fails before `login()`, a successful manual login with `imap_encryption=ssl` would further confirm the encryption flag is the sole blocker; decrypt already works.
 
 ### Step 4 — Daemon log correlation (not needed beyond Step 2/3)
 
 Recent daemon tail (verbatim pattern, continues every ~60s):
 
 ```text
-2026-09-10 09:58:02 [INFO] (ImapWorker-17) Polling external IMAP account: refint1@frona.ru
-2026-09-10 09:58:02 [ERROR] (ImapWorker-3) IMAP session exception for refint1@frona.ru: timed out
+2026-09-10 09:58:02 [INFO] (ImapWorker-17) Polling external IMAP account: referent-a@lab-a.example.test
+2026-09-10 09:58:02 [ERROR] (ImapWorker-3) IMAP session exception for referent-a@lab-a.example.test: timed out
 ```
 
 Same poll cycle also shows SMTP misconfiguration on port 465:
 
 ```text
-2026-09-10 09:58:01 [ERROR] (SmtpWorker-7) SMTP delivery error for refint1@frona.ru: Connection unexpectedly closed: timed out
+2026-09-10 09:58:01 [ERROR] (SmtpWorker-7) SMTP delivery error for referent-a@lab-a.example.test: Connection unexpectedly closed: timed out
 ```
 
 Stored `smtp_encryption=tls` on port `465` uses plain SMTP + STARTTLS in the daemon; port 465 typically expects `SMTP_SSL` (`smtp_encryption=ssl`). **Recommend fixing both IMAP and SMTP encryption flags in the same panel save.**
@@ -129,9 +129,9 @@ Via **panel HTTP** `account_save` for account id=1 / referent id=3 (empty passwo
 |-------|---------|---------|
 | `imap_encryption` | `tls` | **`ssl`** |
 | `smtp_encryption` | `tls` | **`ssl`** (port 465) |
-| Other fields | unchanged | `frona.ru:993`, `frona.ru:465`, `auth_type=plain` |
+| Other fields | unchanged | `lab-a.example.test:993`, `lab-a.example.test:465`, `auth_type=plain` |
 
-Prepared script (env-only, **not committed**): `.keys/prompt60_panel_fix_account.sh` — requires `PANEL_PASS`.
+Prepared script (env-only, **not committed**): `.keys/<helper-script>` — requires `PANEL_PASS`.
 
 ### Not a code bug
 
@@ -157,7 +157,7 @@ Master panel password was provided out-of-band by the operator on 2026-09-10. HT
 
 **Result: SUCCESS** — real browser-equivalent HTTP session works with master account `admin` (id=1, role=`master`, active=1, created 2026-09-08).
 
-Method: curl with `--resolve panel.testvps.loc:443:127.0.0.1`, cookie jar, CSRF from GET login form, POST `action=login_submit`. Password passed via **`PANEL_PASS` env var only** (not in scripts, report, or git). Helper: `.keys/prompt60_panel_login_test.sh` (untracked).
+Method: curl with `--resolve panel.testvps.loc:443:127.0.0.1`, cookie jar, CSRF from GET login form, POST `action=login_submit`. Password passed via **`PANEL_PASS` env var only** (not in scripts, report, or git). Helper: `.keys/<helper-script>` (untracked).
 
 | Step | HTTP | Outcome |
 |------|------|---------|
@@ -197,11 +197,11 @@ login_has_error_flash=no
 
 ```text
 id  referent_id  email                      external_client_email      local_client_email         local_referent_email    external_account_id  active
-2   3            external-sender@frona.ru   external-sender@frona.ru   clientloc1@testvps.loc     refloc1@testvps.loc     1                    1
+2   3            external-a@lab-a.example.test   external-a@lab-a.example.test   clientloc1@testvps.loc     refloc1@testvps.loc     1                    1
 3   4            clientloc2@testvps.loc     NULL                       NULL                       NULL                    NULL                 1
 ```
 
-**External accounts:** only id=1 (`refint1@frona.ru`, referent 3).
+**External accounts:** only id=1 (`referent-a@lab-a.example.test`, referent 3).
 
 **Planned once login works:**
 
@@ -230,7 +230,7 @@ No `[RELATIONSHIP_SHADOW]` lines in `/var/log/mail-proxy/mail-proxy-daemon.log` 
 
 ### Planned after Task 2
 
-1. Confirm daemon log shows successful IMAP login/select for `refint1@frona.ru`.
+1. Confirm daemon log shows successful IMAP login/select for `referent-a@lab-a.example.test`.
 2. Run ~3-minute shadow window (or until UNSEEN processed); capture `relationship_shadow_stats.json` and log lines.
 3. **Cross-client isolation** (requires two relationships from Task 3): deliver message to client A’s `local_client_email` and verify shadow lookup does not match client B’s relationship.
 
@@ -242,7 +242,7 @@ No `[RELATIONSHIP_SHADOW]` lines in `/var/log/mail-proxy/mail-proxy-daemon.log` 
 |-------|--------|
 | Passwords in this report | **None** (redacted / lengths only) |
 | Passwords committed to git | **None** |
-| VPS helper scripts | Use `PANEL_PASS` / `REFINT1_IMAP_PASS` env vars only (`.keys/`, untracked) |
+| VPS helper scripts | Use `PANEL_PASS` / `REFERENT_A_IMAP_PASS` env vars only (`.keys/`, untracked) |
 | `prompt59_panel_cli_save.php` | No embedded secrets |
 
 ---
@@ -250,16 +250,16 @@ No `[RELATIONSHIP_SHADOW]` lines in `/var/log/mail-proxy/mail-proxy-daemon.log` 
 ## Escalation — remaining items to finish PROMPT-60
 
 1. ~~**`PANEL_PASS`**~~ — **resolved** (HTTP login verified 2026-09-10).
-2. **`REFINT1_IMAP_PASS`** — real IMAP password for `refint1@frona.ru` (optional confirm after ssl fix; decrypt already OK).
+2. **`REFERENT_A_IMAP_PASS`** — real IMAP password for `referent-a@lab-a.example.test` (optional confirm after ssl fix; decrypt already OK).
 3. **(Task 3)** Second external mailbox credentials if a second referent account must be real (or confirm a test-only second account is acceptable).
-4. **(Task 4)** Send one test inbound message to `refint1@frona.ru` from a known `external_client_email` after IMAP connects.
+4. **(Task 4)** Send one test inbound message to `referent-a@lab-a.example.test` from a known `external_client_email` after IMAP connects.
 
 Next steps (env on VPS session only; password not echoed):
 
 ```bash
 export PANEL_PASS='…'   # operator-provided; not stored in repo
 bash /tmp/prompt60_panel_fix_account.sh
-export REFINT1_IMAP_PASS='…'   # optional verification
+export REFERENT_A_IMAP_PASS='…'   # optional verification
 bash /tmp/prompt60_imap_login_test.sh   # after DB shows imap_encryption=ssl
 # … panel two-relationship + negative test scripts …
 # … shadow window + stats capture …

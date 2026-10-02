@@ -115,29 +115,29 @@ PROMPT-62 baseline preserved: `processed=219`, `agree=217`, `diverge_lookup_only
 
 > **Semantic note:** PROMPT-58 `legacy_delivered` = pre-fallback To/Cc match (`bool(resolved)`), **not** “no physical delivery occurred.” Both divergence cases **did** receive physical local SMTP delivery via legacy inbox fallback.
 
-### Divergence 1 — Relationship A (`clientint1@frona.ru` on account 1)
+### Divergence 1 — Relationship A (`client-a@lab-a.example.test` on account 1)
 
 | Field | Value |
 |-------|-------|
-| External account ID | 1 (`refint1@frona.ru`) |
-| Normalized sender | `clientint1@frona.ru` |
+| External account ID | 1 (`referent-a@lab-a.example.test`) |
+| Normalized sender | `client-a@lab-a.example.test` |
 | Matched relationship ID | 1 |
-| Four addresses | ext client `clientint1@frona.ru`, local client `clientloc1@testvps.loc`, local referent `refloc1@testvps.loc`, ext referent `refint1@frona.ru` |
+| Four addresses | ext client `client-a@lab-a.example.test`, local client `clientloc1@testvps.loc`, local referent `refloc1@testvps.loc`, ext referent `referent-a@lab-a.example.test` |
 | Expected customer target email | `refloc1@testvps.loc` |
 | Expected physical Maildir | `/var/vmail/vmail1/testvps.loc/r/e/f/refloc1-2026.09.01.10.49.35/Maildir` |
-| Legacy decision (pre-fallback) | **dropped** — To=`refint1@frona.ru` not in `clients.email` |
+| Legacy decision (pre-fallback) | **dropped** — To=`referent-a@lab-a.example.test` not in `clients.email` |
 | Legacy fallback used? | **Yes** → `refloc1@testvps.loc` |
 | Why `diverge_lookup_only`? | Lookup matched rel 1; legacy To/Cc path did not — **AGREE on routing intent, DIVERGE on legacy gate semantics** |
 | Stage 2a correction | Live mode routes directly to `refloc1@testvps.loc` (same target as customer spec; coincidentally same as legacy fallback for this referent) |
 
-### Divergence 2 — Relationship B (`clientint2@bofoma.net` on account 2)
+### Divergence 2 — Relationship B (`client-b@lab-b.example.test` on account 2)
 
 | Field | Value |
 |-------|-------|
-| External account ID | 2 (`refint2@bofoma.net`) |
-| Normalized sender | `clientint2@bofoma.net` |
+| External account ID | 2 (`referent-b@lab-b.example.test`) |
+| Normalized sender | `client-b@lab-b.example.test` |
 | Matched relationship ID | 2 |
-| Four addresses | ext client `clientint2@bofoma.net`, local client `clientloc2@testvps.loc`, local referent `refloc2@testvps.loc`, ext referent `refint2@bofoma.net` |
+| Four addresses | ext client `client-b@lab-b.example.test`, local client `clientloc2@testvps.loc`, local referent `refloc2@testvps.loc`, ext referent `referent-b@lab-b.example.test` |
 | Expected customer target email | `refloc2@testvps.loc` |
 | Expected physical Maildir | `/var/vmail/vmail1/testvps.loc/r/e/f/refloc2-2026.09.09.12.26.56/Maildir` |
 | Legacy decision (pre-fallback) | **dropped** |
@@ -188,10 +188,10 @@ Topology: PROMPT-61 verified, not recreated.
 
 | Case | Token | Injection | Account | From | Lookup | Target email | Physical Maildir evidence |
 |------|-------|-----------|---------|------|--------|--------------|---------------------------|
-| A | `PROMPT63-1789049938-CASE-A` / `PROMPT63FU-1789050485-CASE-A` | SMTP | 1 | `clientint1@frona.ru` | rel 1 | `refloc1@testvps.loc` | Watchdog `1789050556.M658670P132078.mail` in `/var/vmail/.../refloc1-.../Maildir/new/` at 14:29:16 UTC (consumed by existing outbound watchdog — not a Stage 2a defect) |
-| B | `PROMPT63-1789049938-CASE-B` | SMTP | 2 | `clientint2@bofoma.net` | rel 2 | `refloc2@testvps.loc` | **FOUND** `/var/vmail/vmail1/testvps.loc/r/e/f/refloc2-2026.09.09.12.26.56/Maildir/new/1789050074.M944862P131120.mail` |
-| C | `PROMPT63FU-1789050485-CASE-C` | IMAP append to refint2 INBOX | 2 | `clientint1@frona.ru` | **no match** | — | **Not in A or B Maildirs**; log: `no match account=refint2@bofoma.net sender=clientint1@frona.ru` |
-| D | `MAILER-DAEMON@mail.frona.ru` (live traffic) | existing | 1 | unknown | **no match** | — | Skipped, no legacy fallback; multiple live log lines |
+| A | `PROMPT63-1789049938-CASE-A` / `PROMPT63FU-1789050485-CASE-A` | SMTP | 1 | `client-a@lab-a.example.test` | rel 1 | `refloc1@testvps.loc` | Watchdog `1789050556.M658670P132078.mail` in `/var/vmail/.../refloc1-.../Maildir/new/` at 14:29:16 UTC (consumed by existing outbound watchdog — not a Stage 2a defect) |
+| B | `PROMPT63-1789049938-CASE-B` | SMTP | 2 | `client-b@lab-b.example.test` | rel 2 | `refloc2@testvps.loc` | **FOUND** `/var/vmail/vmail1/testvps.loc/r/e/f/refloc2-2026.09.09.12.26.56/Maildir/new/1789050074.M944862P131120.mail` |
+| C | `PROMPT63FU-1789050485-CASE-C` | IMAP append to referent-b INBOX | 2 | `client-a@lab-a.example.test` | **no match** | — | **Not in A or B Maildirs**; log: `no match account=referent-b@lab-b.example.test sender=client-a@lab-a.example.test` |
+| D | `user-a@mail.lab-a.example.test` (live traffic) | existing | 1 | unknown | **no match** | — | Skipped, no legacy fallback; multiple live log lines |
 
 ### Isolation proof
 
@@ -244,7 +244,7 @@ Coverage includes: exact match A/B, unknown sender, cross-account miss, lookup e
 1. MIME attachment-only inbound transformation (customer spec).
 2. IMAP DELETE/EXPUNGE for unknown senders (customer spec “delete as spam”).
 3. Relationship A deliveries to `refloc1` share referent `local_outbox` watch path — existing outbound watchdog consumes messages immediately (observed, not introduced by Stage 2a).
-4. Cross-domain SMTP injection (clientint1 → refint2@bofoma.net) unreliable; Case C used **IMAP append** (valid inbound observation path).
+4. Cross-domain SMTP injection (client-a → referent-b@lab-b.example.test) unreliable; Case C used **IMAP append** (valid inbound observation path).
 
 ---
 
