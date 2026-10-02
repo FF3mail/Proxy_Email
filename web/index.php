@@ -30,6 +30,7 @@ require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
 require_once __DIR__ . '/includes/relationship_editor.php';
+require_once __DIR__ . '/includes/mailbox_verify.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
 require_once __DIR__ . '/includes/panel_modals.php';
 require_once __DIR__ . '/includes/referent_card_ui.php';
@@ -535,6 +536,7 @@ function handleReferentSave(): void
     $clientEmail = trim((string)($_POST['client_email'] ?? ''));
     $clientActive = isset($_POST['client_active']) ? 1 : 0;
 
+    $existingReferent = null;
     $existingInbox = '';
     $existingOutbox = '';
 
@@ -543,6 +545,7 @@ function handleReferentSave(): void
         $stmt->execute([$id]);
         $existing = $stmt->fetch();
         if ($existing) {
+            $existingReferent = $existing;
             $existingInbox = strtolower(trim((string)$existing['local_inbox']));
             $existingOutbox = trim((string)$existing['local_outbox']);
         }
@@ -557,6 +560,22 @@ function handleReferentSave(): void
         }
         header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
         exit();
+    }
+
+    // PROMPT-80 — skip local verify when inactive or inbox unchanged.
+    if (mailboxVerifyReferentNeedsLocalCheck($existingReferent, $normalizedInbox, $active)) {
+        $localInboxCheck = verifyLocalPhysicalMailbox($normalizedInbox);
+        if (empty($localInboxCheck['ok'])) {
+            $msg = ($localInboxCheck['code'] ?? '') === 'mailbox_verify.local_missing'
+                ? __('referent.mailbox_not_found', ['email' => $normalizedInbox])
+                : mailboxVerifyMessage($localInboxCheck);
+            setFlash('error', $msg);
+            if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
+            }
+            header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+            exit();
+        }
     }
 
     if ($id > 0 && $normalizedInbox === $existingInbox && $existingOutbox !== '') {
@@ -903,6 +922,7 @@ function renderAccountForm(): void
                 name="password"
                 class="w-full border rounded px-3 py-2"
             >
+            <p class="text-xs text-slate-500 mt-1"><?= h(__('mailbox_verify.password_keep_hint')) ?></p>
         </div>
 
         <div>
@@ -1051,7 +1071,127 @@ function handleAccountSave(): void
         }
     }
 
+    // PROMPT-80 hardening — plan BEFORE any network I/O or persist.
+    $incomingAccount = [
+        'email' => $email,
+        'username' => $username,
+        'auth_type' => $authType,
+        'password' => $password,
+        'client_id' => $clientId,
+        'client_secret' => $clientSecret,
+        'imap_host' => $imapHost,
+        'imap_port' => $imapPort,
+        'imap_encryption' => $imapEncryption,
+        'smtp_host' => $smtpHost,
+        'smtp_port' => $smtpPort,
+        'smtp_encryption' => $smtpEncryption,
+    ];
+    $existingAccount = null;
+    if ($accountId > 0) {
+        $existingAccount = mailboxVerifyLoadExistingAccount($pdo, $accountId, $referentId, $cryptor);
+        if ($existingAccount === null) {
+            setFlash('error', __('account.access_denied'));
+            panelRedirectPreferReferentCard($referentId, 'dashboard');
+        }
+    }
+
+    $plan = mailboxVerifyPlanAccountSave($incomingAccount, $existingAccount);
+    $clearOauthTokens = !empty($plan['clear_oauth_tokens']);
+    $accountVerifyWarning = '';
+
+    if (($plan['action'] ?? '') === 'reject_reauth') {
+        $code = (string) ($plan['code'] ?? 'mailbox_verify.password_reentry_required');
+        setFlash('error', __($code));
+        panelRedirectPreferReferentCard($referentId, 'account_form', [
+            'referent_id' => $referentId,
+            'account_id' => $accountId > 0 ? $accountId : null,
+        ]);
+    }
+
+    if (($plan['action'] ?? '') === 'oauth_reauth_required') {
+        $accountVerifyWarning = __((string) ($plan['code'] ?? 'mailbox_verify.oauth_reauth_required'));
+        mailboxVerifyLog(
+            'External account oauth_reauth_required referent_id=' . $referentId
+            . ' account_id=' . $accountId
+        );
+    }
+
+    if (($plan['action'] ?? '') === 'probe') {
+        $probeSecret = '';
+        $oauthExpiresAt = '';
+        if (!empty($plan['use_stored_password'])) {
+            if ($existingAccount === null || empty($existingAccount['password_enc'])) {
+                setFlash('error', __('mailbox_verify.password_required'));
+                panelRedirectPreferReferentCard($referentId, 'account_form', [
+                    'referent_id' => $referentId,
+                    'account_id' => $accountId > 0 ? $accountId : null,
+                ]);
+            }
+            try {
+                $probeSecret = $cryptor->decrypt((string) $existingAccount['password_enc']);
+            } catch (Throwable $e) {
+                mailboxVerifyLog('mailbox_verify decrypt password_enc failed: ' . get_class($e));
+                setFlash('error', __('mailbox_verify.decrypt_failed'));
+                panelRedirectPreferReferentCard($referentId, 'account_form', [
+                    'referent_id' => $referentId,
+                    'account_id' => $accountId > 0 ? $accountId : null,
+                ]);
+            }
+        } elseif (!empty($plan['use_stored_oauth'])) {
+            $probeSecret = (string) ($existingAccount['oauth_access_token'] ?? '');
+            $oauthExpiresAt = (string) ($existingAccount['oauth_expires_at'] ?? '');
+            if ($probeSecret === '') {
+                setFlash('error', __('mailbox_verify.oauth_token_missing'));
+                panelRedirectPreferReferentCard($referentId, 'account_form', [
+                    'referent_id' => $referentId,
+                    'account_id' => $accountId > 0 ? $accountId : null,
+                ]);
+            }
+        } else {
+            $probeSecret = $password;
+        }
+
+        $probe = verifyExternalReferentMailbox([
+            'email' => $email,
+            'username' => $username !== '' ? $username : $email,
+            'auth_mode' => (string) ($plan['auth_mode'] ?? 'plain'),
+            'secret' => $probeSecret,
+            'oauth_expires_at' => $oauthExpiresAt,
+            'imap_host' => $imapHost,
+            'imap_port' => $imapPort,
+            'imap_encryption' => $imapEncryption,
+            'smtp_host' => $smtpHost,
+            'smtp_port' => $smtpPort,
+            'smtp_encryption' => $smtpEncryption,
+        ], $_SESSION);
+        $probeSecret = '';
+
+        if (empty($probe['ok'])) {
+            mailboxVerifyLog(
+                'External account probe failed referent_id=' . $referentId
+                . ' account_id=' . $accountId
+                . ' hop=' . ($probe['hop'] ?? '')
+                . ' code=' . ($probe['code'] ?? '')
+            );
+            setFlash('error', mailboxVerifyMessage($probe));
+            panelRedirectPreferReferentCard($referentId, 'account_form', [
+                'referent_id' => $referentId,
+                'account_id' => $accountId > 0 ? $accountId : null,
+            ]);
+        }
+        if (!empty($probe['warning'])) {
+            $accountVerifyWarning = mailboxVerifyMessage($probe);
+            mailboxVerifyLog(
+                'External account probe warning referent_id=' . $referentId
+                . ' account_id=' . $accountId
+                . ' code=' . ($probe['code'] ?? '')
+            );
+        }
+    }
+
     try {
+        $pdo->beginTransaction();
+
         if ($accountId > 0) {
             $stmt = $pdo->prepare(
 				'UPDATE external_accounts
@@ -1094,8 +1234,15 @@ function handleAccountSave(): void
             ]);
 
             if ($stmt->rowCount() === 0) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
                 setFlash('error', __('account.access_denied'));
                 panelRedirectPreferReferentCard($referentId, 'dashboard');
+            }
+
+            if ($clearOauthTokens) {
+                mailboxVerifyDeleteOauthTokens($pdo, $accountId);
             }
 
             writeLog("External account updated: ID {$accountId}");
@@ -1145,9 +1292,20 @@ function handleAccountSave(): void
             writeLog("External account created: ID {$accountId}");
         }
 
-        setFlash('success', __('account.saved'));
+        if ($pdo->inTransaction()) {
+            $pdo->commit();
+        }
+
+        if ($accountVerifyWarning !== '') {
+            setFlash('warning', __('account.saved') . ' — ' . $accountVerifyWarning);
+        } else {
+            setFlash('success', __('account.saved'));
+        }
     } catch (Throwable $e) {
-        writeLog('External account save error: ' . $e->getMessage());
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        mailboxVerifyLog('External account save error: ' . get_class($e));
         setFlash('error', exceptionUserMessage($e));
     }
 
@@ -1501,6 +1659,15 @@ function renderRelationshipForm(): void
             </label>
         </div>
 
+        <?php if (!empty($_SESSION['mailbox_verify_soft_client'])): ?>
+        <div class="bg-amber-50 border border-amber-200 rounded p-3 text-sm">
+            <label class="inline-flex items-start gap-2">
+                <input type="checkbox" name="confirm_unverified_client" value="1" class="mt-1">
+                <span><?= h(__('mailbox_verify.save_anyway_unverified')) ?></span>
+            </label>
+        </div>
+        <?php endif; ?>
+
         <div class="flex gap-3">
             <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded">
                 <?= h(__('common.save')) ?>
@@ -1534,12 +1701,18 @@ function handleRelationshipSave(): void
     }
 
     if ($id > 0) {
-        $stmt = $pdo->prepare('SELECT id FROM clients WHERE id = ? AND referent_id = ?');
+        $stmt = $pdo->prepare(
+            'SELECT id, external_client_email, local_client_email, local_referent_email, active
+             FROM clients WHERE id = ? AND referent_id = ?'
+        );
         $stmt->execute([$id, $referentId]);
-        if (!$stmt->fetch()) {
+        $existingRelationship = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($existingRelationship === null) {
             setFlash('error', __('error.record_not_found'));
             redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
         }
+    } else {
+        $existingRelationship = null;
     }
 
     $data = parseRelationshipFormPost($_POST);
@@ -1596,47 +1769,7 @@ function handleRelationshipSave(): void
         ]));
     }
 
-    // Task 3 — physical mailbox precondition
-    try {
-        if (!activePhysicalMailboxExists($data['local_client_email'])) {
-            setFlash('error', __('relationship.error.mailbox_not_provisioned', [
-                'email' => $data['local_client_email'],
-            ]));
-            panelRedirectPreferReferentCard($referentId, 'relationship_form', [
-                'referent_id' => $referentId,
-                'id' => $id > 0 ? $id : null,
-            ]);
-        }
-        if (!activePhysicalMailboxExists($data['local_referent_email'])) {
-            setFlash('error', __('relationship.error.mailbox_not_provisioned', [
-                'email' => $data['local_referent_email'],
-            ]));
-            panelRedirectPreferReferentCard($referentId, 'relationship_form', [
-                'referent_id' => $referentId,
-                'id' => $id > 0 ? $id : null,
-            ]);
-        }
-    } catch (ReferentMaildirException $e) {
-        setFlash('error', $e->getUserMessage());
-        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
-            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
-        }
-        redirectTo('relationship_form', array_filter([
-            'referent_id' => $referentId,
-            'id' => $id > 0 ? $id : null,
-        ]));
-    } catch (Throwable $e) {
-        writeLog('Relationship mailbox check failed: ' . $e->getMessage());
-        setFlash('error', __('relationship.error.vmail_unavailable'));
-        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
-            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
-        }
-        redirectTo('relationship_form', array_filter([
-            'referent_id' => $referentId,
-            'id' => $id > 0 ? $id : null,
-        ]));
-    }
-
+    // Cheap DB checks BEFORE any network I/O (PROMPT-80 hardening).
     $accountError = validateRelationshipExternalAccount(
         $pdo,
         $referentId,
@@ -1668,6 +1801,102 @@ function handleRelationshipSave(): void
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
         ]));
+    }
+
+    $needsChecks = mailboxVerifyRelationshipNeedsChecks(
+        $existingRelationship,
+        [
+            'local_client' => $data['local_client_email'],
+            'local_referent' => $data['local_referent_email'],
+            'external_client' => $data['external_client_email'],
+        ],
+        (int) $data['active']
+    );
+
+    // Physical mailbox precondition (only when active and address new/changed).
+    try {
+        if (!empty($needsChecks['local_client'])) {
+            $localClientCheck = verifyLocalPhysicalMailbox($data['local_client_email']);
+            if (empty($localClientCheck['ok'])) {
+                setFlash('error', mailboxVerifyMessage($localClientCheck));
+                panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+                    'referent_id' => $referentId,
+                    'id' => $id > 0 ? $id : null,
+                ]);
+            }
+        }
+        if (!empty($needsChecks['local_referent'])) {
+            $localReferentCheck = verifyLocalPhysicalMailbox($data['local_referent_email']);
+            if (empty($localReferentCheck['ok'])) {
+                setFlash('error', mailboxVerifyMessage($localReferentCheck));
+                panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+                    'referent_id' => $referentId,
+                    'id' => $id > 0 ? $id : null,
+                ]);
+            }
+        }
+    } catch (ReferentMaildirException $e) {
+        setFlash('error', $e->getUserMessage());
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    } catch (Throwable $e) {
+        mailboxVerifyLog('Relationship mailbox check failed: ' . get_class($e));
+        setFlash('error', __('relationship.error.vmail_unavailable'));
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
+        }
+        redirectTo('relationship_form', array_filter([
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]));
+    }
+
+    // External Client MX + RCPT TO (hard refuse / soft + confirm override).
+    if (!empty($needsChecks['external_client'])) {
+        $externalClientProbe = verifyExternalClientMailbox($data['external_client_email'], $_SESSION);
+        if (empty($externalClientProbe['ok'])) {
+            $severity = (string) ($externalClientProbe['severity'] ?? 'hard');
+            $confirmFlag = isset($_POST['confirm_unverified_client'])
+                && (string) $_POST['confirm_unverified_client'] === '1';
+            if ($severity === 'soft'
+                && mailboxVerifyConsumeSoftOverride($data['external_client_email'], $confirmFlag, $_SESSION)
+            ) {
+                mailboxVerifyLog(
+                    'External client soft override referent_id=' . $referentId
+                    . ' hop=' . ($externalClientProbe['hop'] ?? '')
+                    . ' code=' . ($externalClientProbe['code'] ?? '')
+                );
+            } else {
+                mailboxVerifyLog(
+                    'External client probe failed referent_id=' . $referentId
+                    . ' hop=' . ($externalClientProbe['hop'] ?? '')
+                    . ' code=' . ($externalClientProbe['code'] ?? '')
+                    . ' severity=' . $severity
+                );
+                if ($severity === 'soft') {
+                    mailboxVerifyRememberSoftFailure($data['external_client_email'], $_SESSION);
+                    setFlash(
+                        'error',
+                        mailboxVerifyMessage($externalClientProbe)
+                        . ' — ' . __('mailbox_verify.soft_failure_hint')
+                    );
+                } else {
+                    unset($_SESSION['mailbox_verify_soft_client']);
+                    setFlash('error', mailboxVerifyMessage($externalClientProbe));
+                }
+                panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+                    'referent_id' => $referentId,
+                    'id' => $id > 0 ? $id : null,
+                ]);
+            }
+        } else {
+            unset($_SESSION['mailbox_verify_soft_client']);
+        }
     }
 
     try {

@@ -624,7 +624,7 @@ function renderReferentCardUi(): void
                 <div class="pm-f pm-full" data-plain-only="create">
                     <label>Пароль *</label>
                     <input type="password" name="password" autocomplete="new-password">
-                    <span class="pm-help">Хранится в зашифрованном виде и не показывается</span>
+                    <span class="pm-help"><?= h(__('mailbox_verify.password_keep_hint')) ?></span>
                 </div>
                 <div class="pm-f pm-full" data-oauth-only="create" style="display:none">
                     <label>OAuth provider</label>
@@ -686,7 +686,7 @@ function renderReferentCardUi(): void
                 <div class="pm-f pm-full" data-plain-only="edit">
                     <label>Пароль</label>
                     <input type="password" name="password" placeholder="оставьте пустым, чтобы не менять" autocomplete="new-password">
-                    <span class="pm-help">Хранится в зашифрованном виде и не показывается</span>
+                    <span class="pm-help"><?= h(__('mailbox_verify.password_keep_hint')) ?></span>
                 </div>
                 <div class="pm-f pm-full" data-oauth-only="edit" style="display:none">
                     <label>OAuth provider</label>
@@ -792,6 +792,14 @@ function renderReferentCardUi(): void
                 <div class="pm-f pm-full">
                     <label class="pm-chk"><input type="checkbox" name="active" id="rel_active" value="1" checked> Связь активна</label>
                 </div>
+                <?php if (!empty($_SESSION['mailbox_verify_soft_client'])): ?>
+                <div class="pm-f pm-full">
+                    <label class="pm-chk">
+                        <input type="checkbox" name="confirm_unverified_client" value="1">
+                        <?= h(__('mailbox_verify.save_anyway_unverified')) ?>
+                    </label>
+                </div>
+                <?php endif; ?>
             </div></div>
             <div class="pm-mf">
                 <span id="rel-dlg-extra"></span>

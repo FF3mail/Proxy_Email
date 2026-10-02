@@ -37,3 +37,33 @@ if (!defined('PUBLIC_BASE_URL')) {
 //     ['host' => '8.8.8.8', 'port' => 443],
 //     ['host' => 'imap.gmail.com', 'port' => 993],
 // ]);
+
+// ---------------------------------------------------------------------------
+// Mailbox verification on Referent-card save (PROMPT-80 / issue #40)
+// ---------------------------------------------------------------------------
+// PANEL_MAILBOX_PROBE_ALLOW_PRIVATE (bool, default false):
+//   Allow IMAP/SMTP login probes to private LAN addresses (10/8, 172.16/12,
+//   192.168/16, fc00::/7, 100.64/10). RCPT/MX probes never use private targets.
+// define('PANEL_MAILBOX_PROBE_ALLOW_PRIVATE', true);
+//
+// PANEL_MAILBOX_PROBE_ALLOWED_TARGETS (list of hostnames and/or CIDRs):
+//   Extra allow-list for IMAP/SMTP private targets when ALLOW_PRIVATE is false.
+// define('PANEL_MAILBOX_PROBE_ALLOWED_TARGETS', ['mail.lan.example', '10.0.0.0/8']);
+//
+// PANEL_MAILBOX_PROBE_ALLOWED_PORTS (list of ints, default 25,143,465,587,993,2525):
+// define('PANEL_MAILBOX_PROBE_ALLOWED_PORTS', [143, 465, 587, 993]);
+//
+// PANEL_MAILBOX_PROBE_ALLOW_PLAINTEXT_AUTH (bool, default false):
+//   Permit AUTH over encryption=none toward non-loopback hosts.
+// define('PANEL_MAILBOX_PROBE_ALLOW_PLAINTEXT_AUTH', true);
+//
+// PANEL_MAILBOX_PROBE_MAIL_FROM (string, default empty → null sender <>):
+// define('PANEL_MAILBOX_PROBE_MAIL_FROM', 'probe@example.com');
+//
+// PANEL_MAILBOX_PROBE_EHLO_HOST (FQDN used in EHLO/HELO; default gethostname()
+//   when it contains a dot, else mail-proxy.invalid):
+// define('PANEL_MAILBOX_PROBE_EHLO_HOST', 'panel.example.com');
+//
+// PANEL_MAILBOX_PROBE_DNS_CANARY (default iana.org) — used only when MX/A/AAAA
+//   all fail, to distinguish NXDOMAIN from resolver outage:
+// define('PANEL_MAILBOX_PROBE_DNS_CANARY', 'iana.org');
