@@ -1,7 +1,7 @@
 # PROMPT 22 — Installer dry-run report (clean continuous pass)
 
 **Project:** DELTA-transit (mail-proxy)  
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Date:** 2026-09-03  
 **Branch / commit tested:** `prompt-22.1-nginx-conflict-check` @ `d12945649b4d1a3422d18d6ebee5f699fde5768d`  
 **Panel URL:** `https://panel.mail.testvps.loc`  
@@ -73,7 +73,7 @@ Piped input: empty MySQL password (socket auth), `--all-referents`, domain `test
 
 Repeated across restarts during validation/configure_limits.
 
-### `verify-install-regression.sh` — exit **0**
+### `scripts/verify-install-regression.sh` — exit **0**
 
 ```
 [PASS] mail-proxy.service is active (running)
@@ -135,7 +135,7 @@ Instances of `$( … | … )` reviewed in `delta-transit-install.sh`:
 
 ## 3. `mail-proxy.service` reaches `active (running)`?
 
-**Yes.** Confirmed by `systemctl status`, `verify-install-regression.sh`, and journal startup lines.
+**Yes.** Confirmed by `systemctl status`, `scripts/verify-install-regression.sh`, and journal startup lines.
 
 ---
 

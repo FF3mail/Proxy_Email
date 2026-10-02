@@ -178,7 +178,7 @@ tail -20 /var/log/php*-fpm.log
 1. Версия из `/root/delta-transit-install-report.txt`
 2. Фрагмент лога (без паролей): последние 200 строк `mail-proxy-daemon.log`
 3. Описание референта (без секретов): провайдер, auth_type, шифрование
-4. Результат `verify-install-regression.sh`
+4. Результат `scripts/verify-install-regression.sh`
 
 ---
 

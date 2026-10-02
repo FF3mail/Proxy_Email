@@ -59,7 +59,7 @@
 |------|-------|
 | **Repository SHA** | `c75a7f5bf0d5b98049a1ef664362a78dca3f7d54` (parent `8b7c142`) |
 | **Deployment model** | Direct copy to `/usr/local/bin/` (not git checkout on VPS) |
-| **VPS host** | `192.168.125.116` (`mail.testvps.loc`) |
+| **VPS host** | `192.0.2.10` (`mail.testvps.loc`) |
 
 ### Verified file hashes (local worktree = deployed)
 

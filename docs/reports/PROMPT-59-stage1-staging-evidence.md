@@ -17,7 +17,7 @@
 | 4 — Shadow AGREE/DIVERGE collection | **Blocked** | No inbound IMAP messages processed in observation window (external IMAP timeouts) |
 | 5 — Rollback decision | **Complete** | **Stage 1 left running** on test VPS |
 
-**Recommendation:** **Not enough evidence to write Stage 2 yet.** Fix or replace `refint1@frona.ru` IMAP connectivity (or inject a controlled UNSEEN test message), finish backfilling remaining legacy client(s), then re-run a shadow observation window until `/run/mail-proxy/relationship_shadow_stats.json` shows non-zero `processed`.
+**Recommendation:** **Not enough evidence to write Stage 2 yet.** Fix or replace `referent-a@lab-a.example.test` IMAP connectivity (or inject a controlled UNSEEN test message), finish backfilling remaining legacy client(s), then re-run a shadow observation window until `/run/mail-proxy/relationship_shadow_stats.json` shows non-zero `processed`.
 
 ---
 
@@ -27,7 +27,7 @@
 
 | Field | Value |
 |-------|-------|
-| IP | `192.168.125.116` |
+| IP | `192.0.2.10` |
 | Hostname | `mail.testvps.loc` |
 | Panel URL | `https://panel.testvps.loc` (from deployed `config.php`) |
 | Same lab host as PROMPT-47/51 | **Yes** |
@@ -51,7 +51,7 @@
 ### VPS checkout (after deploy)
 
 ```text
-root@mail:~/Proxy_Email# git rev-parse HEAD
+root@lab-vps:~/Proxy_Email# git rev-parse HEAD
 9772d8cc61be9e97596eda7f9bfa5c504f1ec1e2
 ```
 
@@ -101,7 +101,7 @@ referents:
   id=4  refloc2@testvps.loc  active=1
 
 external_accounts:
-  id=1  referent_id=3  refint1@frona.ru  active=0
+  id=1  referent_id=3  referent-a@lab-a.example.test  active=0
 ```
 
 ### Rollback path (confirmed before deploy)
@@ -143,7 +143,7 @@ Same as prior VPS prompts (`prompt46_vps_deploy.sh`, `mail-proxy-setup.sh`, `doc
 
 ### Delivery unchanged proof (empirical)
 
-**Legacy recipient resolution** on a test message (`From: external-sender@frona.ru`, `To: clientloc1@testvps.loc`):
+**Legacy recipient resolution** on a test message (`From: external-a@lab-a.example.test`, `To: clientloc1@testvps.loc`):
 
 ```text
 RESOLVED= []
@@ -232,7 +232,7 @@ Panel handler save with physical mailboxes that exist in iRedMail `vmail`:
 
 | Field | Value |
 |-------|-------|
-| `external_client_email` | `external-sender@frona.ru` |
+| `external_client_email` | `external-a@lab-a.example.test` |
 | `local_client_email` | `clientloc1@testvps.loc` |
 | `local_referent_email` | `refloc1@testvps.loc` |
 | `external_account_id` | `1` |
@@ -242,7 +242,7 @@ Panel handler save with physical mailboxes that exist in iRedMail `vmail`:
 
 ```text
 id  referent_id  email                      external_client_email      local_client_email         local_referent_email    external_account_id  active
-2   3            external-sender@frona.ru   external-sender@frona.ru   clientloc1@testvps.loc     refloc1@testvps.loc     1                    1
+2   3            external-a@lab-a.example.test   external-a@lab-a.example.test   clientloc1@testvps.loc     refloc1@testvps.loc     1                    1
 ```
 
 **Mailbox precondition:** **PASS** — save succeeded against real `vmail` rows (first live exercise of PROMPT-56 Task 3 on this host). No `mailbox_not_provisioned` error.
@@ -290,17 +290,17 @@ no stats file
 ### IMAP activity (verbatim tail)
 
 ```text
-2026-09-10 09:11:01 [INFO] (ImapWorker-17) Polling external IMAP account: refint1@frona.ru
-2026-09-10 09:12:01 [ERROR] (ImapWorker-17) IMAP session exception for refint1@frona.ru: timed out
-2026-09-10 09:13:01 [ERROR] (ImapWorker-3) IMAP session exception for refint1@frona.ru: timed out
-2026-09-10 09:14:01 [ERROR] (ImapWorker-17) IMAP session exception for refint1@frona.ru: timed out
+2026-09-10 09:11:01 [INFO] (ImapWorker-17) Polling external IMAP account: referent-a@lab-a.example.test
+2026-09-10 09:12:01 [ERROR] (ImapWorker-17) IMAP session exception for referent-a@lab-a.example.test: timed out
+2026-09-10 09:13:01 [ERROR] (ImapWorker-3) IMAP session exception for referent-a@lab-a.example.test: timed out
+2026-09-10 09:14:01 [ERROR] (ImapWorker-17) IMAP session exception for referent-a@lab-a.example.test: timed out
 ```
 
-**Verdict:** **Zero inbound messages processed** → no AGREE/DIVERGE counts to analyze. External test mailbox `refint1@frona.ru` is unreachable from this VPS (same failure mode as pre-deploy logs on 2026-09-09).
+**Verdict:** **Zero inbound messages processed** → no AGREE/DIVERGE counts to analyze. External test mailbox `referent-a@lab-a.example.test` is unreachable from this VPS (same failure mode as pre-deploy logs on 2026-09-09).
 
 ### To/Cc vs From gap (on record for Stage 2)
 
-Legacy `_resolve_local_recipients()` matches **To/Cc** against `clients.email`. PROMPT-58 shadow uses **From** + `RelationshipLookup.resolve_inbound()`. After migrating client id=2, `clients.email` is `external-sender@frona.ru`, so a message `To: clientloc1@testvps.loc` no longer matches legacy path but may match lookup if `From` equals `external-sender@frona.ru`. This divergence cannot be observed until IMAP fetch succeeds.
+Legacy `_resolve_local_recipients()` matches **To/Cc** against `clients.email`. PROMPT-58 shadow uses **From** + `RelationshipLookup.resolve_inbound()`. After migrating client id=2, `clients.email` is `external-a@lab-a.example.test`, so a message `To: clientloc1@testvps.loc` no longer matches legacy path but may match lookup if `From` equals `external-a@lab-a.example.test`. This divergence cannot be observed until IMAP fetch succeeds.
 
 ---
 
@@ -329,7 +329,7 @@ Legacy `_resolve_local_recipients()` matches **To/Cc** against `clients.email`. 
 
 **Do not write Stage 2 yet.** Next steps (human/ops):
 
-1. Restore IMAP connectivity to `refint1@frona.ru` **or** place a controlled UNSEEN test message reachable by the daemon.
+1. Restore IMAP connectivity to `referent-a@lab-a.example.test` **or** place a controlled UNSEEN test message reachable by the daemon.
 2. Migrate legacy client id=3 (and add a second external account + second relationship if testing cross-client isolation).
 3. Re-run a shadow window until `relationship_shadow_stats.json` and `[RELATIONSHIP_SHADOW]` lines exist; review DIVERGE buckets before authoring Stage 2.
 

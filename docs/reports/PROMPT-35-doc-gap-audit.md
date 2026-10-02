@@ -46,7 +46,7 @@ Scripts referenced in the admin guide were compared against actual `read -r*` pr
 | `configure_limits.sh` | §4 | `MySQL root password:`, mailbox list / `--all-referents`, `Домен:` | **No** (table only) | **Fixed** — §4.1 added |
 | `delta-transit-install.sh` | §2.3 | Preflight: `Public URL`, `MariaDB root password`, `pip mirror`; on pip failure: menu `1/2/3`; Nginx phase: `Путь к сокету или TCP-адрес` if PHP-FPM socket not auto-detected | **No** (phase list only) | **Deferred** — §2.3 should gain a «Интерактивные запросы» subsection; out of scope here to avoid mixing install-doc expansion with limits fix |
 | `mail-proxy-setup.sh` | §1.1 (mentioned) | None (`read` not used) | N/A | No gap |
-| `verify-install-regression.sh` | Not in PDF (used post-install on VPS) | None | N/A | No gap |
+| `scripts/verify-install-regression.sh` | Not in PDF (used post-install on VPS) | None | N/A | No gap |
 
 **Reasoning for deferrals:** `delta-transit-install.sh` has five distinct prompt surfaces across preflight, pip retry, and PHP-FPM detection. Documenting them properly belongs in **Section 2** (installation), not Section 4, and would roughly double the §2.3 edit surface. Flagged for a follow-up prompt (suggested: PROMPT-36).
 

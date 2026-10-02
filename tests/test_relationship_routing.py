@@ -32,7 +32,7 @@ from relationship_routing import (
 def _dto(
     relationship_id: int = 1,
     external_account_id: int = 1,
-    external_client: str = 'clientint1@frona.ru',
+    external_client: str = 'client-a@lab-a.example.test',
     local_client: str = 'clientloc1@testvps.loc',
     local_referent: str = 'refloc1@testvps.loc',
     maildir: str = '/var/vmail/clientloc1/Maildir',
@@ -44,9 +44,9 @@ def _dto(
         local_client_email=local_client,
         local_referent_email=local_referent,
         external_account_id=external_account_id,
-        external_referent_email='refint1@frona.ru',
+        external_referent_email='referent-a@lab-a.example.test',
         local_client_maildir=maildir,
-        account={'id': external_account_id, 'email': 'refint1@frona.ru'},
+        account={'id': external_account_id, 'email': 'referent-a@lab-a.example.test'},
         referent={'id': 1, 'local_inbox': 'refloc1@testvps.loc'},
     )
 
@@ -114,8 +114,8 @@ class RelationshipLivePlanTest(unittest.TestCase):
         plan = plan_inbound_delivery(
             resolve_inbound=lambda _a, _s: dto,
             account_id=1,
-            account_email='refint1@frona.ru',
-            from_address='clientint1@frona.ru',
+            account_email='referent-a@lab-a.example.test',
+            from_address='client-a@lab-a.example.test',
             referent_local_inbox='refloc1@testvps.loc',
         )
         self.assertEqual(plan.mode, InboundRoutingMode.RELATIONSHIP_LIVE)
@@ -126,8 +126,8 @@ class RelationshipLivePlanTest(unittest.TestCase):
         plan = plan_inbound_delivery(
             resolve_inbound=lambda _a, _s: None,
             account_id=1,
-            account_email='refint1@frona.ru',
-            from_address='unknown@frona.ru',
+            account_email='referent-a@lab-a.example.test',
+            from_address='user-a@lab-a.example.test',
             referent_local_inbox='refloc1@testvps.loc',
         )
         self.assertEqual(plan.local_rcpts, [])
@@ -139,8 +139,8 @@ class RelationshipLivePlanTest(unittest.TestCase):
         plan = plan_inbound_delivery(
             resolve_inbound=lambda _a, _s: dto,
             account_id=1,
-            account_email='refint1@frona.ru',
-            from_address='clientint1@frona.ru',
+            account_email='referent-a@lab-a.example.test',
+            from_address='client-a@lab-a.example.test',
             referent_local_inbox='refloc1@testvps.loc',
         )
         self.assertEqual(plan.local_rcpts, [])
@@ -203,7 +203,7 @@ class OutboundRoutingPlanTest(unittest.TestCase):
     def test_no_relationship_no_account(self) -> None:
         plan = plan_outbound_delivery(
             resolve_outbound=lambda _e: None,
-            from_address='unknown@testvps.loc',
+            from_address='user-a@testvps.loc',
         )
         self.assertIsNone(plan.account)
         self.assertEqual(plan.skip_reason, 'no_relationship_match')

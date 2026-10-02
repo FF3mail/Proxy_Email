@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 $indexPath = __DIR__ . '/../web/index.php';
 $monitorPath = __DIR__ . '/../web/monitor.php';
+$referentListUiPath = __DIR__ . '/../web/includes/referent_card_ui.php';
 
 if (!is_readable($indexPath)) {
     fwrite(STDERR, "FAIL: cannot read {$indexPath}\n");
@@ -17,9 +18,14 @@ if (!is_readable($monitorPath)) {
     fwrite(STDERR, "FAIL: cannot read {$monitorPath}\n");
     exit(1);
 }
+if (!is_readable($referentListUiPath)) {
+    fwrite(STDERR, "FAIL: cannot read {$referentListUiPath}\n");
+    exit(1);
+}
 
 $index = file_get_contents($indexPath);
 $monitor = file_get_contents($monitorPath);
+$referentListUi = file_get_contents($referentListUiPath);
 $failures = 0;
 
 function assert_contains(string $haystack, string $needle, string $msg): void
@@ -50,7 +56,7 @@ assert_contains($index, "function renderAccountList()", 'renderAccountList() exi
 assert_contains($index, "case 'referent_list':", 'referent_list action case');
 assert_contains($index, "case 'account_list':", 'account_list action case');
 assert_contains($index, "renderReferentList();", 'referent_list dispatches to renderReferentList');
-assert_contains($index, "renderAccountList();", 'account_list dispatches to renderAccountList');
+assert_contains($index, "renderInternetAccountsDirectory();", 'account_list dispatches to renderInternetAccountsDirectory');
 
 // Navigation must target collection pages, not dashboard
 assert_contains($index, 'action=referent_list', 'index nav links to referent_list');
@@ -76,8 +82,9 @@ assert_contains($index, 'action=referent_view&id=', 'referent view link uses id'
 assert_contains($index, 'action=account_form', 'account form action exists');
 assert_contains($index, 'account_id', 'account_id parameter used');
 
-// List queries hit database tables
-assert_contains($index, 'FROM referents r', 'referent list queries referents table');
+// List queries hit database tables (referent list SQL lives in referent_card_ui.php)
+assert_contains($index, 'renderReferentListUi();', 'referent list delegates to renderReferentListUi');
+assert_contains($referentListUi, 'FROM referents r', 'referent list queries referents table');
 assert_contains($index, 'FROM external_accounts', 'account list queries external_accounts table');
 
 exit($failures > 0 ? 1 : 0);

@@ -71,7 +71,7 @@ grep "IMAP size skip" /var/log/mail-proxy/mail-proxy-daemon.log | tail -10
 ```
 
 4. `systemctl start mail-proxy`
-5. Проверьте лог и `verify-install-regression.sh`
+5. Проверьте лог и `scripts/verify-install-regression.sh`
 
 ---
 
@@ -167,7 +167,7 @@ mailq
 После любых значительных изменений:
 
 ```bash
-./verify-install-regression.sh
+./scripts/verify-install-regression.sh
 ```
 
 Все пункты должны быть `[PASS]`.

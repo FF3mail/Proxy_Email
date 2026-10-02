@@ -45,7 +45,7 @@ In **`dual` + `shadow`**, a relationship-maildir file is picked up and processed
 | `relationship_lookup.py` | Read-only — `list_watch_targets()` wired from daemon |
 | `tests/test_outbound_watch.py` | Mode parsing, fail-closed, path dedup, unschedule refcount, dual log |
 | `docs/DELTA-transit_anchor.md` | §3.2 watch modes; §12 narrowed open item |
-| `.keys/prompt66_vps_deploy_test.sh` | VPS verification harness |
+| `.keys/<helper-script>` | VPS verification harness |
 
 **Not changed:** worker pools, `OUTBOUND_ROUTING_MODE` account-selection logic, `_validate_account_settings()`, www-data filesystem access.
 
@@ -70,9 +70,9 @@ Coverage highlights:
 - Unschedule retains shared path while another relationship uses it
 - `[OUTBOUND_WATCH_DUAL]` fires for relationship-only path
 
-### 3.2 VPS live tests (192.168.125.116)
+### 3.2 VPS live tests (192.0.2.10)
 
-**Status (PROMPT-67):** EXECUTED on lab VPS `192.168.125.116` via `tests/prompt67_vps_verify.sh`. Full log excerpts in `docs/reports/PROMPT-67-outbound-watch-vps-evidence.md`.
+**Status (PROMPT-67):** EXECUTED on lab VPS `192.0.2.10` via `tests/prompt67_vps_verify.sh`. Full log excerpts in `docs/reports/PROMPT-67-outbound-watch-vps-evidence.md`.
 
 **2a — dual mode (captured 2026-09-11 06:40:08 UTC):**
 

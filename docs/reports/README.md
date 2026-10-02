@@ -2,7 +2,7 @@
 
 **Не используются при эксплуатации.**
 
-Отчёты о выполнении отдельных задач разработки. Для диагностики на сервере см. [07-troubleshooting.md](../07-troubleshooting.md) и [10-deployment-checklist.md](../10-deployment-checklist.md).
+Отчёты о выполнении отдельных задач разработки. Для диагностики на сервере см. [07-troubleshooting.md](../guide/07-troubleshooting.md) и [10-deployment-checklist.md](../guide/10-deployment-checklist.md).
 
 | Отчёт | Тема |
 |-------|------|

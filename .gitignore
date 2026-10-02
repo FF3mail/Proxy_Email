@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Secrets/local config
+.env
+.env.*
+*.pem
+*.key
+
+# Editors/OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local artifacts
+*.log
+*.bak
+*.tmp
+
+# Local deploy bundle for testers (generated, not versioned)
+/Distribution/
+
+# SSH keys and local key folders (never commit)
+/.keys/
+.keys/
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.ppk
+*.pub-private
+known_hosts
+authorized_keys
+
+# Local Cursor IDE/agent configuration (may contain tokens, never commit)
+/.cursor/

@@ -75,7 +75,7 @@ DELTA-transit/
 ├── logrotate-mail-proxy
 ├── schema.sql
 ├── requirements.txt
-└── test_large_attachment.py
+└── tests/test_large_attachment.py
 ```
 
 | Файл | Назначение |
@@ -408,11 +408,15 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
 | **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit; ~~daemon log permission drift (Issue #23)~~ → **закрыто PROMPT-78** (§19) |
 
+**PROMPT-68 (план готовности к cutover):** предпосылки, runbook, откат и чеклист go/no-go для целевого состояния `relationship_live` / `relationship_live` / `relationship_only` — [`docs/reports/PROMPT-68-cutover-readiness-plan.md`](reports/PROMPT-68-cutover-readiness-plan.md). Документ составлен, когда переключение режимов было только процесс-глобальным; поэтапный cutover теперь выполняется через per-referent overrides (§13, §§16–18).
+
+**PROMPT-70:** симметричные коллизии путей Maildir (два relationship / outbox референта) должны блокироваться на этапе provisioning и не являются поддерживаемым runtime-случаем — см. [`docs/reports/PROMPT-70-provisioning-path-guard.md`](reports/PROMPT-70-provisioning-path-guard.md).
+
 ---
 
 ## 13. Decision record — per-referent mode granularity (PROMPT-71)
 
-**Status:** Accepted direction (design only; not implemented).  
+**Status:** Accepted direction (design only; not implemented). *Уточнение:* формулировка «design only; not implemented» — историческая для PROMPT-71 и на практике снята; см. superseding note в этом разделе и §§16–18.  
 **Full analysis:** [`docs/reports/PROMPT-71-mode-granularity-decision.md`](reports/PROMPT-71-mode-granularity-decision.md)  
 **Verified against:** `origin/master` @ `b1fb42a`
 
@@ -479,6 +483,15 @@ or cutover execution in the same PROMPT.
 
 ---
 
+## 14. Пилотный cutover — референт №1 (PROMPT-75) [исторический]
+
+**Полный отчёт:** [`docs/reports/PROMPT-75-pilot-cutover-referent-1.md`](reports/PROMPT-75-pilot-cutover-referent-1.md)
+
+Первый live-пилот референта №1 от 2026-09-14 описан в этом отчёте (режимы и вердикт — как указано там).
+Текущие режимы и вердикт пилота — в §18 и §19, не в этом разделе.
+
+---
+
 ## 15. Message rebuild specification (PROMPT-76 / PROMPT-76.1)
 
 **Full report:** [`docs/reports/PROMPT-76-message-rebuild-spec.md`](reports/PROMPT-76-message-rebuild-spec.md)
@@ -522,7 +535,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-17 |
-| **Host** | Lab VPS `192.168.125.116` |
+| **Host** | Lab VPS `192.0.2.10` |
 | **Code merge** | `1d5f8c1` (PR #21, PROMPT-77) deployed to VPS |
 | **Isolation** | Shadow-first deploy (overrides cleared → deploy → restart on shadow → then live flip) |
 | **Live flip** | `2026-09-17T07:30:16Z` — `relationship_live` / `relationship_live` / `referent_only` |
@@ -558,7 +571,7 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-18 (pilot) / 2026-09-21 (observation closure) |
-| **Host** | Lab VPS `192.168.125.116` |
+| **Host** | Lab VPS `192.0.2.10` |
 | **Code** | `6718ce6` (PR #22) deployed; binaries match repo — no drift vs `origin/master` code |
 | **PEEK gate** | **PASS** — independent `BODY.PEEK[]`; UNSEEN retained |
 | **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`2026-09-18T12:04:28Z`) |

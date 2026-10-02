@@ -4,7 +4,7 @@
 **Branch:** `prompt-34-vmail-ownership`  
 **Implementation commit:** `ffaa86c`  
 **Date:** 2026-09-07  
-**Host:** `192.168.125.116` (`mail.testvps.loc`)
+**Host:** `192.0.2.10` (`mail.testvps.loc`)
 
 ---
 
@@ -16,7 +16,7 @@ D1 (first flagged in `docs/reports/PROMPT-20.1-report.md`, deferred through PROM
 
 **Files changed:**
 - `delta-transit-install.sh` — `detect_dovecot_mail_store_owner()`, `verify_vmail_ownership_before_harden()`, called from `harden_maildir_permissions()` before `chmod`
-- `verify-install-regression.sh` — ownership + traverse checks for `/var/vmail`
+- `scripts/verify-install-regression.sh` — ownership + traverse checks for `/var/vmail`
 
 **Out of scope (unchanged):** `web/`, panel auth, TLS, `/var/mail` chmod logic (no ownership check added there).
 
@@ -43,8 +43,8 @@ Check runs in `phase_users_groups()` via `harden_maildir_permissions()` — befo
 |------|-------|----------|--------|
 | **Negative — bug reproduction** | `chown root:root /var/vmail; chmod 0755` | Abort with explicit ownership error; mode stays `755` | **PASS** — exit 1; message: `Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)`; mode unchanged |
 | **Positive — happy path** | `chown vmail:vmail /var/vmail; chmod 0750` | Harden succeeds; `vmail` can traverse | **PASS** — exit 0; mode `750`; `runuser -u vmail test -x /var/vmail` OK |
-| **Regression — wrong owner** | `root:root` before `verify-install-regression.sh` | `[FAIL]` on ownership | **PASS** |
-| **Regression — correct owner** | `vmail:vmail` before `verify-install-regression.sh` | `[PASS]` ownership + traverse | **PASS** — 0 failures |
+| **Regression — wrong owner** | `root:root` before `scripts/verify-install-regression.sh` | `[FAIL]` on ownership | **PASS** |
+| **Regression — correct owner** | `vmail:vmail` before `scripts/verify-install-regression.sh` | `[PASS]` ownership + traverse | **PASS** — 0 failures |
 
 ---
 

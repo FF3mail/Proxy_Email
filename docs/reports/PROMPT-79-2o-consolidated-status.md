@@ -3,7 +3,7 @@
 **Date:** 2026-09-25 (UTC)  
 **Branch:** `prompt-79-2c-inbound-multi-attach-split`  
 **Commit under test:** `a472e903994f3ad8da223f855177795fd9d1e5a5` (PROMPT-79.2n tip)  
-**Lab:** disposable copy `192.168.125.116` (`hostname=mail`) — confirmed available before O1  
+**Lab:** disposable copy `192.0.2.10` (`hostname=mail`) — confirmed available before O1  
 **Mode:** VERIFY ONLY — no product code changes, no merge  
 **Choice of document:** **new** `PROMPT-79-2o-consolidated-status.md` (this file). The existing `PROMPT-79-2g-lab-verify.md` is already a long historical log (79.2g matrix + 79.2h/i/j/k addenda). A short rollup file keeps that history readable and gives operators one current non-contradictory table. A one-line pointer to this file was added at the top of `PROMPT-79-2g-lab-verify.md`.
 

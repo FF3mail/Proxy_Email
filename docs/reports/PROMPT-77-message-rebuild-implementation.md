@@ -144,7 +144,7 @@ No VPS deployment or live traffic in PROMPT-77.
 
 ## 8. PROMPT-77.1 — lab VPS deploy + live verification (2026-09-17)
 
-**Host:** `192.168.125.116` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`, panel `https://panel.testvps.loc`)  
 **Master tip after merge:** `1d5f8c1` (`Merge pull request #21` — PROMPT-77)  
 **Token base:** `PROMPT771-1789630328`  
 **Type:** Deploy + observe only (no application code changes in this PROMPT)
@@ -167,7 +167,7 @@ No VPS deployment or live traffic in PROMPT-77.
 | VPS `git rev-parse HEAD` | `7e627a4` (PROMPT-74 deploy tip) | **PASS (documented drift)** — commits through `88339c4`/`1b19175` were docs-only; first code deploy since PROMPT-74 |
 | Deployed `message_rebuild.py` | Absent | Expected pre-PROMPT-77 |
 | Systemd drop-in | `shadow` / `shadow` / `referent_only` | Unchanged |
-| Stuck outbox file | `1789371282.M251919P290047.mail,...` (PROMPT-75 inbound left in watched `new/`, From=`clientint1@frona.ru`) | Quarantined to `/root/prompt77_quarantine/` before shadow flip (would be mis-sent under shadow legacy outbound) |
+| Stuck outbox file | `1789371282.M251919P290047.mail,...` (PROMPT-75 inbound left in watched `new/`, From=`client-a@lab-a.example.test`) | Quarantined to `/root/prompt77_quarantine/` before shadow flip (would be mis-sent under shadow legacy outbound) |
 
 ### 8.3 Shadow-isolation deploy checkpoint (items 3–5)
 
@@ -227,7 +227,7 @@ LIVE_RESTART_MARK=2026-09-17T07:29:33Z
 
 ### 8.6 Live verification (item 7)
 
-#### Inbound fan-out (2 attachments from `clientint1@frona.ru`)
+#### Inbound fan-out (2 attachments from `client-a@lab-a.example.test`)
 
 Delivery log:
 
@@ -244,7 +244,7 @@ Captured local children (before outbound watchdog consumed them):
 
 **Note:** Successful fan-out does not emit `[MESSAGE_REBUILD]` info lines (only error-class tags exist in code). Proof is delivery log + captured RFC822 children.
 
-**Watch coupling / echo (defect):** same children were then outbound-routed and arrived at `clientint1@frona.ru` as rebuilt outbound (`From=refint1@frona.ru`, `Subject=<filename>`). Log:
+**Watch coupling / echo (defect):** same children were then outbound-routed and arrived at `client-a@lab-a.example.test` as rebuilt outbound (`From=referent-a@lab-a.example.test`, `Subject=<filename>`). Log:
 
 ```text
 2026-09-17 07:32:24 [INFO] (Thread-1) [OUTBOUND_ROUTING] relationship_live referent=1 file=1789630344.M647420P366395.mail,... identity=clientloc1@testvps.loc relationship_id=1
@@ -258,14 +258,14 @@ Captured local children (before outbound watchdog consumed them):
 2026-09-17 07:32:17 [ERROR] (ImapWorker-0) [MESSAGE_REBUILD] zero_attachments relationship_id=1
 ```
 
-No local fan-out child for `PROMPT771-1789630328-IN-ZERO`. **However:** on `refint1@frona.ru` the message had `FLAGS (\Seen)` and subsequent polls showed `Found 0 unread` — **UNSEEN not retained**. Root cause: daemon `FETCH (RFC822)` sets `\Seen` on the server before rebuild fail-closed returns `mark_imap_seen=False` (which only skips an additional `STORE +FLAGS \Seen`). Spec CQ-1/CQ-7 / RD-13 retry contract is not met on live IMAP.
+No local fan-out child for `PROMPT771-1789630328-IN-ZERO`. **However:** on `referent-a@lab-a.example.test` the message had `FLAGS (\Seen)` and subsequent polls showed `Found 0 unread` — **UNSEEN not retained**. Root cause: daemon `FETCH (RFC822)` sets `\Seen` on the server before rebuild fail-closed returns `mark_imap_seen=False` (which only skips an additional `STORE +FLAGS \Seen`). Spec CQ-1/CQ-7 / RD-13 retry contract is not met on live IMAP.
 
 #### Outbound 1:1
 
-Injected single-attachment into watched referent outbox (`From=clientloc1@testvps.loc`). External mailbox proof on `clientint1@frona.ru`:
+Injected single-attachment into watched referent outbox (`From=clientloc1@testvps.loc`). External mailbox proof on `client-a@lab-a.example.test`:
 
 - `Subject=out-single.bin` (regenerated from filename; original subject not preserved — per spec)
-- `From=refint1@frona.ru` `To=clientint1@frona.ru`
+- `From=referent-a@lab-a.example.test` `To=client-a@lab-a.example.test`
 - Exactly one attachment `out-single.bin`
 
 ```text
@@ -278,9 +278,9 @@ Injected single-attachment into watched referent outbox (`From=clientloc1@testvp
 | Check | Result |
 |-------|--------|
 | Rel2 inbound → `Subject=iso-rel2.bin` `From=clientloc2` `To=refloc2` | Captured; not delivered into rel1 identities |
-| Rel2 outbound → `out-iso-b.bin` on `clientint2@bofoma.net` only | **PASS** |
-| Rel1 outbound / echoed fan-out subjects on `clientint2` | **MISSING** (**PASS**) |
-| Rel1 subjects on `clientint1` only | **PASS** |
+| Rel2 outbound → `out-iso-b.bin` on `client-b@lab-b.example.test` only | **PASS** |
+| Rel1 outbound / echoed fan-out subjects on `client-b` | **MISSING** (**PASS**) |
+| Rel1 subjects on `client-a` only | **PASS** |
 
 #### Natural `fanout_incomplete`
 
@@ -316,7 +316,7 @@ DB after rollback: `NULL` / `NULL` / `NULL`. PROMPT-77 code remains deployed (ha
 **Triggers that fired the rollback (post-window, planned):**
 
 1. **Fail-closed UNSEEN not retained** — content-path severity (blocks RD-13 retry for any future `fanout_incomplete` / rebuild failure).
-2. **Inbound fan-out → outbound echo** under `referent_only` — local children deleted after external re-send to `clientint1@frona.ru` (attachment loss from local Maildir + unintended external re-delivery).
+2. **Inbound fan-out → outbound echo** under `referent_only` — local children deleted after external re-send to `client-a@lab-a.example.test` (attachment loss from local Maildir + unintended external re-delivery).
 
 **Final verdict: NOT ACCEPTED.**
 
@@ -374,7 +374,7 @@ DB after rollback: `NULL` / `NULL` / `NULL`. PROMPT-77 code remains deployed (ha
 | Rebuild child headers | `message_rebuild._build_rebuilt_message(from_addr=dto.local_client_email, to_addr=dto.local_referent_email)` |
 | Outbound identity | `extract_outbound_identity_from_message` → RFC822 **From** |
 | Lookup | `RelationshipLookup.resolve_outbound` SQL: `WHERE c.local_client_email = %s` |
-| Raw-stream | External `From` (e.g. `clientint1@frona.ru`) → `no_relationship_match` → silently skipped |
+| Raw-stream | External `From` (e.g. `client-a@lab-a.example.test`) → `no_relationship_match` → silently skipped |
 | Rebuild | `From=clientloc1@testvps.loc` → match → external re-relay |
 
 Path coupling (`referent_only` watches the same Maildir inbound lands in) existed since PROMPT-53/63–65 but was **harmless for raw-stream** because From never matched. PROMPT-77 rebuild made the coupling fire.
@@ -437,7 +437,7 @@ python -m unittest tests.test_imap_fetch_seen tests.test_message_rebuild \
 
 ## 10. PROMPT-77.3 — VPS deploy + controlled rebuild pilot (2026-09-18)
 
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Code:** `master` @ `6718ce6` (PR #22 merge)  
 **Type:** Deploy + observe only (no application code changes in this PROMPT)  
 **Token base:** `PROMPT773-1789733144`
@@ -499,7 +499,7 @@ Live restart mark: `PROMPT773_LIVE_RESTART=2026-09-18T12:03:52Z` (effective mode
 | Inbound fan-out (2 attach) | Delivered to `refloc1` Maildir; children `Subject=alpha773.bin` / `beta773.bin`, `From=clientloc1@testvps.loc`, `To=refloc1@testvps.loc` |
 | Outbound echo of fan-out | **None** — children remained in `refloc1/…/Maildir/new` (`CHILD_COUNT=2` at `12:08:24Z` and `12:13:52Z`); `NO_ECHO_OF_FANOUT_SUBJECTS` |
 | Outbound inject path | **Only** `…/clientloc1-…/Maildir/new/PROMPT773-1789733144-OUT-1x1.eml` |
-| Outbound external proof | `clientint1@frona.ru`: `Subject=out-773.bin` `From=refint1@frona.ru` `To=clientint1@frona.ru` |
+| Outbound external proof | `client-a@lab-a.example.test`: `Subject=out-773.bin` `From=referent-a@lab-a.example.test` `To=client-a@lab-a.example.test` |
 | Zero-attach fail-closed | `[MESSAGE_REBUILD] zero_attachments`; IMAP UNSEEN retained |
 
 ### 10.5 Observation window
@@ -529,7 +529,7 @@ Signals in the captured window: fan-out children retained locally; no outbound e
 
 ## 11. PROMPT-77.4 — Full 60-minute observation closure (2026-09-21)
 
-**Host:** `192.168.125.116` (`mail.testvps.loc`)  
+**Host:** `192.0.2.10` (`mail.testvps.loc`)  
 **Branch:** `prompt-77-4-observation-closure` (from `origin/master` @ `8e8c8a4`)  
 **Type:** Observe + document only (no application code changes)  
 **Authoritative window token:** `PROMPT774-1789975645`  
