@@ -43,85 +43,51 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title><?= h(__('observability.title')) ?> — DELTA-transit</title>
+<title><?= h(__('observability.title')) ?> — <?= h(__('app.title_suffix')) ?></title>
 <?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
-<style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px; background: #f4f6f8; color: #333; }
-    .nav { background: #2c3e50; padding: 10px 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
-    .nav a { color: #ecf0f1; text-decoration: none; }
-    .nav a:hover, .nav a.active { color: #3498db; font-weight: 600; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
-    h1 { font-size: 22px; margin-bottom: 8px; }
-    h2 { font-size: 16px; margin: 0 0 10px; }
-    .hint { color: #64748b; margin-bottom: 16px; line-height: 1.45; }
-    .card { background: #fff; border-radius: 6px; padding: 16px; border: 1px solid #e2e8f0; margin-bottom: 16px; }
-    .error { color: #b91c1c; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
-    th { background: #f8fafc; font-weight: 600; font-size: 12px; text-transform: uppercase; color: #64748b; }
-    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #475569; }
-    .empty { color: #94a3b8; padding: 12px 0; }
-    .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; }
-    .tabs a {
-        display: inline-block; padding: 10px 18px; text-decoration: none; color: #64748b;
-        border: 1px solid transparent; border-bottom: none; margin-bottom: -2px; border-radius: 6px 6px 0 0;
-    }
-    .tabs a:hover { color: #1e293b; background: #f8fafc; }
-    .tabs a.active {
-        color: #0f172a; font-weight: 600; background: #fff;
-        border-color: #e2e8f0 #e2e8f0 #fff;
-    }
-    .global-filter { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
-    .global-filter label, .col-filters label { display: block; margin-bottom: 4px; font-size: 12px; color: #64748b; }
-    .global-filter .field, .col-filters .field { display: inline-block; }
-    .global-filter select, .global-filter input,
-    .col-filters select, .col-filters input { padding: 4px 8px; min-width: 9rem; }
-    .col-filters { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; margin-bottom: 12px; }
-    .col-filters legend { font-size: 12px; font-weight: 600; color: #64748b; padding: 0 4px; }
-    .col-filters .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
-</style>
+<script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
-<body class="bg-gray-100">
+<body class="bg-gray-100 min-h-screen">
 <div class="app-shell">
 <?php renderPanelSidebar(); ?>
 <main class="app-main">
-<div class="container" style="max-width:none;margin:0;padding:0">
-    <h1><?= h(__('observability.title')) ?></h1>
-    <p class="hint"><?= h(__('observability.hint')) ?></p>
+    <div class="pm-head">
+        <h1><?= h(__('observability.title')) ?></h1>
+    </div>
+    <p class="pm-hint"><?= h(__('observability.hint')) ?></p>
 
     <?php if (!empty($page['error'])): ?>
-        <div class="card error"><?= h((string)$page['error']) ?></div>
+        <div class="pm-notice-warn" role="alert"><?= h((string)$page['error']) ?></div>
     <?php endif; ?>
 
-    <div class="tabs" role="tablist" id="journal-tabs">
+    <nav class="pm-tabs" role="tablist" id="journal-tabs">
         <a role="tab"
-           class="<?= $isPassage ? 'active' : '' ?>"
+           class="pm-tab"
            aria-selected="<?= $isPassage ? 'true' : 'false' ?>"
            href="/relationship-status.php?tab=passage&amp;lang=<?= h(urlencode($lang)) ?>&amp;limit=<?= (int)$page['limit'] ?>"
            id="tab-passage"><?= h(__('observability.tab_passage')) ?></a>
         <a role="tab"
-           class="<?= !$isPassage ? 'active' : '' ?>"
+           class="pm-tab"
            aria-selected="<?= !$isPassage ? 'true' : 'false' ?>"
            href="/relationship-status.php?tab=nonstandard&amp;lang=<?= h(urlencode($lang)) ?>&amp;limit=<?= (int)$page['limit'] ?>"
            id="tab-nonstandard"><?= h(__('observability.tab_nonstandard')) ?></a>
-    </div>
+    </nav>
 
 <?php if ($isPassage): ?>
-    <div class="card" id="passage-card">
-        <h2><?= h(__('observability.passage_title')) ?></h2>
+    <div class="pm-card" id="passage-card">
+        <div class="pm-ch"><h3><?= h(__('observability.passage_title')) ?></h3></div>
         <form method="get" action="/relationship-status.php" id="passage-form">
             <input type="hidden" name="tab" value="passage">
             <input type="hidden" name="lang" value="<?= h($lang) ?>">
 
-            <div class="global-filter" id="passage-global-filter">
-                <div class="field">
+            <div class="pm-filter-bar" id="passage-global-filter">
+                <div class="pm-f">
                     <label for="limit"><?= h(__('observability.limit_label')) ?></label>
                     <input id="limit" type="number" name="limit" min="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MIN ?>"
                            max="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MAX ?>" value="<?= (int)$page['limit'] ?>">
                 </div>
-                <div class="field">
+                <div class="pm-f">
                     <label for="passage_referent"><?= h(__('observability.filter_referent_label')) ?></label>
                     <select id="passage_referent" name="passage_referent">
                         <option value=""><?= h(__('observability.filter_all_referents')) ?></option>
@@ -132,7 +98,7 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="field">
+                <div class="pm-f">
                     <label for="passage_client"><?= h(__('observability.filter_client_label')) ?></label>
                     <input id="passage_client" type="text" name="passage_client"
                            value="<?= h((string)$page['passage_client']) ?>"
@@ -140,20 +106,20 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                 </div>
             </div>
 
-            <fieldset class="col-filters" id="passage-column-filters">
+            <fieldset class="pm-filter-fieldset" id="passage-column-filters">
                 <legend><?= h(__('observability.column_filters_legend')) ?></legend>
-                <div class="row">
-                    <div class="field">
+                <div class="pm-filter-bar">
+                    <div class="pm-f">
                         <label for="passage_date_from"><?= h(__('observability.filter_date_from')) ?></label>
                         <input id="passage_date_from" type="date" name="passage_date_from"
                                value="<?= h((string)$page['passage_date_from']) ?>">
                     </div>
-                    <div class="field">
+                    <div class="pm-f">
                         <label for="passage_date_to"><?= h(__('observability.filter_date_to')) ?></label>
                         <input id="passage_date_to" type="date" name="passage_date_to"
                                value="<?= h((string)$page['passage_date_to']) ?>">
                     </div>
-                    <div class="field">
+                    <div class="pm-f">
                         <label for="passage_direction"><?= h(__('observability.filter_direction_label')) ?></label>
                         <select id="passage_direction" name="passage_direction">
                             <option value=""><?= h(__('observability.filter_direction_all')) ?></option>
@@ -165,51 +131,54 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                             </option>
                         </select>
                     </div>
-                    <button type="submit"><?= h(__('observability.refresh')) ?></button>
+                    <button type="submit" class="pm-btn pm-btn-primary"><?= h(__('observability.refresh')) ?></button>
                 </div>
             </fieldset>
         </form>
 
         <?php if (empty($page['passage_lines'])): ?>
-            <p class="empty"><?= h(__('observability.passage_empty')) ?></p>
+            <div class="pm-empty"><?= h(__('observability.passage_empty')) ?></div>
         <?php else: ?>
-            <table id="passage-table">
-                <thead>
-                <tr>
-                    <th><?= h(__('observability.col_when')) ?></th>
-                    <th><?= h(__('observability.col_direction')) ?></th>
-                    <th><?= h(__('observability.col_passage')) ?></th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($page['passage_rows'] as $i => $row): ?>
-                    <tr data-referent="<?= h((string)($row['referent_name'] ?? '')) ?>"
-                        data-client="<?= h((string)($row['client_name'] ?? '')) ?>"
-                        data-direction="<?= h((string)($row['direction'] ?? '')) ?>"
-                        data-event-ts="<?= h((string)($row['event_ts'] ?? '')) ?>">
-                        <td class="mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
-                        <td><?= h(passageDirectionLabel((string)($row['direction'] ?? ''))) ?></td>
-                        <td><?= h($page['passage_lines'][$i] ?? '') ?></td>
+            <div class="pm-table-wrap">
+                <table class="pm-table" id="passage-table" data-readonly="1">
+                    <thead>
+                    <tr>
+                        <th><?= h(__('observability.col_when')) ?></th>
+                        <th><?= h(__('observability.col_direction')) ?></th>
+                        <th><?= h(__('observability.col_passage')) ?></th>
                     </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($page['passage_rows'] as $i => $row): ?>
+                        <tr data-orphan="1"
+                            data-referent="<?= h((string)($row['referent_name'] ?? '')) ?>"
+                            data-client="<?= h((string)($row['client_name'] ?? '')) ?>"
+                            data-direction="<?= h((string)($row['direction'] ?? '')) ?>"
+                            data-event-ts="<?= h((string)($row['event_ts'] ?? '')) ?>">
+                            <td class="pm-mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
+                            <td><span class="pm-chip pm-chip-off"><?= h(passageDirectionLabel((string)($row['direction'] ?? ''))) ?></span></td>
+                            <td class="pm-cell-wrap"><?= h($page['passage_lines'][$i] ?? '') ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         <?php endif; ?>
     </div>
 <?php else: ?>
-    <div class="card" id="nonstandard-card">
-        <h2><?= h(__('observability.nonstandard_title')) ?></h2>
+    <div class="pm-card" id="nonstandard-card">
+        <div class="pm-ch"><h3><?= h(__('observability.nonstandard_title')) ?></h3></div>
         <form method="get" action="/relationship-status.php" id="nonstandard-form">
             <input type="hidden" name="tab" value="nonstandard">
             <input type="hidden" name="lang" value="<?= h($lang) ?>">
 
-            <div class="global-filter" id="ns-global-filter">
-                <div class="field">
+            <div class="pm-filter-bar" id="ns-global-filter">
+                <div class="pm-f">
                     <label for="ns_limit"><?= h(__('observability.limit_label')) ?></label>
                     <input id="ns_limit" type="number" name="limit" min="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MIN ?>"
                            max="<?= (int)PANEL_PASSAGE_JOURNAL_LIMIT_MAX ?>" value="<?= (int)$page['limit'] ?>">
                 </div>
-                <div class="field">
+                <div class="pm-f">
                     <label for="ns_referent"><?= h(__('observability.filter_referent_label')) ?></label>
                     <select id="ns_referent" name="ns_referent">
                         <option value=""><?= h(__('observability.filter_all_referents')) ?></option>
@@ -220,7 +189,7 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="field">
+                <div class="pm-f">
                     <label for="ns_client"><?= h(__('observability.filter_client_label')) ?></label>
                     <input id="ns_client" type="text" name="ns_client"
                            value="<?= h((string)$page['ns_client']) ?>"
@@ -228,20 +197,20 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                 </div>
             </div>
 
-            <fieldset class="col-filters" id="ns-column-filters">
+            <fieldset class="pm-filter-fieldset" id="ns-column-filters">
                 <legend><?= h(__('observability.column_filters_legend')) ?></legend>
-                <div class="row">
-                    <div class="field">
+                <div class="pm-filter-bar">
+                    <div class="pm-f">
                         <label for="ns_date_from"><?= h(__('observability.filter_date_from')) ?></label>
                         <input id="ns_date_from" type="date" name="ns_date_from"
                                value="<?= h((string)$page['ns_date_from']) ?>">
                     </div>
-                    <div class="field">
+                    <div class="pm-f">
                         <label for="ns_date_to"><?= h(__('observability.filter_date_to')) ?></label>
                         <input id="ns_date_to" type="date" name="ns_date_to"
                                value="<?= h((string)$page['ns_date_to']) ?>">
                     </div>
-                    <div class="field">
+                    <div class="pm-f">
                         <label for="ns_event"><?= h(__('observability.filter_label')) ?></label>
                         <select id="ns_event" name="ns_event">
                             <option value="<?= h(PANEL_EVENT_FILTER_ALL) ?>"<?= $page['ns_event'] === PANEL_EVENT_FILTER_ALL ? ' selected' : '' ?>>
@@ -255,7 +224,7 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                             </option>
                         </select>
                     </div>
-                    <div class="field">
+                    <div class="pm-f">
                         <label for="ns_direction"><?= h(__('observability.filter_direction_label')) ?></label>
                         <select id="ns_direction" name="ns_direction">
                             <option value=""><?= h(__('observability.filter_direction_all')) ?></option>
@@ -267,52 +236,60 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                             </option>
                         </select>
                     </div>
-                    <button type="submit"><?= h(__('observability.refresh')) ?></button>
+                    <button type="submit" class="pm-btn pm-btn-primary"><?= h(__('observability.refresh')) ?></button>
                 </div>
             </fieldset>
         </form>
 
         <?php if (empty($page['nonstandard_rows'])): ?>
-            <p class="empty"><?= h(__('observability.nonstandard_empty')) ?></p>
+            <div class="pm-empty"><?= h(__('observability.nonstandard_empty')) ?></div>
         <?php else: ?>
-            <table id="nonstandard-table">
-                <thead>
-                <tr>
-                    <th><?= h(__('observability.col_when')) ?></th>
-                    <th><?= h(__('observability.col_event')) ?></th>
-                    <th><?= h(__('observability.col_direction')) ?></th>
-                    <th><?= h(__('observability.col_reason')) ?></th>
-                    <th><?= h(__('observability.col_detail')) ?></th>
-                    <th><?= h(__('observability.col_notified')) ?></th>
-                    <th><?= h(__('observability.col_parties')) ?></th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($page['nonstandard_rows'] as $row): ?>
-                    <tr data-event-type="<?= h((string)($row['event_type'] ?? '')) ?>"
-                        data-referent="<?= h((string)($row['referent_name'] ?? '')) ?>"
-                        data-client="<?= h((string)($row['client_name'] ?? '')) ?>"
-                        data-direction="<?= h((string)($row['direction'] ?? '')) ?>"
-                        data-event-ts="<?= h((string)($row['event_ts'] ?? '')) ?>">
-                        <td class="mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
-                        <td><?= h((string)($row['event_label'] ?? '')) ?></td>
-                        <td><?= h((string)($row['direction_label'] ?? '')) ?></td>
-                        <td><?= h((string)($row['reason_label'] ?? '')) ?></td>
-                        <td class="mono"><?= h((string)($row['detail'] ?? '')) ?></td>
-                        <td><?= h((string)($row['notified_label'] ?? '')) ?></td>
-                        <td>
-                            <?= h((string)($row['referent_name'] ?? '—')) ?>
-                            /
-                            <?= h((string)($row['client_name'] ?? '—')) ?>
-                        </td>
+            <div class="pm-table-wrap">
+                <table class="pm-table" id="nonstandard-table" data-readonly="1">
+                    <thead>
+                    <tr>
+                        <th><?= h(__('observability.col_when')) ?></th>
+                        <th><?= h(__('observability.col_event')) ?></th>
+                        <th><?= h(__('observability.col_direction')) ?></th>
+                        <th><?= h(__('observability.col_reason')) ?></th>
+                        <th><?= h(__('observability.col_detail')) ?></th>
+                        <th><?= h(__('observability.col_notified')) ?></th>
+                        <th><?= h(__('observability.col_parties')) ?></th>
                     </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($page['nonstandard_rows'] as $row):
+                        $eventType = (string)($row['event_type'] ?? '');
+                        ?>
+                        <tr data-orphan="1"
+                            data-event-type="<?= h($eventType) ?>"
+                            data-referent="<?= h((string)($row['referent_name'] ?? '')) ?>"
+                            data-client="<?= h((string)($row['client_name'] ?? '')) ?>"
+                            data-direction="<?= h((string)($row['direction'] ?? '')) ?>"
+                            data-event-ts="<?= h((string)($row['event_ts'] ?? '')) ?>">
+                            <td class="pm-mono"><?= h((string)($row['event_ts'] ?? '')) ?></td>
+                            <td>
+                                <span class="pm-chip <?= h(passageEventTypeChipClass($eventType)) ?>">
+                                    <?= h((string)($row['event_label'] ?? '')) ?>
+                                </span>
+                            </td>
+                            <td><span class="pm-chip pm-chip-off"><?= h((string)($row['direction_label'] ?? '')) ?></span></td>
+                            <td><?= h((string)($row['reason_label'] ?? '')) ?></td>
+                            <td class="pm-mono pm-cell-wrap" title="<?= h((string)($row['detail'] ?? '')) ?>"><?= h((string)($row['detail'] ?? '')) ?></td>
+                            <td><?= h((string)($row['notified_label'] ?? '')) ?></td>
+                            <td class="pm-cell-wrap">
+                                <?= h((string)($row['referent_name'] ?? '—')) ?>
+                                /
+                                <?= h((string)($row['client_name'] ?? '—')) ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         <?php endif; ?>
     </div>
 <?php endif; ?>
-</div>
 </main>
 </div>
 </body>

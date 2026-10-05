@@ -133,6 +133,17 @@ function passageDirectionLabel(string $direction): string
     return $label === $key ? $direction : $label;
 }
 
+/** Shared panel chip class for journal event_type (appearance mapping only). */
+function passageEventTypeChipClass(string $eventType): string
+{
+    return match ($eventType) {
+        'delivered' => 'pm-chip-ok',
+        'disposed' => 'pm-chip-bad',
+        'skipped' => 'pm-chip-warn',
+        default => 'pm-chip-off',
+    };
+}
+
 /**
  * @param array<string,mixed> $row
  */

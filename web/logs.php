@@ -17,6 +17,24 @@ sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
 requirePanelAdmin();
 
+/**
+ * Highlight common log level tokens with shared panel chips (markup only).
+ */
+function formatPanelLogLineHtml(string $line): string
+{
+    $escaped = h($line);
+    $patterns = [
+        '/\b(ERROR|CRITICAL|FATAL)\b/i' => '<span class="pm-chip pm-chip-bad">$1</span>',
+        '/\b(WARN|WARNING)\b/i' => '<span class="pm-chip pm-chip-warn">$1</span>',
+        '/\b(INFO)\b/i' => '<span class="pm-chip pm-chip-ok">$1</span>',
+        '/\b(DEBUG|TRACE)\b/i' => '<span class="pm-chip pm-chip-off">$1</span>',
+    ];
+    foreach ($patterns as $pattern => $replacement) {
+        $escaped = (string) preg_replace($pattern, $replacement, $escaped);
+    }
+    return $escaped;
+}
+
 $source = (string)($_GET['source'] ?? 'daemon');
 if (!isset(PANEL_ALLOWED_LOGS[$source])) {
     $source = 'daemon';
@@ -26,72 +44,71 @@ $lines = normalizePanelLogLines((int)($_GET['lines'] ?? PANEL_LOG_LINES_DEFAULT)
 $result = readPanelLogTail($source, $lines);
 
 $sourceLabel = match ($source) {
-    'daemon' => 'Демон (mail-proxy-daemon.log)',
-    'web' => 'Веб-панель (web_admin.log)',
+    'daemon' => __('logs.source_daemon_long'),
+    'web' => __('logs.source_web_long'),
     default => $source,
 };
+$meta = __('logs.meta', [
+    'source' => $sourceLabel,
+    'path' => $result['path'] !== '' ? $result['path'] : '—',
+    'lines' => (string) $lines,
+]);
+$linesLabel = __('logs.lines_range', [
+    'min' => (string) PANEL_LOG_LINES_MIN,
+    'max' => (string) PANEL_LOG_LINES_MAX,
+]);
 ?>
 <!DOCTYPE html>
 <html lang="<?= h(panelHtmlLang()) ?>">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Просмотр логов — DELTA-транзит</title>
-<style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px; background: #f4f6f8; color: #333; }
-    .nav { background: #2c3e50; padding: 10px 20px; display: flex; gap: 20px; align-items: center; }
-    .nav a { color: #ecf0f1; text-decoration: none; }
-    .nav a:hover { color: #3498db; }
-    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-    h1 { font-size: 22px; margin-bottom: 16px; }
-    .controls { background: #fff; padding: 16px; border-radius: 6px; margin-bottom: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .controls label { font-size: 13px; }
-    .controls select, .controls input { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
-    .btn { display: inline-block; padding: 6px 14px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 13px; }
-    .log-box { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 6px; font-family: Consolas, monospace; font-size: 12px; max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word; }
-    .error { background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 4px; color: #856404; margin-bottom: 16px; }
-    .meta { color: #666; font-size: 12px; margin-bottom: 12px; }
-</style>
+<title><?= h(__('logs.title')) ?> — <?= h(__('app.title_suffix')) ?></title>
+<?php require_once __DIR__ . '/includes/panel_brand.php'; renderPanelFaviconLinks(); ?>
+<script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="/assets/panel-modal.css">
 </head>
-<body>
+<body class="bg-gray-100 min-h-screen">
 <div class="app-shell">
 <?php renderPanelSidebar(); ?>
 <main class="app-main">
-<div class="container" style="max-width:none;margin:0;padding:0">
-    <h1>Просмотр логов</h1>
+    <div class="pm-head">
+        <h1><?= h(__('logs.title')) ?></h1>
+    </div>
 
-    <form method="get" action="/logs.php" class="controls">
-        <label>Источник
-            <select name="source">
-                <option value="daemon" <?= $source === 'daemon' ? 'selected' : '' ?>>Демон</option>
-                <option value="web" <?= $source === 'web' ? 'selected' : '' ?>>Веб-панель</option>
-            </select>
-        </label>
-        <label>Строк (<?= PANEL_LOG_LINES_MIN ?>–<?= PANEL_LOG_LINES_MAX ?>)
-            <input type="number" name="lines" value="<?= $lines ?>" min="<?= PANEL_LOG_LINES_MIN ?>" max="<?= PANEL_LOG_LINES_MAX ?>">
-        </label>
-        <button type="submit" class="btn">Обновить</button>
-        <a href="/logs.php?source=<?= h($source) ?>&lines=<?= $lines ?>" class="btn">↻ Перезагрузить</a>
-    </form>
+    <div class="pm-card">
+        <form method="get" action="/logs.php" class="pm-filter-bar">
+            <div class="pm-f">
+                <label for="log-source"><?= h(__('logs.source_label')) ?></label>
+                <select id="log-source" name="source">
+                    <option value="daemon" <?= $source === 'daemon' ? 'selected' : '' ?>><?= h(__('logs.source_daemon')) ?></option>
+                    <option value="web" <?= $source === 'web' ? 'selected' : '' ?>><?= h(__('logs.source_web')) ?></option>
+                </select>
+            </div>
+            <div class="pm-f">
+                <label for="log-lines"><?= h($linesLabel) ?></label>
+                <input id="log-lines" type="number" name="lines" value="<?= (int) $lines ?>"
+                       min="<?= PANEL_LOG_LINES_MIN ?>" max="<?= PANEL_LOG_LINES_MAX ?>">
+            </div>
+            <button type="submit" class="pm-btn pm-btn-primary"><?= h(__('logs.refresh')) ?></button>
+            <a href="/logs.php?source=<?= h(urlencode($source)) ?>&amp;lines=<?= (int) $lines ?>"
+               class="pm-btn"><?= h(__('logs.reload')) ?></a>
+        </form>
 
-    <p class="meta">
-        <?= h($sourceLabel) ?> · <?= h($result['path']) ?> · показано до <?= $lines ?> строк (новые сверху)
-    </p>
+        <p class="pm-log-meta"><?= h($meta) ?></p>
 
-    <?php if (!$result['readable']): ?>
-        <div class="error"><?= h($result['error']) ?></div>
-    <?php elseif ($result['lines'] === []): ?>
-        <div class="log-box">(пусто)</div>
-    <?php else: ?>
-        <div class="log-box"><?php
-            foreach ($result['lines'] as $line) {
-                echo h($line) . "\n";
-            }
-        ?></div>
-    <?php endif; ?>
-</div>
+        <?php if (!$result['readable']): ?>
+            <div class="pm-notice-warn" role="alert"><?= h($result['error']) ?></div>
+        <?php elseif ($result['lines'] === []): ?>
+            <div class="pm-log-view"><?= h(__('logs.empty')) ?></div>
+        <?php else: ?>
+            <div class="pm-log-view"><?php
+                foreach ($result['lines'] as $line) {
+                    echo '<span class="pm-log-line">' . formatPanelLogLineHtml($line) . "</span>\n";
+                }
+            ?></div>
+        <?php endif; ?>
+    </div>
 </main>
 </div>
 </body>
