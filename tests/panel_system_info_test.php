@@ -20,55 +20,58 @@ require_once $root . '/web/includes/i18n.php';
 setPanelLang('en');
 require_once $root . '/web/includes/system_info.php';
 require_once $root . '/web/includes/panel_service_status.php';
+require_once $root . '/web/includes/helpers.php';
 
-$os = systemInfoParseOsRelease("PRETTY_NAME=\"Ubuntu 22.04.3 LTS\"\nVERSION_ID=\"22.04\"\n");
-assert_true($os['pretty'] === 'Ubuntu 22.04.3 LTS', 'os-release pretty');
-assert_true($os['version_id'] === '22.04', 'os-release version');
-
-$ired = systemInfoParseIredmailRelease("1.6.8\n");
-assert_true($ired === '1.6.8', 'iredmail release line');
-
-$ips = systemInfoParseIpv4Addrs("2: eth0    inet 192.168.1.10/24 scope global\n");
-assert_true($ips === ['192.168.1.10'], 'ipv4 parse skips loopback');
-
-$ver = systemInfoParseDpkgVersion('3.6.4', 'install ok installed');
-assert_true($ver === '3.6.4', 'dpkg version parse');
-
-$tcp = "  sl  local_address rem_address   st\n   0: 00000000:001B 00000000:0000 0A\n";
-$ports = systemInfoParseListeningPorts($tcp, '');
-assert_true(!empty($ports[443]) || !empty($ports[27]), 'proc net tcp listen parse');
-
-$class = systemInfoClassifyTlsPeer(['validTo_time_t' => time() + 86400 * 30, 'subject' => ['CN' => 'a'], 'issuer' => ['O' => 'CA']], time());
-assert_true($class['chip'] === 'pm-chip-ok', 'tls ok chip');
-
-assert_true(systemInfoDnsHasSpf([['txt' => 'v=spf1 mx -all']]) === 'yes', 'spf detect');
-assert_true(systemInfoDnsHasDmarc([['txt' => 'v=DMARC1; p=none']]) === 'yes', 'dmarc detect');
-
-assert_true(systemInfoRoleLabel('test') === __('system_info.role_test'), 'role map');
-
-$runner = static function (array $argv): ?string {
-    if ($argv === ['hostname', '-f']) {
-        return 'mail.example.test';
-    }
-    return null;
+$checks = 0;
+$check = static function (bool $c, string $m) use (&$checks): void {
+    $checks++;
+    assert_true($c, $m);
 };
+
+$check(systemInfoParseOsRelease("PRETTY_NAME=\"Ubuntu 22.04.3 LTS\"\n")['pretty'] === 'Ubuntu 22.04.3 LTS', 'os-release pretty');
+$check(systemInfoParseIredmailRelease("1.6.8\n") === '1.6.8', 'iredmail release');
+$check(systemInfoParseIpv4Addrs("2: eth0 inet 192.168.1.10/24\n") === ['192.168.1.10'], 'ipv4 parse');
+$check(systemInfoParseDpkgVersion('1.0', 'install ok installed') === '1.0', 'dpkg version');
+$check(systemInfoParseDpkgVersion('x', 'no packages found') === null, 'dpkg not installed');
+
+$tcp443 = "  sl  local_address rem_address   st\n   0: 00000000:01BB 00000000:0000 0A\n";
+$check(!empty(systemInfoParseListeningPorts($tcp443, '')[443]), 'tcp listen 443');
+
+$now = 1700000000;
+$check(systemInfoClassifyTlsPeer(['validTo_time_t' => $now + 86400 * 30], $now)['chip'] === 'pm-chip-ok', 'tls ok');
+$check(systemInfoClassifyTlsPeer(['validTo_time_t' => $now + 86400 * 10], $now)['chip'] === 'pm-chip-warn', 'tls warn 10d');
+$check(systemInfoClassifyTlsPeer(['validTo_time_t' => $now - 86400], $now)['chip'] === 'pm-chip-bad', 'tls expired');
+
+$check(systemInfoDnsHasSpf([['txt' => 'v=spf1 mx']]) === 'yes', 'spf yes');
+$check(systemInfoDnsHasSpf([]) === 'no', 'spf no');
+$check(systemInfoDnsHasSpf(false) === 'na', 'spf na');
+$check(systemInfoDnsHasDmarc([['txt' => 'v=DMARC1;']]) === 'yes', 'dmarc yes');
+$check(systemInfoDnsHasDkim([['txt' => 'k=rsa; p=abc']]) === 'yes', 'dkim yes');
+
+$check(systemInfoRoleLabel('production') === __('system_info.role_production'), 'role production');
+$check(systemInfoOptionalString('PANEL_SERVER_ROLE') === '', 'role fallback empty');
+
+$runner = static fn(array $a): ?string => $a === ['hostname', '-f'] ? 'host.example.test' : null;
 $passport = systemInfoCollectPassport($runner);
-assert_true($passport['fqdn'] === 'mail.example.test', 'passport fqdn from runner');
+$check($passport['fqdn'] === 'host.example.test', 'passport inject runner');
+$check(str_contains(h('<script>'), '&lt;'), 'h escapes contact-like input');
 
-$state = panelServiceStateToDisplay('loaded', 'active');
-assert_true($state['display'] === 'active', 'service active');
+$resolved = panelServiceResolveUnit(['mariadb.service', 'mysql.service'], static fn($a) => "loaded\nactive\n");
+$check($resolved['display'] === 'active', 'alias mariadb resolves');
+$notFound = panelServiceResolveUnit(['missing.service'], static fn($a) => null);
+$check($notFound['display'] === 'not_installed', 'not installed');
 
-$bad = panelHealthOverallChip(
-    [['critical' => true, 'display' => 'inactive']],
-    ['status' => 'active']
-);
-assert_true($bad['class'] === 'pm-chip-bad', 'overall bad on critical inactive');
+$check(panelOptionalServiceChip('not_installed', 'pm-chip-bad') === 'pm-chip-warn', 'optional not installed warn');
+
+$sys = (string) file_get_contents($root . '/web/includes/system_info.php');
+$check(str_contains($sys, 'if (!isPanelMasterDisplay())'), 'master-only render gate');
 
 $dash = (string) file_get_contents($root . '/web/includes/dashboard_ui.php');
-assert_true(str_contains($dash, 'isPanelMasterDisplay') || str_contains($dash, 'renderDashboardSystemInfoSection'), 'system section gated');
-assert_true(str_contains($dash, 'DASHBOARD_MAIL_ACTIVITY_HOURS'), 'mail window constant');
-assert_true(!str_contains($dash, 'dashboard.quick_nav'), 'quick nav removed');
+$check(str_contains($dash, 'DASHBOARD_MAIL_ACTIVITY_HOURS'), '24h constant');
+$check(!str_contains($dash, 'dashboard.quick_nav'), 'quick nav removed');
+$check(!preg_match('/pm-head[\s\S]*open_logs/', $dash), 'no logs link in dashboard head');
 
+echo "CHECK_COUNT {$checks}\n";
 if ($failures > 0) {
     exit(1);
 }

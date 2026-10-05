@@ -11,6 +11,7 @@ require_once __DIR__ . '/panel_service_status.php';
 require_once __DIR__ . '/log_tail.php';
 require_once __DIR__ . '/internet_status.php';
 require_once __DIR__ . '/system_info.php';
+require_once __DIR__ . '/dashboard_world_clocks.php';
 
 if (!defined('DASHBOARD_MAIL_ACTIVITY_HOURS')) {
     define('DASHBOARD_MAIL_ACTIVITY_HOURS', 24);
@@ -281,8 +282,8 @@ function renderDashboardUi(): void
     ?>
     <div class="pm-head">
         <h1><?= h(__('dashboard.title')) ?></h1>
-        <a href="/logs.php" class="pm-btn pm-btn-sm"><?= h(__('dashboard.open_logs')) ?></a>
     </div>
+    <?php renderDashboardWorldClocksWidget(); ?>
     <p class="pm-hint"><?= h(__('dashboard.intro')) ?></p>
 
     <!-- 1) Entity summary -->
