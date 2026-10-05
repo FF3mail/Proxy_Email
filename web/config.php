@@ -38,6 +38,14 @@ if (!defined('PUBLIC_BASE_URL')) {
 //     ['host' => 'imap.gmail.com', 'port' => 993],
 // ]);
 
+// Optional: server passport fields for the master-only dashboard section (issue #71).
+// define('PANEL_SERVER_EXTERNAL_IP', '203.0.113.10');
+// define('PANEL_SERVER_ROLE', 'test'); // production | test | backup_mx
+// define('PANEL_SERVER_INSTALLED_AT', 'YYYY-MM-DD');
+// define('PANEL_SERVER_INSTALLED_BY', 'name');
+// define('PANEL_SERVER_OWNER_CONTACT', 'name@example.test');
+// define('PANEL_DKIM_SELECTOR', 'dkim');
+
 // ---------------------------------------------------------------------------
 // Mailbox verification on Referent-card save (PROMPT-80 / issue #40)
 // ---------------------------------------------------------------------------
