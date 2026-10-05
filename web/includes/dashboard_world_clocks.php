@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Dashboard world clocks widget (client-side, no network).
+ * Dashboard world clocks widget (client-side, no network). Part E — replaces dashboard Logs button.
  */
 
 function renderDashboardWorldClocksWidget(): void
