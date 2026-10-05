@@ -12,6 +12,7 @@ require_once __DIR__ . '/log_tail.php';
 require_once __DIR__ . '/internet_status.php';
 require_once __DIR__ . '/system_info.php';
 require_once __DIR__ . '/dashboard_world_clocks.php';
+require_once __DIR__ . '/panel_safe.php';
 
 if (!defined('DASHBOARD_MAIL_ACTIVITY_HOURS')) {
     define('DASHBOARD_MAIL_ACTIVITY_HOURS', 24);
@@ -265,15 +266,60 @@ function dashboardRecentLogIssues(int $limit = 5): array
 
 function renderDashboardUi(): void
 {
+    panelWhitelistResetPageBudget();
     $pdo = getPdo();
-    $entities = dashboardEntityCounts($pdo);
-    $mail = dashboardMailActivityRecent($pdo);
-    $daemon = getDaemonStatus();
-    $services = panelServiceStatuses();
-    $healthChip = panelHealthOverallChip($services, $daemon);
-    $host = dashboardHostResources();
-    $issues = dashboardRecentLogIssues(5);
-    $internet = internetStatusView(internetStatusGet(false));
+
+    $entities = panelSafeBlock(
+        static fn (): array => dashboardEntityCounts($pdo),
+        'dashboard.entities',
+        [
+            'referents' => ['total' => 0, 'active' => 0, 'inactive' => 0],
+            'clients' => ['total' => 0, 'active' => 0],
+            'accounts' => ['total' => 0, 'active' => 0],
+        ]
+    );
+
+    $mail = panelSafeBlock(
+        static fn (): array => dashboardMailActivityRecent($pdo),
+        'dashboard.mail',
+        ['available' => false, 'delivered' => null, 'disposed' => null, 'skipped' => null, 'note' => __('dashboard.block_unavailable')]
+    );
+
+    $daemon = panelSafeBlock(
+        static fn (): array => getDaemonStatus(),
+        'dashboard.daemon',
+        ['status' => 'unknown', 'pid' => null, 'uptime' => '']
+    );
+
+    $services = panelSafeBlock(
+        static fn (): array => panelServiceStatuses(),
+        'dashboard.services',
+        []
+    );
+
+    $healthChip = panelSafeBlock(
+        static fn (): array => panelHealthOverallChip($services, $daemon),
+        'dashboard.health_chip',
+        ['class' => 'pm-chip-warn', 'label_key' => 'dashboard.block_unavailable']
+    );
+
+    $host = panelSafeBlock(
+        static fn (): array => dashboardHostResources(),
+        'dashboard.host',
+        ['ram_free_human' => null, 'ram_total_human' => null, 'disk_free_human' => null, 'disk_total_human' => null]
+    );
+
+    $issues = panelSafeBlock(
+        static fn (): array => dashboardRecentLogIssues(5),
+        'dashboard.log_issues',
+        []
+    );
+
+    $internet = panelSafeBlock(
+        static fn (): array => internetStatusView(internetStatusGet(false)),
+        'dashboard.internet',
+        ['status' => 'unknown', 'chip_class' => 'pm-chip-warn', 'warning' => '']
+    );
 
     $flash = $GLOBALS['flash'] ?? null;
     // Keep banner flash on dashboard (not toast-only).
@@ -283,7 +329,9 @@ function renderDashboardUi(): void
     <div class="pm-head">
         <h1><?= h(__('dashboard.title')) ?></h1>
     </div>
-    <?php renderDashboardWorldClocksWidget(); ?>
+    <?php panelSafeRenderBlock('dashboard.world_clocks', static function (): void {
+        renderDashboardWorldClocksWidget();
+    }); ?>
     <p class="pm-hint"><?= h(__('dashboard.intro')) ?></p>
 
     <!-- 1) Entity summary -->
