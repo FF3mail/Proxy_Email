@@ -7,8 +7,15 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/panel_daemon_status.php';
+require_once __DIR__ . '/panel_service_status.php';
 require_once __DIR__ . '/log_tail.php';
 require_once __DIR__ . '/internet_status.php';
+require_once __DIR__ . '/system_info.php';
+require_once __DIR__ . '/dashboard_world_clocks.php';
+
+if (!defined('DASHBOARD_MAIL_ACTIVITY_HOURS')) {
+    define('DASHBOARD_MAIL_ACTIVITY_HOURS', 24);
+}
 
 function dashboardTruncate(string $text, int $max): string
 {
@@ -82,7 +89,7 @@ function dashboardEntityCounts(PDO $pdo): array
 }
 
 /**
- * Best-effort mail activity for the last hour from mail_passage_journal.
+ * Best-effort mail activity from mail_passage_journal (rolling window).
  * Returns null fields when the table is missing or unreadable (honest n/a).
  *
  * @return array{
@@ -93,8 +100,12 @@ function dashboardEntityCounts(PDO $pdo): array
  *   note: string
  * }
  */
-function dashboardMailActivityLastHour(PDO $pdo): array
+function dashboardMailActivityRecent(PDO $pdo): array
 {
+    $hours = (int) DASHBOARD_MAIL_ACTIVITY_HOURS;
+    if ($hours < 1) {
+        $hours = 24;
+    }
     $result = [
         'available' => false,
         'delivered' => null,
@@ -113,10 +124,11 @@ function dashboardMailActivityLastHour(PDO $pdo): array
             return $result;
         }
 
+        $interval = (int) $hours;
         $stmt = $pdo->query(
             "SELECT event_type, COUNT(*) AS cnt
              FROM mail_passage_journal
-             WHERE event_ts >= (UTC_TIMESTAMP() - INTERVAL 1 HOUR)
+             WHERE event_ts >= (UTC_TIMESTAMP() - INTERVAL {$interval} HOUR)
              GROUP BY event_type"
         );
         $delivered = 0;
@@ -255,8 +267,10 @@ function renderDashboardUi(): void
 {
     $pdo = getPdo();
     $entities = dashboardEntityCounts($pdo);
-    $mail = dashboardMailActivityLastHour($pdo);
+    $mail = dashboardMailActivityRecent($pdo);
     $daemon = getDaemonStatus();
+    $services = panelServiceStatuses();
+    $healthChip = panelHealthOverallChip($services, $daemon);
     $host = dashboardHostResources();
     $issues = dashboardRecentLogIssues(5);
     $internet = internetStatusView(internetStatusGet(false));
@@ -268,8 +282,8 @@ function renderDashboardUi(): void
     ?>
     <div class="pm-head">
         <h1><?= h(__('dashboard.title')) ?></h1>
-        <a href="/logs.php" class="pm-btn pm-btn-sm"><?= h(__('dashboard.open_logs')) ?></a>
     </div>
+    <?php renderDashboardWorldClocksWidget(); ?>
     <p class="pm-hint"><?= h(__('dashboard.intro')) ?></p>
 
     <!-- 1) Entity summary -->
@@ -350,11 +364,25 @@ function renderDashboardUi(): void
                 default => __('dashboard.daemon_unknown'),
             };
             ?>
+            <p style="margin:0 0 10px"><?= h(__('dashboard.health_overall')) ?>
+                <span class="pm-chip <?= h($healthChip['class']) ?>"><?= h(__($healthChip['label_key'])) ?></span>
+            </p>
             <dl class="pm-dl">
                 <dt><?= h(__('dashboard.daemon_status')) ?></dt>
                 <dd><span class="pm-chip <?= h($chip) ?>"><?= h($stLabel) ?></span></dd>
                 <dt><?= h(__('dashboard.internet')) ?></dt>
                 <dd><?php renderInternetStatusChip($internet, 'dashboard'); ?></dd>
+                <?php foreach ($services as $svc):
+                    $svcChip = $svc['chip'];
+                    if (!$svc['critical']) {
+                        $svcChip = panelOptionalServiceChip($svc['display'], $svcChip);
+                    } elseif (in_array($svc['display'], ['inactive', 'failed', 'unknown'], true)) {
+                        $svcChip = 'pm-chip-bad';
+                    }
+                    ?>
+                    <dt><?= h(__($svc['label_key'])) ?></dt>
+                    <dd><span class="pm-chip <?= h($svcChip) ?>"><?= h(panelServiceDisplayLabel($svc['display'])) ?></span></dd>
+                <?php endforeach; ?>
                 <dt><?= h(__('dashboard.daemon_pid')) ?></dt>
                 <dd class="pm-mono"><?= $daemon['pid'] !== null ? (int) $daemon['pid'] : 'n/a' ?></dd>
                 <dt><?= h(__('dashboard.daemon_uptime')) ?></dt>
@@ -397,44 +425,12 @@ function renderDashboardUi(): void
         </div>
     </div>
 
-    <!-- 4) Quick navigation -->
-    <div class="pm-card" style="margin-top:4px">
-        <div class="pm-ch"><h3><?= h(__('dashboard.quick_nav')) ?></h3></div>
-        <div class="pm-quick-nav">
-            <?php
-            $links = [
-                ['href' => 'index.php?action=referent_list', 'label' => __('nav.referents'), 'icon' => '◉'],
-                ['href' => 'index.php?action=client_list', 'label' => __('nav.clients'), 'icon' => '☰'],
-                ['href' => 'index.php?action=account_list', 'label' => __('nav.internet_accounts'), 'icon' => '@'],
-                ['href' => 'index.php?action=local_account_list', 'label' => __('nav.local_accounts'), 'icon' => '✉'],
-                ['href' => 'index.php?action=provider_list', 'label' => __('nav.providers'), 'icon' => '⚿'],
-                ['href' => '/relationship-status.php', 'label' => __('nav.journal'), 'icon' => '≣'],
-            ];
-            if (isPanelMasterDisplay()) {
-                $links[] = ['href' => 'index.php?action=operator_list', 'label' => __('nav.user_accounts'), 'icon' => '☺'];
-            }
-            $links[] = ['href' => '/logs.php', 'label' => __('nav.logs'), 'icon' => '▤'];
-            foreach ($links as $link):
-                ?>
-                <a class="pm-quick-card" href="<?= h($link['href']) ?>">
-                    <span class="pm-quick-ic" aria-hidden="true"><?= h($link['icon']) ?></span>
-                    <span><?= h($link['label']) ?></span>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
+    <?php renderDashboardSystemInfoSection($pdo); ?>
 
     <style>
     .pm-dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
-    .pm-quick-nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
-    .pm-quick-card{
-      display:flex;flex-direction:column;gap:8px;align-items:flex-start;
-      border:1px solid var(--pm-border);border-radius:8px;padding:14px 16px;
-      text-decoration:none;color:var(--pm-text);background:var(--pm-surface2);
-    }
-    .pm-quick-card:hover{border-color:var(--pm-accent);background:var(--pm-accent-bg)}
-    .pm-quick-ic{font-size:18px;line-height:1}
     </style>
     <?php
+    renderInternetStatusPollScript();
     renderFooter();
 }

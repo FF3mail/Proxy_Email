@@ -114,8 +114,9 @@ assert_true(!str_contains($index, "'internet_status'") || !preg_match("/\\\$post
 assert_true(str_contains($dash, "h(__('dashboard.internet'))"), 'dashboard Internet row');
 assert_true(str_contains($dash, 'internetStatusGet(false)'), 'dashboard reads cache only');
 assert_true(str_contains($dash, 'data-internet-warning'), 'dashboard offline warning slot');
-assert_true(str_contains($nav, "renderInternetStatusChip"), 'sidebar chip');
-assert_true(str_contains($nav, 'renderInternetStatusPollScript'), 'sidebar poll script');
+assert_true(str_contains($dash, "renderInternetStatusPollScript()"), 'dashboard poll script');
+assert_true(!str_contains($nav, 'renderInternetStatusChip'), 'sidebar does not render internet chip');
+assert_true(!str_contains($nav, 'renderInternetStatusPollScript'), 'sidebar does not poll internet');
 
 assert_true(str_contains($helper, 'stream_socket_client'), 'TCP probe');
 assert_true(!str_contains($helper, 'navigator.'), 'poll JS does not use browser network APIs');
