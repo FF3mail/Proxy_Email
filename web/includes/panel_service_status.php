@@ -22,7 +22,7 @@ function panelServiceDefinitions(): array
         ['key' => 'database', 'label_key' => 'dashboard.svc_database', 'critical' => true, 'units' => ['mariadb.service', 'mysql.service', 'mysqld.service']],
         ['key' => 'amavis', 'label_key' => 'dashboard.svc_amavis', 'critical' => false, 'units' => ['amavis.service', 'amavisd.service']],
         ['key' => 'clamav', 'label_key' => 'dashboard.svc_clamav', 'critical' => false, 'units' => ['clamav-daemon.service']],
-        ['key' => 'spamassassin', 'label_key' => 'dashboard.svc_spamassassin', 'critical' => false, 'units' => ['spamassassin.service', 'spamd.service']],
+        ['key' => 'spamassassin', 'label_key' => 'dashboard.svc_spamassassin', 'critical' => false, 'units' => ['spamd.service', 'spamassassin.service']],
     ];
 }
 
