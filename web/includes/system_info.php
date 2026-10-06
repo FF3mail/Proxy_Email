@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/panel_whitelist_runner.php';
+require_once __DIR__ . '/panel_safe.php';
 
 if (!defined('PANEL_SYSTEM_INFO_CACHE')) {
     define('PANEL_SYSTEM_INFO_CACHE', sys_get_temp_dir() . '/mail-proxy-system-info.json');
@@ -333,11 +334,20 @@ function renderDashboardSystemInfoSection(?PDO $pdo = null): void
     if (!isPanelMasterDisplay()) {
         return;
     }
-    $view = systemInfoBuildView($pdo);
-    $passport = $view['passport'];
-    $software = $view['software'];
-    $security = $view['security'];
-    ?>
+    panelSafeRenderBlock('dashboard.system_info', static function () use ($pdo): void {
+        $view = panelSafeBlock(
+            static fn (): array => systemInfoBuildView($pdo),
+            'dashboard.system_info.data',
+            null
+        );
+        if (!is_array($view)) {
+            echo '<div class="pm-card" style="margin-top:4px"><p class="pm-hint">' . h(__('dashboard.block_unavailable')) . '</p></div>';
+            return;
+        }
+        $passport = $view['passport'];
+        $software = $view['software'];
+        $security = $view['security'];
+        ?>
     <div class="pm-card" style="margin-top:4px">
         <div class="pm-ch"><h3><?= h(__('system_info.title')) ?></h3></div>
         <details open><summary><?= h(__('system_info.passport_title')) ?></summary>
@@ -402,4 +412,5 @@ function renderDashboardSystemInfoSection(?PDO $pdo = null): void
         </details>
     </div>
     <?php
+    });
 }
