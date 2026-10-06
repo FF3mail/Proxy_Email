@@ -118,7 +118,6 @@ return [
 
     // Authentication
     'auth.login_title' => 'Вход — DELTA-транзит',
-    'auth.login_heading' => 'DELTA-транзит — вход',
     'auth.username' => 'Имя пользователя',
     'auth.password' => 'Пароль',
     'auth.login_button' => 'Войти',
@@ -153,7 +152,8 @@ return [
     'dashboard.mail_disposed' => 'Отклонено (disposed)',
     'dashboard.mail_skipped' => 'Пропущено (skipped)',
     'dashboard.mail_rejected' => 'Не доставлено',
-    'dashboard.health_title' => 'Хост и сервис',
+    'dashboard.host_title' => 'Хост',
+    'dashboard.services_title' => 'Сервисы',
     'dashboard.internet' => 'Интернет',
     'dashboard.internet_online' => 'Онлайн',
     'dashboard.internet_offline' => 'Нет связи',

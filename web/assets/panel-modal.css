@@ -54,7 +54,6 @@ dialog.pm-dialog::backdrop{background:var(--pm-overlay)}
 .pm-side.collapsed{width:56px}
 .pm-brand{padding:10px 12px 10px 14px;font-weight:600;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:6px;white-space:nowrap;overflow:hidden;border-bottom:1px solid #334155}
 .pm-brand-link{display:flex;align-items:center;gap:6px;min-width:0;text-decoration:none;color:inherit;flex:1;overflow:hidden}
-.pm-brand-mark{flex-shrink:0;width:28px;height:auto;display:block}
 .pm-brand-wordmarks{display:flex;flex-direction:column;gap:1px;min-width:0;max-width:148px}
 .pm-brand-delta,.pm-brand-transit{display:block;width:100%;height:auto;object-fit:contain;object-position:left center}
 .pm-brand-transit{max-width:72px;opacity:.95}
@@ -87,6 +86,43 @@ dialog.pm-dialog::backdrop{background:var(--pm-overlay)}
 .pm-filter-fieldset .pm-filter-bar{margin-bottom:0}
 .pm-table[data-readonly="1"] tbody tr{cursor:default}
 .pm-table[data-readonly="1"] tbody tr:hover{background:transparent}
+
+/* Dashboard (#82): compact layout for 1920×1080 with system-info collapsed */
+@media (min-width:1200px) and (min-height:900px){
+.app-main:has(.pm-dashboard){padding:12px 20px 14px}
+}
+.pm-dashboard .pm-head{margin-bottom:6px}
+.pm-dashboard .pm-head h1{font-size:20px}
+.pm-dashboard-intro{margin-bottom:8px!important;font-size:12px;line-height:1.35}
+.pm-dashboard-stats{margin-bottom:8px!important;gap:8px}
+.pm-dashboard .pm-stat{padding:8px 12px}
+.pm-dashboard .pm-stat b{font-size:18px}
+.pm-dashboard .pm-card{padding:12px 14px;margin-bottom:8px}
+.pm-dashboard .pm-ch{margin-bottom:6px}
+.pm-dashboard .pm-ch h3{font-size:14px}
+.pm-dashboard .pm-world-clocks{margin:0 0 8px}
+.pm-dashboard .pm-world-clocks-heading{font-size:14px;margin:0 0 6px}
+.pm-dashboard .pm-world-clock-card{padding:8px 10px}
+.pm-dashboard .pm-world-clock-time{font-size:20px}
+.pm-dashboard .pm-world-clock-date{font-size:11px;margin-top:4px}
+.pm-dashboard .pm-world-clock-meta{margin-top:4px;font-size:10px}
+.pm-dash-grid-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}
+@media (max-width:1100px){.pm-dash-grid-main{grid-template-columns:1fr}}
+.pm-dash-host-summary{margin:0 0 8px;font-size:13px}
+.pm-dl-compact{gap:4px 10px;grid-template-columns:minmax(0,38%) 1fr;font-size:13px}
+.pm-dash-inet-warn{color:var(--pm-danger);margin:6px 0 0;font-size:12px}
+.pm-dash-subhead{font-size:13px;margin:10px 0 4px;font-weight:600}
+.pm-dash-issues-scroll{max-height:72px;overflow-y:auto}
+.pm-dash-issues-empty{margin:0!important;font-size:12px}
+.pm-dash-issues-link{margin:6px 0 0}
+.pm-steps-compact li{padding:4px 0}
+.pm-dash-issue-meta{font-size:11px}
+.pm-dash-issue-msg{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.pm-svc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px;margin-bottom:4px}
+.pm-svc-item{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.pm-svc-label{font-size:13px;color:var(--pm-muted)}
+.pm-dash-daemon-meta{margin-top:8px;padding-top:6px;border-top:1px solid var(--pm-border)}
+.pm-dashboard details>summary{cursor:pointer;font-size:13px;padding:4px 0}
 .pm-cell-wrap{max-width:28rem;word-break:break-word}
 .pm-log-meta{color:var(--pm-muted);font-size:12px;margin:0 0 12px}
 .pm-log-view{background:var(--pm-surface2);border:1px solid var(--pm-border);border-radius:8px;padding:14px 16px;max-height:70vh;overflow:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--pm-text)}

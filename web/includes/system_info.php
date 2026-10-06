@@ -350,7 +350,7 @@ function renderDashboardSystemInfoSection(?PDO $pdo = null): void
         ?>
     <div class="pm-card" style="margin-top:4px">
         <div class="pm-ch"><h3><?= h(__('system_info.title')) ?></h3></div>
-        <details open><summary><?= h(__('system_info.passport_title')) ?></summary>
+        <details><summary><?= h(__('system_info.passport_title')) ?></summary>
             <dl class="pm-dl">
                 <?php foreach ([
                     'fqdn' => 'system_info.fqdn',
