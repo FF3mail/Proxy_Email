@@ -147,7 +147,6 @@ return [
     'dashboard.mail_na' => 'n/a',
     'dashboard.mail_na_no_journal' => 'mail_passage_journal is unavailable — reliable counts cannot be shown.',
     'dashboard.mail_na_error' => 'Could not read the passage journal — showing n/a.',
-    'dashboard.block_unavailable' => 'n/a',
     'dashboard.mail_delivered' => 'Delivered (processed)',
     'dashboard.mail_disposed' => 'Disposed',
     'dashboard.mail_skipped' => 'Skipped',

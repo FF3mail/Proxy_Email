@@ -148,7 +148,6 @@ return [
     'dashboard.mail_na' => 'n/a',
     'dashboard.mail_na_no_journal' => 'Журнал mail_passage_journal недоступен — надёжные счётчики недоступны.',
     'dashboard.mail_na_error' => 'Не удалось прочитать журнал проходов — показано n/a.',
-    'dashboard.block_unavailable' => 'н/д',
     'dashboard.mail_delivered' => 'Доставлено (processed)',
     'dashboard.mail_disposed' => 'Отклонено (disposed)',
     'dashboard.mail_skipped' => 'Пропущено (skipped)',

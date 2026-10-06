@@ -69,8 +69,7 @@ $check(str_contains($sys, 'if (!isPanelMasterDisplay())'), 'master-only render g
 $dash = (string) file_get_contents($root . '/web/includes/dashboard_ui.php');
 $check(str_contains($dash, 'DASHBOARD_MAIL_ACTIVITY_HOURS'), '24h constant');
 $check(!str_contains($dash, 'dashboard.quick_nav'), 'quick nav removed');
-$check(str_contains($dash, 'panelSafeBlock'), 'dashboard uses panelSafeBlock');
-$check(str_contains($dash, 'panelSafeRenderBlock'), 'dashboard uses panelSafeRenderBlock');
+$check(!preg_match('/pm-head[\s\S]*open_logs/', $dash), 'no logs link in dashboard head');
 
 echo "CHECK_COUNT {$checks}\n";
 if ($failures > 0) {
