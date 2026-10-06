@@ -49,7 +49,7 @@ function renderExternalAccountMailFields(?array $row, string $formKey): void
         </div>
         <div class="pm-f">
             <label><?= h(__('account.imap_port')) ?></label>
-            <input type="number" name="imap_port" min="1" max="65535" value="<?= (int) $imapPort ?>" data-mail-imap-port>
+            <input type="number" name="imap_port" min="1" max="65535" value="<?= (int) $imapPort ?>" data-mail-imap-port autocomplete="off">
             <button type="button" class="pm-btn pm-btn-sm" data-mail-port-reset="imap"><?= h(__('mail_preset.reset_port')) ?></button>
         </div>
         <div class="pm-f pm-full">
@@ -69,7 +69,7 @@ function renderExternalAccountMailFields(?array $row, string $formKey): void
         </div>
         <div class="pm-f">
             <label><?= h(__('account.smtp_port')) ?></label>
-            <input type="number" name="smtp_port" min="1" max="65535" value="<?= (int) $smtpPort ?>" data-mail-smtp-port>
+            <input type="number" name="smtp_port" min="1" max="65535" value="<?= (int) $smtpPort ?>" data-mail-smtp-port autocomplete="off">
             <button type="button" class="pm-btn pm-btn-sm" data-mail-port-reset="smtp"><?= h(__('mail_preset.reset_port')) ?></button>
         </div>
         <div class="pm-f pm-full">

@@ -157,6 +157,10 @@
       });
     }
     updateAuthHint();
+    ['imap', 'smtp'].forEach(function (proto) {
+      portEdited[proto] = false;
+      fillStandardPort(proto);
+    });
     ['imap', 'smtp'].forEach(updateHint);
   }
 

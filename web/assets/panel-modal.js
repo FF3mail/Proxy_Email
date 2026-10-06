@@ -29,7 +29,7 @@
     close: function (dialogEl, force) {
       if (!dialogEl) return;
       var skipDirty = dialogEl.getAttribute('data-pm-nodirty') === '1';
-      var isDirty = !skipDirty && (dialogEl.dataset.pmDirty === '1' || this.dirty);
+      var isDirty = !skipDirty && dialogEl.dataset.pmDirty === '1';
       var msg = this._unsaved || 'Есть несохранённые изменения. Закрыть без сохранения?';
       if (!force && isDirty && !window.confirm(msg)) return;
       dialogEl.close();

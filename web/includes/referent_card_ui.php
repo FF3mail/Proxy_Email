@@ -893,6 +893,7 @@ function renderReferentCardUi(): void
       document.addEventListener('keydown', function (e) {
         var openDlg = document.querySelector('dialog.pm-dialog[open]');
         if (openDlg || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (document.querySelector('dialog.pm-dialog[data-pm-dirty="1"]')) return;
         var tag = (document.activeElement && document.activeElement.tagName) || '';
         if (/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) return;
         var i = '1234'.indexOf(e.key);
