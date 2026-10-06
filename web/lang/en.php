@@ -342,6 +342,8 @@ return [
     'mail_preset.yandex' => 'Yandex Mail',
     'mail_preset.mailru' => 'Mail.ru',
     'mail_preset.microsoft365' => 'Microsoft 365 / Outlook',
+    'mail_preset.gmail_auth_hint' => 'Gmail usually requires an app password or OAuth2 for IMAP/SMTP — use OAuth2 in this form when available.',
+    'mail_preset.microsoft365_auth_hint' => 'Microsoft 365 often requires OAuth2 or an app password; basic password may be disabled by tenant policy.',
 
     // Mailbox verification on save (PROMPT-80 / issue #40)
     'mailbox_verify.invalid_email' => 'Invalid email address',
@@ -354,6 +356,7 @@ return [
     'mailbox_verify.oauth_token_expired' => 'Stored OAuth access token is expired — authorize again. Account settings were saved without a live login probe.',
     'mailbox_verify.invalid_credentials_chars' => 'Login, password, or email contains disallowed control characters',
     'mailbox_verify.imap_host_invalid' => 'IMAP host or port is invalid',
+    'mailbox_verify.host_field_invalid' => 'Mail server hostname is invalid (check for spaces, URL prefixes, or a port in the host field)',
     'mailbox_verify.smtp_host_invalid' => 'SMTP host or port is invalid',
     'mailbox_verify.imap_encryption_invalid' => 'IMAP encryption must be ssl, tls, or none',
     'mailbox_verify.smtp_encryption_invalid' => 'SMTP encryption must be ssl, tls, or none',

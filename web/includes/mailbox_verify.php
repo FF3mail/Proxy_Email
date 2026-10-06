@@ -24,6 +24,12 @@ declare(strict_types=1);
 if (!defined('MAILBOX_VERIFY_CONNECT_TIMEOUT')) {
     define('MAILBOX_VERIFY_CONNECT_TIMEOUT', 5.0);
 }
+if (!defined('MAILBOX_VERIFY_CONNECT_PHASE_BUDGET')) {
+    define('MAILBOX_VERIFY_CONNECT_PHASE_BUDGET', 10.0);
+}
+if (!defined('MAILBOX_VERIFY_CONNECT_MAX_IPS')) {
+    define('MAILBOX_VERIFY_CONNECT_MAX_IPS', 4);
+}
 if (!defined('MAILBOX_VERIFY_IO_TIMEOUT')) {
     define('MAILBOX_VERIFY_IO_TIMEOUT', 5.0);
 }
@@ -275,6 +281,55 @@ function mailboxVerifyNormalizeConnectionIdentity(array $row): array
 function mailboxVerifyConnectionIdentityEquals(array $a, array $b): bool
 {
     return mailboxVerifyNormalizeConnectionIdentity($a) === mailboxVerifyNormalizeConnectionIdentity($b);
+}
+
+/**
+ * Normalize a mail-server hostname for probes (IMAP/SMTP). Rejects malformed input.
+ *
+ * @return array{ok:true, host:string}|array{ok:false, code:string}
+ */
+function mailboxVerifyNormalizeMailHost(string $host): array
+{
+    $raw = trim($host);
+    if ($raw === '') {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+    if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $raw) !== 0) {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+    if (str_contains($raw, '/') || str_contains($raw, '\\')) {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+    if (preg_match('/\s/u', $raw) === 1) {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+    if (preg_match('/:\d+$/', $raw) === 1) {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+
+    $bare = rtrim(strtolower($raw), '.');
+    if ($bare === '') {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+
+    if (filter_var($bare, FILTER_VALIDATE_IP)) {
+        return ['ok' => true, 'host' => $bare];
+    }
+
+    if (function_exists('idn_to_ascii')) {
+        $variant = defined('INTL_IDNA_VARIANT_UTS46') ? INTL_IDNA_VARIANT_UTS46 : 0;
+        $ascii = idn_to_ascii($bare, IDNA_DEFAULT, $variant);
+        if ($ascii === false || $ascii === '') {
+            return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+        }
+        $bare = strtolower($ascii);
+    }
+
+    if (strlen($bare) > 253 || !preg_match('/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i', $bare)) {
+        return ['ok' => false, 'code' => 'mailbox_verify.host_field_invalid'];
+    }
+
+    return ['ok' => true, 'host' => $bare];
 }
 
 /**
@@ -980,7 +1035,8 @@ function mailboxVerifyOrderConnectIps(array $ips): array
 }
 
 /**
- * Dial using SSRF-pinned IPs; try each allowed address (IPv4 first).
+ * Dial using SSRF-pinned IPs; try each allowed address (IPv4 first when several exist).
+ * Uses only the guard-supplied list (no extra DNS). Respects a connect-phase deadline.
  *
  * @param list<string> $ips
  * @return resource|MailboxVerifyStream
@@ -991,17 +1047,28 @@ function mailboxVerifyConnectPinned(
     string $transportEncryption,
     float $timeout,
     array $ips,
-    ?string $peerName = null
+    ?string $peerName = null,
+    ?float $phaseDeadline = null
 ) {
     $ordered = mailboxVerifyOrderConnectIps($ips);
+    $maxIps = (int) MAILBOX_VERIFY_CONNECT_MAX_IPS;
+    if ($maxIps > 0) {
+        $ordered = array_slice($ordered, 0, $maxIps);
+    }
     if ($ordered === []) {
         throw new MailboxVerifyTransportException('connect', 'connection failed');
     }
 
+    $deadline = $phaseDeadline ?? (mailboxVerifyNow() + (float) MAILBOX_VERIFY_CONNECT_PHASE_BUDGET);
     $last = null;
     foreach ($ordered as $ip) {
+        $remaining = $deadline - mailboxVerifyNow();
+        if ($remaining <= 0) {
+            throw new MailboxVerifyTransportException('timeout', 'connect phase deadline');
+        }
+        $attemptTimeout = min($timeout, max(0.5, $remaining));
         try {
-            return mailboxVerifyConnect($host, $port, $transportEncryption, $timeout, $ip, $peerName);
+            return mailboxVerifyConnect($host, $port, $transportEncryption, $attemptTimeout, $ip, $peerName);
         } catch (MailboxVerifyTransportException $e) {
             $last = $e;
             if (!in_array($e->getKind(), ['connect', 'tls'], true)) {
@@ -1270,8 +1337,9 @@ function mailboxVerifyImapLogin(
         $pinList = is_array($pinIps) && $pinIps !== []
             ? $pinIps
             : ($connectIp !== null && $connectIp !== '' ? [$connectIp] : []);
+        $connectDeadline = mailboxVerifyNow() + (float) MAILBOX_VERIFY_CONNECT_PHASE_BUDGET;
         $stream = $pinList !== []
-            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName)
+            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName, $connectDeadline)
             : mailboxVerifyConnect($host, $port, $connectEnc, $timeout, null, $peerName);
 
         // Greeting.
@@ -1511,8 +1579,9 @@ function mailboxVerifySmtpLogin(
         $pinList = is_array($pinIps) && $pinIps !== []
             ? $pinIps
             : ($connectIp !== null && $connectIp !== '' ? [$connectIp] : []);
+        $connectDeadline = mailboxVerifyNow() + (float) MAILBOX_VERIFY_CONNECT_PHASE_BUDGET;
         $stream = $pinList !== []
-            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName)
+            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName, $connectDeadline)
             : mailboxVerifyConnect($host, $port, $connectEnc, $timeout, null, $peerName);
 
         if (mailboxVerifySmtpReadCode($stream, $deadline) !== 220) {
@@ -1905,17 +1974,28 @@ function verifyExternalReferentMailbox(array $account, ?array &$session = null):
         }
     }
 
-    $imapHost = trim((string) ($account['imap_host'] ?? ''));
+    $imapHostRaw = (string) ($account['imap_host'] ?? '');
     $imapPort = (int) ($account['imap_port'] ?? 0);
     $imapEnc = mailboxVerifyNormalizeEncryption((string) ($account['imap_encryption'] ?? 'ssl'), 'ssl');
-    $smtpHost = trim((string) ($account['smtp_host'] ?? ''));
+    $smtpHostRaw = (string) ($account['smtp_host'] ?? '');
     $smtpPort = (int) ($account['smtp_port'] ?? 0);
     $smtpEnc = mailboxVerifyNormalizeEncryption((string) ($account['smtp_encryption'] ?? 'tls'), 'tls');
 
-    if ($imapHost === '' || $imapPort < 1 || $imapPort > 65535) {
+    $imapNorm = mailboxVerifyNormalizeMailHost($imapHostRaw);
+    if (empty($imapNorm['ok'])) {
+        return mailboxVerifyFail((string) ($imapNorm['code'] ?? 'mailbox_verify.host_field_invalid'), 'imap');
+    }
+    $smtpNorm = mailboxVerifyNormalizeMailHost($smtpHostRaw);
+    if (empty($smtpNorm['ok'])) {
+        return mailboxVerifyFail((string) ($smtpNorm['code'] ?? 'mailbox_verify.host_field_invalid'), 'smtp');
+    }
+    $imapHost = $imapNorm['host'];
+    $smtpHost = $smtpNorm['host'];
+
+    if ($imapPort < 1 || $imapPort > 65535) {
         return mailboxVerifyFail('mailbox_verify.imap_host_invalid', 'imap');
     }
-    if ($smtpHost === '' || $smtpPort < 1 || $smtpPort > 65535) {
+    if ($smtpPort < 1 || $smtpPort > 65535) {
         return mailboxVerifyFail('mailbox_verify.smtp_host_invalid', 'smtp');
     }
     if (!in_array($imapEnc, ['ssl', 'tls', 'none'], true)) {

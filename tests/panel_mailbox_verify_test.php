@@ -925,6 +925,51 @@ $greetMsg = mailboxVerifyMessage(mailboxVerifyMapTransportFail(
 assert_true(stripos($greetMsg, 'smtp.example') === false && stripos($greetMsg, 'example.test') === false, 'P8 greeting message has no hostname');
 
 // ===========================================================================
+// SECTION Q — Mail host normalization (verify module)
+// ===========================================================================
+$okHost = mailboxVerifyNormalizeMailHost('  IMAP.Example.COM.  ');
+assert_true(!empty($okHost['ok']) && $okHost['host'] === 'imap.example.com', 'Q1 trim lower trailing dot');
+$badScheme = mailboxVerifyNormalizeMailHost('smtp://mail.example.test');
+assert_true(empty($badScheme['ok']) && ($badScheme['code'] ?? '') === 'mailbox_verify.host_field_invalid', 'Q2 rejects scheme');
+$badPort = mailboxVerifyNormalizeMailHost('mail.example.test:465');
+assert_true(empty($badPort['ok']), 'Q3 rejects embedded port');
+$badSpace = mailboxVerifyNormalizeMailHost("mail.ex ample.test");
+assert_true(empty($badSpace['ok']), 'Q4 rejects internal whitespace');
+$upperOnly = mailboxVerifyNormalizeMailHost('MAIL.EXAMPLE.TEST');
+assert_true(!empty($upperOnly['ok']) && $upperOnly['host'] === 'mail.example.test', 'Q5 upper case normalizes');
+
+// ===========================================================================
+// SECTION R — Connect phase budget + guard IP list only
+// ===========================================================================
+assert_true((int) MAILBOX_VERIFY_CONNECT_MAX_IPS === 4, 'R1 max 4 pinned attempts');
+assert_true((float) MAILBOX_VERIFY_CONNECT_PHASE_BUDGET === 10.0, 'R2 connect phase budget 10s');
+$attemptIps = [];
+$GLOBALS['mailbox_verify_clock_hook'] = static function (): float {
+    static $t = 1000.0;
+    $t += 0.1;
+    return $t;
+};
+$failStream = new MailboxVerifyStream(['220 ok']);
+$GLOBALS['mailbox_verify_connect_hook'] = static function (
+    string $host,
+    int $port,
+    string $enc,
+    float $timeout,
+    ?string $connectIp
+) use (&$attemptIps, $failStream): MailboxVerifyStream {
+    $attemptIps[] = $connectIp;
+    if (count($attemptIps) === 1) {
+        throw new MailboxVerifyTransportException('connect', 'first fail');
+    }
+    return $failStream;
+};
+$deadline = 1000.0 + 10.0;
+mailboxVerifyConnectPinned('mx.example.test', 465, 'ssl', 5.0, ['198.51.100.10', '203.0.113.5'], 'mx.example.test', $deadline);
+assert_true($attemptIps === ['198.51.100.10', '203.0.113.5'], 'R3 tries second IP after first connect fail');
+$GLOBALS['mailbox_verify_connect_hook'] = null;
+$GLOBALS['mailbox_verify_clock_hook'] = null;
+
+// ===========================================================================
 // SECTION O — Hooks guard (subprocess; MAILBOX_VERIFY_ALLOW_HOOKS undefined)
 // ===========================================================================
 $mvPath = realpath(__DIR__ . '/../web/includes/mailbox_verify.php');

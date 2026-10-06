@@ -343,6 +343,8 @@ return [
     'mail_preset.yandex' => 'Яндекс Почта',
     'mail_preset.mailru' => 'Mail.ru',
     'mail_preset.microsoft365' => 'Microsoft 365 / Outlook',
+    'mail_preset.gmail_auth_hint' => 'Gmail обычно требует пароль приложения или OAuth2 для IMAP/SMTP — при необходимости используйте OAuth2 в этой форме.',
+    'mail_preset.microsoft365_auth_hint' => 'Microsoft 365 часто требует OAuth2 или пароль приложения; обычный пароль может быть отключён политикой.',
 
     // Mailbox verification on save (PROMPT-80 / issue #40)
     'mailbox_verify.invalid_email' => 'Некорректный адрес электронной почты',
@@ -355,6 +357,7 @@ return [
     'mailbox_verify.oauth_token_expired' => 'Срок OAuth access token истёк — авторизуйте снова. Настройки сохранены без живой проверки входа.',
     'mailbox_verify.invalid_credentials_chars' => 'Логин, пароль или email содержат недопустимые управляющие символы',
     'mailbox_verify.imap_host_invalid' => 'Некорректный IMAP-хост или порт',
+    'mailbox_verify.host_field_invalid' => 'Некорректное имя почтового сервера (пробелы, префикс URL или порт в поле хоста)',
     'mailbox_verify.smtp_host_invalid' => 'Некорректный SMTP-хост или порт',
     'mailbox_verify.imap_encryption_invalid' => 'Шифрование IMAP: ssl, tls или none',
     'mailbox_verify.smtp_encryption_invalid' => 'Шифрование SMTP: ssl, tls или none',
