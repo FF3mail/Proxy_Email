@@ -609,18 +609,10 @@ function renderReferentCardUi(): void
                         <option value="oauth2">OAuth2</option>
                     </select>
                 </div>
-                <div class="pm-sect">Входящая почта (IMAP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="993"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="imap_encryption"><option value="ssl">SSL/TLS</option><option value="tls">STARTTLS</option><option value="none">Без шифрования</option></select>
-                </div>
-                <div class="pm-sect">Исходящая почта (SMTP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="587"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="smtp_encryption"><option value="tls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">Без шифрования</option></select>
-                </div>
+                <?php
+                require_once __DIR__ . '/panel_mail_account_fields.php';
+                renderExternalAccountMailFields(null, 'create');
+                ?>
                 <div class="pm-f pm-full" data-plain-only="create">
                     <label>Пароль *</label>
                     <input type="password" name="password" autocomplete="new-password">
@@ -663,26 +655,7 @@ function renderReferentCardUi(): void
                         <option value="oauth2" <?= $row['auth_type'] === 'oauth2' ? 'selected' : '' ?>>OAuth2</option>
                     </select>
                 </div>
-                <div class="pm-sect">Входящая почта (IMAP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required value="<?= h((string) $row['imap_host']) ?>"></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="<?= (int) $row['imap_port'] ?>"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="imap_encryption">
-                        <?php foreach (['ssl' => 'SSL/TLS', 'tls' => 'STARTTLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>" <?= $row['imap_encryption'] === $k ? 'selected' : '' ?>><?= h($lbl) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="pm-sect">Исходящая почта (SMTP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required value="<?= h((string) $row['smtp_host']) ?>"></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="<?= (int) $row['smtp_port'] ?>"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="smtp_encryption">
-                        <?php foreach (['tls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>" <?= $row['smtp_encryption'] === $k ? 'selected' : '' ?>><?= h($lbl) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
+                <?php renderExternalAccountMailFields($row, 'edit'); ?>
                 <div class="pm-f pm-full" data-plain-only="edit">
                     <label>Пароль</label>
                     <input type="password" name="password" placeholder="оставьте пустым, чтобы не менять" autocomplete="new-password">
@@ -930,6 +903,7 @@ function renderReferentCardUi(): void
       });
     })();
     </script>
+    <script src="assets/referent-mail-presets.js" defer></script>
     <?php
     renderPanelModalScripts(is_array($flash) ? $flash : null);
     ?>
