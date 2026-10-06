@@ -117,7 +117,6 @@ return [
 
     // Authentication
     'auth.login_title' => 'Login — DELTA Transit',
-    'auth.login_heading' => 'DELTA Transit — Login',
     'auth.username' => 'Username',
     'auth.password' => 'Password',
     'auth.login_button' => 'Log in',
@@ -152,7 +151,8 @@ return [
     'dashboard.mail_disposed' => 'Disposed',
     'dashboard.mail_skipped' => 'Skipped',
     'dashboard.mail_rejected' => 'Not delivered',
-    'dashboard.health_title' => 'Host & service',
+    'dashboard.host_title' => 'Host',
+    'dashboard.services_title' => 'Services',
     'dashboard.internet' => 'Internet',
     'dashboard.internet_online' => 'Online',
     'dashboard.internet_offline' => 'Offline',

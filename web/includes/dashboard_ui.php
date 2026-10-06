@@ -325,17 +325,29 @@ function renderDashboardUi(): void
     // Keep banner flash on dashboard (not toast-only).
 
     renderHeader(__('dashboard.title'));
+    $st = (string) $daemon['status'];
+    $daemonChip = match ($st) {
+        'active' => 'pm-chip-ok',
+        'inactive' => 'pm-chip-bad',
+        default => 'pm-chip-warn',
+    };
+    $stLabel = match ($st) {
+        'active' => __('dashboard.daemon_active'),
+        'inactive' => __('dashboard.daemon_inactive'),
+        default => __('dashboard.daemon_unknown'),
+    };
     ?>
+    <div class="pm-dashboard">
     <div class="pm-head">
         <h1><?= h(__('dashboard.title')) ?></h1>
     </div>
     <?php panelSafeRenderBlock('dashboard.world_clocks', static function (): void {
         renderDashboardWorldClocksWidget();
     }); ?>
-    <p class="pm-hint"><?= h(__('dashboard.intro')) ?></p>
+    <p class="pm-hint pm-dashboard-intro"><?= h(__('dashboard.intro')) ?></p>
 
     <!-- 1) Entity summary -->
-    <div class="pm-stats" style="margin-bottom:20px">
+    <div class="pm-stats pm-dashboard-stats">
         <div class="pm-stat">
             <b><?= (int) $entities['referents']['total'] ?></b>
             <span><?= h(__('dashboard.stat_referents')) ?></span>
@@ -366,9 +378,9 @@ function renderDashboardUi(): void
         </div>
     </div>
 
-    <div class="pm-dash-grid">
+    <div class="pm-dash-grid pm-dash-grid-main">
         <!-- 2) Mail activity -->
-        <div class="pm-card">
+        <div class="pm-card pm-dash-mail">
             <div class="pm-ch"><h3><?= h(__('dashboard.mail_title')) ?></h3></div>
             <?php if (!$mail['available']): ?>
                 <p class="pm-hint" style="margin:0"><?= h($mail['note'] !== '' ? $mail['note'] : __('dashboard.mail_na')) ?></p>
@@ -396,45 +408,15 @@ function renderDashboardUi(): void
             <?php endif; ?>
         </div>
 
-        <!-- 3) Host & service health -->
-        <div class="pm-card">
-            <div class="pm-ch"><h3><?= h(__('dashboard.health_title')) ?></h3></div>
-            <?php
-            $st = (string) $daemon['status'];
-            $chip = match ($st) {
-                'active' => 'pm-chip-ok',
-                'inactive' => 'pm-chip-bad',
-                default => 'pm-chip-warn',
-            };
-            $stLabel = match ($st) {
-                'active' => __('dashboard.daemon_active'),
-                'inactive' => __('dashboard.daemon_inactive'),
-                default => __('dashboard.daemon_unknown'),
-            };
-            ?>
-            <p style="margin:0 0 10px"><?= h(__('dashboard.health_overall')) ?>
+        <!-- 3) Host -->
+        <div class="pm-card pm-dash-host">
+            <div class="pm-ch"><h3><?= h(__('dashboard.host_title')) ?></h3></div>
+            <p class="pm-dash-host-summary"><?= h(__('dashboard.health_overall')) ?>
                 <span class="pm-chip <?= h($healthChip['class']) ?>"><?= h(__($healthChip['label_key'])) ?></span>
             </p>
-            <dl class="pm-dl">
-                <dt><?= h(__('dashboard.daemon_status')) ?></dt>
-                <dd><span class="pm-chip <?= h($chip) ?>"><?= h($stLabel) ?></span></dd>
+            <dl class="pm-dl pm-dl-compact">
                 <dt><?= h(__('dashboard.internet')) ?></dt>
                 <dd><?php renderInternetStatusChip($internet, 'dashboard'); ?></dd>
-                <?php foreach ($services as $svc):
-                    $svcChip = $svc['chip'];
-                    if (!$svc['critical']) {
-                        $svcChip = panelOptionalServiceChip($svc['display'], $svcChip);
-                    } elseif (in_array($svc['display'], ['inactive', 'failed', 'unknown'], true)) {
-                        $svcChip = 'pm-chip-bad';
-                    }
-                    ?>
-                    <dt><?= h(__($svc['label_key'])) ?></dt>
-                    <dd><span class="pm-chip <?= h($svcChip) ?>"><?= h(panelServiceDisplayLabel($svc['display'])) ?></span></dd>
-                <?php endforeach; ?>
-                <dt><?= h(__('dashboard.daemon_pid')) ?></dt>
-                <dd class="pm-mono"><?= $daemon['pid'] !== null ? (int) $daemon['pid'] : 'n/a' ?></dd>
-                <dt><?= h(__('dashboard.daemon_uptime')) ?></dt>
-                <dd><?= $daemon['uptime'] !== '' ? h($daemon['uptime']) : 'n/a' ?></dd>
                 <dt><?= h(__('dashboard.ram_free')) ?></dt>
                 <dd><?= $host['ram_free_human'] !== null
                     ? h($host['ram_free_human']) . ($host['ram_total_human'] ? ' / ' . h($host['ram_total_human']) : '')
@@ -444,40 +426,65 @@ function renderDashboardUi(): void
                     ? h($host['disk_free_human']) . ($host['disk_total_human'] ? ' / ' . h($host['disk_total_human']) : '')
                     : 'n/a' ?></dd>
             </dl>
-            <p class="pm-hint" data-internet-warning
-               style="color:var(--pm-danger);margin:10px 0 0"
+            <p class="pm-hint pm-dash-inet-warn" data-internet-warning
                <?= $internet['status'] === 'offline' ? '' : 'hidden' ?>><?= h((string) $internet['warning']) ?></p>
+            <h4 class="pm-dash-subhead"><?= h(__('dashboard.recent_issues')) ?></h4>
+            <div class="pm-dash-issues-scroll">
+                <?php if ($issues === []): ?>
+                    <p class="pm-hint pm-dash-issues-empty"><?= h(__('dashboard.no_recent_issues')) ?></p>
+                <?php else: ?>
+                    <ul class="pm-steps pm-steps-compact">
+                        <?php foreach ($issues as $ev): ?>
+                            <li>
+                                <span class="pm-dot pm-dot-todo"
+                                      style="<?= in_array($ev['level'], ['ERROR', 'CRITICAL'], true) ? 'background:var(--pm-danger-bg);color:var(--pm-danger)' : '' ?>">!</span>
+                                <div class="pm-t">
+                                    <span class="pm-mono pm-dash-issue-meta"><?= h($ev['ts']) ?> · <?= h($ev['level']) ?></span>
+                                    <small class="pm-dash-issue-msg"><?= h(dashboardTruncate($ev['message'], 120)) ?></small>
+                                </div>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <p class="pm-dash-issues-link">
+                        <a class="pm-btn pm-btn-sm" href="/logs.php?source=daemon"><?= h(__('dashboard.open_daemon_log')) ?></a>
+                    </p>
+                <?php endif; ?>
+            </div>
+        </div>
 
-            <h3 style="font-size:14px;margin:16px 0 8px"><?= h(__('dashboard.recent_issues')) ?></h3>
-            <?php if ($issues === []): ?>
-                <p class="pm-hint" style="margin:0"><?= h(__('dashboard.no_recent_issues')) ?></p>
-            <?php else: ?>
-                <ul class="pm-steps">
-                    <?php foreach ($issues as $ev): ?>
-                        <li>
-                            <span class="pm-dot <?= $ev['level'] === 'WARNING' ? 'pm-dot-todo' : 'pm-dot-todo' ?>"
-                                  style="<?= in_array($ev['level'], ['ERROR', 'CRITICAL'], true) ? 'background:var(--pm-danger-bg);color:var(--pm-danger)' : '' ?>">!</span>
-                            <div class="pm-t">
-                                <span class="pm-mono" style="font-size:11px"><?= h($ev['ts']) ?> · <?= h($ev['level']) ?></span>
-                                <small style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">
-                                    <?= h(dashboardTruncate($ev['message'], 120)) ?>
-                                </small>
-                            </div>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-                <p style="margin:10px 0 0">
-                    <a class="pm-btn pm-btn-sm" href="/logs.php?source=daemon"><?= h(__('dashboard.open_daemon_log')) ?></a>
-                </p>
-            <?php endif; ?>
+        <!-- 4) Services -->
+        <div class="pm-card pm-dash-services">
+            <div class="pm-ch"><h3><?= h(__('dashboard.services_title')) ?></h3></div>
+            <div class="pm-svc-grid" role="list">
+                <div class="pm-svc-item" role="listitem">
+                    <span class="pm-svc-label"><?= h(__('dashboard.daemon_status')) ?></span>
+                    <span class="pm-chip <?= h($daemonChip) ?>"><?= h($stLabel) ?></span>
+                </div>
+                <?php foreach ($services as $svc):
+                    $svcChip = $svc['chip'];
+                    if (!$svc['critical']) {
+                        $svcChip = panelOptionalServiceChip($svc['display'], $svcChip);
+                    } elseif (in_array($svc['display'], ['inactive', 'failed', 'unknown'], true)) {
+                        $svcChip = 'pm-chip-bad';
+                    }
+                    ?>
+                    <div class="pm-svc-item" role="listitem">
+                        <span class="pm-svc-label"><?= h(__($svc['label_key'])) ?></span>
+                        <span class="pm-chip <?= h($svcChip) ?>"><?= h(panelServiceDisplayLabel($svc['display'])) ?></span>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <dl class="pm-dl pm-dl-compact pm-dash-daemon-meta">
+                <dt><?= h(__('dashboard.daemon_pid')) ?></dt>
+                <dd class="pm-mono"><?= $daemon['pid'] !== null ? (int) $daemon['pid'] : 'n/a' ?></dd>
+                <dt><?= h(__('dashboard.daemon_uptime')) ?></dt>
+                <dd><?= $daemon['uptime'] !== '' ? h($daemon['uptime']) : 'n/a' ?></dd>
+            </dl>
         </div>
     </div>
 
     <?php renderDashboardSystemInfoSection($pdo); ?>
-
-    <style>
-    .pm-dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
-    </style>
+    </div>
     <?php
     renderInternetStatusPollScript();
     renderFooter();
