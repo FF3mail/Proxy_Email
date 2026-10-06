@@ -23,6 +23,13 @@ function renderExternalAccountMailFields(?array $row, string $formKey): void
     if (!is_string($presetsJson)) {
         $presetsJson = '{}';
     }
+    $authHintAttrs = '';
+    foreach (mailProviderPresets() as $preset) {
+        $hk = $preset['auth_hint_key'] ?? '';
+        if (is_string($hk) && $hk !== '') {
+            $authHintAttrs .= ' data-hint-' . h($hk) . '="' . h(__($hk)) . '"';
+        }
+    }
     ?>
     <div class="pm-mail-account-fields" data-mail-form="<?= h($formKey) ?>" data-mail-presets="<?= h($presetsJson) ?>">
         <div class="pm-f pm-full">
@@ -33,6 +40,7 @@ function renderExternalAccountMailFields(?array $row, string $formKey): void
                     <option value="<?= h($code) ?>"><?= h(__($preset['label_key'])) ?></option>
                 <?php endforeach; ?>
             </select>
+            <p class="pm-hint" id="mail_auth_hint_<?= h($formKey) ?>" data-mail-auth-hint<?= $authHintAttrs ?> hidden></p>
         </div>
         <div class="pm-sect"><?= h(__('mail_preset.imap_section')) ?></div>
         <div class="pm-f">

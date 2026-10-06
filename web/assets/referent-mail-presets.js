@@ -117,10 +117,27 @@
         fillStandardPort(proto);
       });
     });
+    function updateAuthHint() {
+      var hintEl = root.querySelector('[data-mail-auth-hint]');
+      if (!hintEl || !provider) return;
+      var code = provider.value;
+      var key = code && presets[code] ? presets[code].auth_hint_key : '';
+      if (key && hintEl.getAttribute('data-hint-' + key)) {
+        hintEl.textContent = hintEl.getAttribute('data-hint-' + key);
+        hintEl.hidden = false;
+        return;
+      }
+      hintEl.hidden = true;
+      hintEl.textContent = '';
+    }
+
     if (provider) {
       provider.addEventListener('change', function () {
         var code = provider.value;
-        if (!code || !presets[code]) return;
+        if (!code || !presets[code]) {
+          updateAuthHint();
+          return;
+        }
         var p = presets[code];
         var ih = root.querySelector('[data-mail-imap-host]');
         var sh = root.querySelector('[data-mail-smtp-host]');
@@ -136,8 +153,10 @@
         if (smtpPort) smtpPort.value = String(p.smtp_port || standardPort('smtp', smtpEncHidden.value));
         updateHint('imap');
         updateHint('smtp');
+        updateAuthHint();
       });
     }
+    updateAuthHint();
     ['imap', 'smtp'].forEach(updateHint);
   }
 

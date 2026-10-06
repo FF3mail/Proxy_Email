@@ -26,7 +26,7 @@ function assert_true(bool $cond, string $msg): void
 
 $knownHosts = [];
 foreach (mailProviderPresets() as $code => $preset) {
-    assert_true($code !== '' && isset($preset['label_key']), 'preset ' . $code . ' has label_key');
+    assert_true($code !== '' && isset($preset['label_key'], $preset['doc_url']), 'preset ' . $code . ' has label_key and doc_url');
     foreach (['imap_port', 'smtp_port'] as $pk) {
         $p = (int) ($preset[$pk] ?? 0);
         assert_true($p >= 1 && $p <= 65535, $code . ' ' . $pk . ' in range');

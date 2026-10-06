@@ -4,10 +4,12 @@ declare(strict_types=1);
 require_once __DIR__ . '/mailbox_verify.php';
 
 /**
- * Public provider presets for external account IMAP/SMTP (official documentation values only).
+ * Public provider presets — values verified against vendor documentation (2026-10-06).
  *
  * @return array<string, array{
  *   label_key: string,
+ *   auth_hint_key?: string,
+ *   doc_url: string,
  *   imap_host: string,
  *   imap_port: int,
  *   imap_encryption: string,
@@ -21,6 +23,8 @@ function mailProviderPresets(): array
     return [
         'gmail' => [
             'label_key' => 'mail_preset.gmail',
+            'auth_hint_key' => 'mail_preset.gmail_auth_hint',
+            'doc_url' => 'https://support.google.com/mail/answer/7126229',
             'imap_host' => 'imap.gmail.com',
             'imap_port' => 993,
             'imap_encryption' => 'ssl',
@@ -30,6 +34,7 @@ function mailProviderPresets(): array
         ],
         'yandex' => [
             'label_key' => 'mail_preset.yandex',
+            'doc_url' => 'https://yandex.com/support/yandex-360/customers/mail/en/mail-clients/others',
             'imap_host' => 'imap.yandex.ru',
             'imap_port' => 993,
             'imap_encryption' => 'ssl',
@@ -39,6 +44,7 @@ function mailProviderPresets(): array
         ],
         'mailru' => [
             'label_key' => 'mail_preset.mailru',
+            'doc_url' => 'https://help.mail.ru/mail/mailbox/settings/imap-smtp/',
             'imap_host' => 'imap.mail.ru',
             'imap_port' => 993,
             'imap_encryption' => 'ssl',
@@ -48,6 +54,8 @@ function mailProviderPresets(): array
         ],
         'microsoft365' => [
             'label_key' => 'mail_preset.microsoft365',
+            'auth_hint_key' => 'mail_preset.microsoft365_auth_hint',
+            'doc_url' => 'https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission',
             'imap_host' => 'outlook.office365.com',
             'imap_port' => 993,
             'imap_encryption' => 'ssl',
@@ -56,6 +64,17 @@ function mailProviderPresets(): array
             'smtp_encryption' => 'tls',
         ],
     ];
+}
+
+function mailProviderAuthHintKey(string $providerCode): ?string
+{
+    $presets = mailProviderPresets();
+    if (!isset($presets[$providerCode])) {
+        return null;
+    }
+    $key = $presets[$providerCode]['auth_hint_key'] ?? null;
+
+    return is_string($key) && $key !== '' ? $key : null;
 }
 
 /**
@@ -92,9 +111,6 @@ function mailEncryptionSelectOptions(string $stored): array
     return $options;
 }
 
-/**
- * Value for the encryption &lt;select&gt; (custom UI option vs stored ssl/tls/none).
- */
 function mailEncryptionSelectUiValue(string $stored): string
 {
     $stored = strtolower(trim($stored));
@@ -106,9 +122,6 @@ function mailEncryptionSelectUiValue(string $stored): string
     return 'custom';
 }
 
-/**
- * Hidden input value submitted with the form (always the stored transport token).
- */
 function mailEncryptionSubmittedValue(string $stored, string $protocolDefault): string
 {
     $stored = strtolower(trim($stored));
