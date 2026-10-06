@@ -182,7 +182,14 @@ function mailboxVerifyMessage(array $result): string
     }
     $params = is_array($result['params'] ?? null) ? $result['params'] : [];
     if (function_exists('__')) {
-        return __($code, $params);
+        $msg = __($code, $params);
+        if (!empty($params['mode_hint']) && function_exists('__')) {
+            $suffix = __('mailbox_verify.mode_hint_suffix');
+            if ($suffix !== '') {
+                $msg .= ' ' . $suffix;
+            }
+        }
+        return $msg;
     }
     return $code;
 }
@@ -947,6 +954,105 @@ function mailboxVerifyClose($stream): void
  *
  * @return resource|MailboxVerifyStream
  */
+/**
+ * Prefer IPv4 when multiple addresses are returned (stable egress for implicit TLS).
+ *
+ * @param list<string> $ips
+ * @return list<string>
+ */
+function mailboxVerifyOrderConnectIps(array $ips): array
+{
+    $v4 = [];
+    $v6 = [];
+    foreach ($ips as $ip) {
+        $ip = trim((string) $ip);
+        if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            continue;
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $v4[] = $ip;
+        } else {
+            $v6[] = $ip;
+        }
+    }
+
+    return array_merge($v4, $v6);
+}
+
+/**
+ * Dial using SSRF-pinned IPs; try each allowed address (IPv4 first).
+ *
+ * @param list<string> $ips
+ * @return resource|MailboxVerifyStream
+ */
+function mailboxVerifyConnectPinned(
+    string $host,
+    int $port,
+    string $transportEncryption,
+    float $timeout,
+    array $ips,
+    ?string $peerName = null
+) {
+    $ordered = mailboxVerifyOrderConnectIps($ips);
+    if ($ordered === []) {
+        throw new MailboxVerifyTransportException('connect', 'connection failed');
+    }
+
+    $last = null;
+    foreach ($ordered as $ip) {
+        try {
+            return mailboxVerifyConnect($host, $port, $transportEncryption, $timeout, $ip, $peerName);
+        } catch (MailboxVerifyTransportException $e) {
+            $last = $e;
+            if (!in_array($e->getKind(), ['connect', 'tls'], true)) {
+                throw $e;
+            }
+        }
+    }
+
+    throw $last ?? new MailboxVerifyTransportException('connect', 'connection failed');
+}
+
+/**
+ * Normalize encryption tokens from forms / legacy rows.
+ */
+function mailboxVerifyNormalizeEncryption(string $encryption, string $default = 'ssl'): string
+{
+    $enc = strtolower(trim($encryption));
+    if ($enc === '') {
+        return $default;
+    }
+    if (in_array($enc, ['starttls', 'tls'], true)) {
+        return 'tls';
+    }
+    if (in_array($enc, ['ssl', 'smtps', 'imaps', 'implicit'], true)) {
+        return 'ssl';
+    }
+    if ($enc === 'none') {
+        return 'none';
+    }
+
+    return $enc;
+}
+
+/**
+ * @return array{mode_hint?: string}
+ */
+function mailboxVerifyModeHintParams(int $port, string $encryption): array
+{
+    $enc = mailboxVerifyNormalizeEncryption($encryption, 'ssl');
+    $standard = ($port === 465 && $enc === 'ssl')
+        || ($port === 587 && $enc === 'tls')
+        || ($port === 993 && $enc === 'ssl')
+        || ($port === 143 && $enc === 'tls')
+        || ($port === 25 && $enc === 'none');
+    if ($standard) {
+        return [];
+    }
+
+    return ['mode_hint' => '1'];
+}
+
 function mailboxVerifyConnect(
     string $host,
     int $port,
@@ -991,7 +1097,8 @@ function mailboxVerifyConnect(
         $ctx
     );
     if ($fp === false) {
-        throw new MailboxVerifyTransportException('connect', 'connection failed');
+        $kind = ($encryption === 'ssl') ? 'tls' : 'connect';
+        throw new MailboxVerifyTransportException($kind, 'connection failed');
     }
 
     stream_set_timeout($fp, (int) ceil(mailboxVerifyIoTimeout()));
@@ -1153,13 +1260,19 @@ function mailboxVerifyImapLogin(
     string $authMode,
     float $deadline,
     ?string $connectIp = null,
-    ?string $peerName = null
+    ?string $peerName = null,
+    ?array $pinIps = null
 ): array {
     $timeout = mailboxVerifyClampTimeout($deadline);
     $stream = null;
     try {
         $connectEnc = $encryption === 'ssl' ? 'ssl' : 'none';
-        $stream = mailboxVerifyConnect($host, $port, $connectEnc, $timeout, $connectIp, $peerName);
+        $pinList = is_array($pinIps) && $pinIps !== []
+            ? $pinIps
+            : ($connectIp !== null && $connectIp !== '' ? [$connectIp] : []);
+        $stream = $pinList !== []
+            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName)
+            : mailboxVerifyConnect($host, $port, $connectEnc, $timeout, null, $peerName);
 
         // Greeting.
         $greeting = mailboxVerifyReadLine($stream, $deadline);
@@ -1176,10 +1289,10 @@ function mailboxVerifyImapLogin(
             mailboxVerifyWrite($stream, "a000 STARTTLS\r\n");
             $line = mailboxVerifyImapReadTagged($stream, 'a000', $deadline);
             if (!preg_match('/^a000\s+OK/i', $line)) {
-                return mailboxVerifyFail('mailbox_verify.imap_tls_failed', 'imap');
+                throw new MailboxVerifyTransportException('starttls', 'STARTTLS refused');
             }
             if (!mailboxVerifyEnableCrypto($stream)) {
-                return mailboxVerifyFail('mailbox_verify.imap_tls_failed', 'imap');
+                throw new MailboxVerifyTransportException('starttls', 'STARTTLS crypto failed');
             }
             // Capabilities MUST be re-read after STARTTLS.
             $caps = mailboxVerifyImapFetchCaps($stream, $deadline);
@@ -1267,10 +1380,11 @@ function mailboxVerifyImapLogin(
         mailboxVerifyWrite($stream, "a002 LOGOUT\r\n");
         return mailboxVerifyOk();
     } catch (MailboxVerifyTransportException $e) {
-        return mailboxVerifyMapTransportFail('imap', $e);
+        mailboxVerifyLog('mailbox_verify probe hop=imap phase=' . $e->getKind());
+        return mailboxVerifyMapTransportFail('imap', $e, $port, $encryption);
     } catch (Throwable $e) {
-        mailboxVerifyLog('IMAP probe error: ' . get_class($e));
-        return mailboxVerifyFail('mailbox_verify.imap_connect_failed', 'imap');
+        mailboxVerifyLog('mailbox_verify probe hop=imap phase=internal');
+        return mailboxVerifyFail('mailbox_verify.imap_connect_failed', 'imap', mailboxVerifyModeHintParams($port, $encryption));
     } finally {
         if ($stream !== null) {
             mailboxVerifyClose($stream);
@@ -1387,13 +1501,19 @@ function mailboxVerifySmtpLogin(
     string $authMode,
     float $deadline,
     ?string $connectIp = null,
-    ?string $peerName = null
+    ?string $peerName = null,
+    ?array $pinIps = null
 ): array {
     $timeout = mailboxVerifyClampTimeout($deadline);
     $stream = null;
     try {
         $connectEnc = $encryption === 'ssl' ? 'ssl' : 'none';
-        $stream = mailboxVerifyConnect($host, $port, $connectEnc, $timeout, $connectIp, $peerName);
+        $pinList = is_array($pinIps) && $pinIps !== []
+            ? $pinIps
+            : ($connectIp !== null && $connectIp !== '' ? [$connectIp] : []);
+        $stream = $pinList !== []
+            ? mailboxVerifyConnectPinned($host, $port, $connectEnc, $timeout, $pinList, $peerName)
+            : mailboxVerifyConnect($host, $port, $connectEnc, $timeout, null, $peerName);
 
         if (mailboxVerifySmtpReadCode($stream, $deadline) !== 220) {
             throw new MailboxVerifyTransportException('greeting', 'bad SMTP greeting');
@@ -1403,11 +1523,10 @@ function mailboxVerifySmtpLogin(
         if ($encryption === 'tls') {
             mailboxVerifyWrite($stream, "STARTTLS\r\n");
             if (mailboxVerifySmtpReadCode($stream, $deadline) !== 220) {
-                return mailboxVerifyFail('mailbox_verify.smtp_tls_failed', 'smtp');
+                throw new MailboxVerifyTransportException('starttls', 'STARTTLS refused');
             }
             if (!mailboxVerifyEnableCrypto($stream)) {
-                // STARTTLS failed: never transmit AUTH over the socket.
-                return mailboxVerifyFail('mailbox_verify.smtp_tls_failed', 'smtp');
+                throw new MailboxVerifyTransportException('starttls', 'STARTTLS crypto failed');
             }
             $caps = mailboxVerifySmtpEhlo($stream, $deadline);
         }
@@ -1467,10 +1586,11 @@ function mailboxVerifySmtpLogin(
         mailboxVerifyWrite($stream, "QUIT\r\n");
         return mailboxVerifyOk();
     } catch (MailboxVerifyTransportException $e) {
-        return mailboxVerifyMapTransportFail('smtp', $e);
+        mailboxVerifyLog('mailbox_verify probe hop=smtp phase=' . $e->getKind());
+        return mailboxVerifyMapTransportFail('smtp', $e, $port, $encryption);
     } catch (Throwable $e) {
-        mailboxVerifyLog('SMTP login probe error: ' . get_class($e));
-        return mailboxVerifyFail('mailbox_verify.smtp_connect_failed', 'smtp');
+        mailboxVerifyLog('mailbox_verify probe hop=smtp phase=internal');
+        return mailboxVerifyFail('mailbox_verify.smtp_connect_failed', 'smtp', mailboxVerifyModeHintParams($port, $encryption));
     } finally {
         if ($stream !== null) {
             mailboxVerifyClose($stream);
@@ -1552,9 +1672,14 @@ function mailboxVerifySmtpRcptProbe(
  *
  * @return array{ok:bool, code:string, params:array<string,string>, hop:string, severity?:string}
  */
-function mailboxVerifyMapTransportFail(string $hop, MailboxVerifyTransportException $e): array
-{
+function mailboxVerifyMapTransportFail(
+    string $hop,
+    MailboxVerifyTransportException $e,
+    int $port = 0,
+    string $encryption = ''
+): array {
     $kind = $e->getKind();
+    $hint = $port > 0 ? mailboxVerifyModeHintParams($port, $encryption) : [];
 
     if ($hop === 'rcpt') {
         switch ($kind) {
@@ -1575,24 +1700,43 @@ function mailboxVerifyMapTransportFail(string $hop, MailboxVerifyTransportExcept
 
     if ($hop === 'imap') {
         if ($kind === 'timeout') {
-            return mailboxVerifyFail('mailbox_verify.timeout', 'imap');
+            return mailboxVerifyFail('mailbox_verify.timeout', 'imap', $hint);
         }
-        return mailboxVerifyFail('mailbox_verify.imap_connect_failed', 'imap');
+        if ($kind === 'tls') {
+            return mailboxVerifyFail('mailbox_verify.imap_tls_failed', 'imap', $hint);
+        }
+        if ($kind === 'starttls') {
+            return mailboxVerifyFail('mailbox_verify.imap_starttls_failed', 'imap', $hint);
+        }
+        if ($kind === 'greeting') {
+            return mailboxVerifyFail('mailbox_verify.imap_greeting_failed', 'imap', $hint);
+        }
+        if ($kind === 'connect') {
+            return mailboxVerifyFail('mailbox_verify.imap_connect_failed', 'imap', $hint);
+        }
+
+        return mailboxVerifyFail('mailbox_verify.imap_connect_failed', 'imap', $hint);
     }
 
     // smtp (referent login hop)
     switch ($kind) {
         case 'timeout':
-            return mailboxVerifyFail('mailbox_verify.timeout', 'smtp');
+            return mailboxVerifyFail('mailbox_verify.timeout', 'smtp', $hint);
+        case 'tls':
+            return mailboxVerifyFail('mailbox_verify.smtp_tls_failed', 'smtp', $hint);
+        case 'starttls':
+            return mailboxVerifyFail('mailbox_verify.smtp_starttls_failed', 'smtp', $hint);
         case 'ehlo':
-            return mailboxVerifyFail('mailbox_verify.smtp_ehlo_rejected', 'smtp');
+            return mailboxVerifyFail('mailbox_verify.smtp_ehlo_rejected', 'smtp', $hint);
         case 'greeting':
+            return mailboxVerifyFail('mailbox_verify.smtp_greeting_failed', 'smtp', $hint);
+        case 'connect':
+            return mailboxVerifyFail('mailbox_verify.smtp_connect_failed', 'smtp', $hint);
         case 'protocol':
         case 'read':
         case 'write':
-        case 'connect':
         default:
-            return mailboxVerifyFail('mailbox_verify.smtp_connect_failed', 'smtp');
+            return mailboxVerifyFail('mailbox_verify.smtp_connect_failed', 'smtp', $hint);
     }
 }
 
@@ -1763,16 +1907,10 @@ function verifyExternalReferentMailbox(array $account, ?array &$session = null):
 
     $imapHost = trim((string) ($account['imap_host'] ?? ''));
     $imapPort = (int) ($account['imap_port'] ?? 0);
-    $imapEnc = strtolower(trim((string) ($account['imap_encryption'] ?? 'ssl')));
-    if ($imapEnc === '') {
-        $imapEnc = 'ssl';
-    }
+    $imapEnc = mailboxVerifyNormalizeEncryption((string) ($account['imap_encryption'] ?? 'ssl'), 'ssl');
     $smtpHost = trim((string) ($account['smtp_host'] ?? ''));
     $smtpPort = (int) ($account['smtp_port'] ?? 0);
-    $smtpEnc = strtolower(trim((string) ($account['smtp_encryption'] ?? 'tls')));
-    if ($smtpEnc === '') {
-        $smtpEnc = 'tls';
-    }
+    $smtpEnc = mailboxVerifyNormalizeEncryption((string) ($account['smtp_encryption'] ?? 'tls'), 'tls');
 
     if ($imapHost === '' || $imapPort < 1 || $imapPort > 65535) {
         return mailboxVerifyFail('mailbox_verify.imap_host_invalid', 'imap');
@@ -1808,7 +1946,8 @@ function verifyExternalReferentMailbox(array $account, ?array &$session = null):
         $authMode,
         $imapDeadline,
         $imapAllowed['connect_ip'] ?? null,
-        $imapAllowed['peer_name'] ?? null
+        $imapAllowed['peer_name'] ?? null,
+        $imapAllowed['ips'] ?? null
     );
     if (empty($imap['ok'])) {
         return $imap;
@@ -1829,7 +1968,8 @@ function verifyExternalReferentMailbox(array $account, ?array &$session = null):
         $authMode,
         $smtpDeadline,
         $smtpAllowed['connect_ip'] ?? null,
-        $smtpAllowed['peer_name'] ?? null
+        $smtpAllowed['peer_name'] ?? null,
+        $smtpAllowed['ips'] ?? null
     );
     if (empty($smtp['ok'])) {
         return $smtp;
