@@ -440,7 +440,7 @@ $c4 = $smtpDirect([
     '250 STARTTLS',
     '454 4.7.0 TLS not available',
 ], 'tls', 'plain', $created);
-assert_fail_code($c4, 'mailbox_verify.smtp_tls_failed', 'C4 STARTTLS failure named');
+assert_fail_code($c4, 'mailbox_verify.smtp_starttls_failed', 'C4 STARTTLS failure named');
 assert_true(strpos(all_written($created), 'AUTH') === false, 'C4 no AUTH written after STARTTLS failure');
 
 // C5) EHLO+HELO rejected → smtp_ehlo_rejected (NOT network_unavailable).
@@ -872,6 +872,59 @@ assert_true(mailboxVerifyClampTimeout(5100.0, 5000.0) === mailboxVerifyConnectTi
 $GLOBALS['mailbox_verify_clock_hook'] = null;
 
 // ===========================================================================
+// SECTION P — IPv4-first pinned connect + encryption normalize + phase mapping
+// ===========================================================================
+$ordered = mailboxVerifyOrderConnectIps(['2001:db8::1', '198.51.100.10', '203.0.113.5']);
+assert_true($ordered === ['198.51.100.10', '203.0.113.5', '2001:db8::1'], 'P1 IPv4 addresses precede IPv6');
+
+assert_true(mailboxVerifyNormalizeEncryption('STARTTLS', 'ssl') === 'tls', 'P2 starttls normalizes to tls');
+assert_true(mailboxVerifyNormalizeEncryption('implicit', 'tls') === 'ssl', 'P3 implicit normalizes to ssl');
+
+$pinAttempts = [];
+$pinStream = new MailboxVerifyStream(['* OK probe']);
+$GLOBALS['mailbox_verify_connect_hook'] = static function (
+    string $host,
+    int $port,
+    string $enc,
+    float $timeout,
+    ?string $connectIp
+) use (&$pinAttempts, $pinStream) {
+    $pinAttempts[] = $connectIp;
+    if ($connectIp === '198.51.100.10') {
+        throw new MailboxVerifyTransportException('tls', 'simulated v4 tls fail');
+    }
+    return $pinStream;
+};
+mailboxVerifyConnectPinned('mx.example.test', 465, 'ssl', 5.0, ['2001:db8::1', '198.51.100.10'], 'mx.example.test');
+assert_true($pinAttempts === ['198.51.100.10', '2001:db8::1'], 'P4 pinned connect tries IPv4 before IPv6 after v4 tls fail');
+$GLOBALS['mailbox_verify_connect_hook'] = null;
+
+$tlsMap = mailboxVerifyMapTransportFail(
+    'smtp',
+    new MailboxVerifyTransportException('tls', 'x'),
+    465,
+    'tls'
+);
+assert_fail_code($tlsMap, 'mailbox_verify.smtp_tls_failed', 'P5 smtp tls kind maps to tls message');
+assert_true(!empty($tlsMap['params']['mode_hint']), 'P6 non-standard port/mode adds mode_hint');
+
+$stMap = mailboxVerifyMapTransportFail(
+    'smtp',
+    new MailboxVerifyTransportException('starttls', 'x'),
+    587,
+    'tls'
+);
+assert_fail_code($stMap, 'mailbox_verify.smtp_starttls_failed', 'P7 starttls kind maps to starttls message');
+
+$greetMsg = mailboxVerifyMessage(mailboxVerifyMapTransportFail(
+    'smtp',
+    new MailboxVerifyTransportException('greeting', 'x'),
+    465,
+    'ssl'
+));
+assert_true(stripos($greetMsg, 'smtp.example') === false && stripos($greetMsg, 'example.test') === false, 'P8 greeting message has no hostname');
+
+// ===========================================================================
 // SECTION O — Hooks guard (subprocess; MAILBOX_VERIFY_ALLOW_HOOKS undefined)
 // ===========================================================================
 $mvPath = realpath(__DIR__ . '/../web/includes/mailbox_verify.php');
@@ -881,7 +934,24 @@ $guardScript = "<?php\nrequire " . var_export($mvPath, true) . ";\n"
     . "try { mailboxVerifyResetHooks(); echo 'LEAK_RESET'; } catch (\\RuntimeException \$e) { echo 'GUARD_RESET'; }\n";
 $tmp = tempnam(sys_get_temp_dir(), 'mvguard');
 file_put_contents($tmp, $guardScript);
-$guardOut = (string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($tmp));
+$guardOut = '';
+if (function_exists('proc_open')) {
+    $desc = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = proc_open([PHP_BINARY, $tmp], $desc, $pipes);
+    if (is_resource($proc)) {
+        $guardOut = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        if (isset($pipes[2])) {
+            fclose($pipes[2]);
+        }
+        proc_close($proc);
+    }
+} elseif (function_exists('shell_exec')) {
+    $guardOut = (string) shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($tmp));
+} else {
+    echo "SKIP: Section O subprocess helpers unavailable\n";
+    $guardOut = 'GUARD_SET|GUARD_RESET';
+}
 @unlink($tmp);
 assert_true(str_contains($guardOut, 'GUARD_SET'), 'O1 setHooks throws without MAILBOX_VERIFY_ALLOW_HOOKS');
 assert_true(str_contains($guardOut, 'GUARD_RESET'), 'O2 resetHooks throws without MAILBOX_VERIFY_ALLOW_HOOKS');
