@@ -19,7 +19,6 @@ assert_contains($ui, 'id="ext-accounts-table"', 'external accounts table');
 assert_contains($ui, 'Добавить ещё', 'add another button');
 assert_contains($ui, 'data-account=', 'per-row account payload');
 assert_contains($ui, 'ReferentCardAccounts', 'account modal JS API');
-assert_contains($ui, 'LEFT JOIN external_accounts ea ON ea.referent_id = r.id', 'single-account JOIN removed', false);
 if (str_contains($ui, 'LEFT JOIN external_accounts ea ON ea.referent_id = r.id')) {
     fwrite(STDERR, "FAIL: referent card still uses single-row external_accounts JOIN\n");
     exit(1);
