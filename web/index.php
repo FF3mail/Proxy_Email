@@ -220,6 +220,10 @@ switch ($action) {
         renderRelationshipForm();
         break;
 
+    case 'relationship_maildir_hint':
+        handleRelationshipMaildirHint();
+        break;
+
     case 'relationship_save':
         handleRelationshipSave();
         break;
@@ -1567,6 +1571,16 @@ function renderRelationshipForm(): void
     );
 
     // GET-only display prefill (PROMPT-57). Never written until relationship_save POST.
+    if (
+        trim((string)($row['local_client_maildir'] ?? '')) === ''
+        && trim((string)($row['local_client_email'] ?? '')) !== ''
+    ) {
+        $hint = relationshipMaildirHintForEmail((string)$row['local_client_email']);
+        if (!empty($hint['ok']) && !empty($hint['path'])) {
+            $row['local_client_maildir'] = (string)$hint['path'];
+        }
+    }
+
     $externalClientValue = relationshipExternalClientFormValue($row);
     $fromBackfill = (string)($_GET['from'] ?? '') === 'backfill';
 
@@ -1709,6 +1723,14 @@ function renderRelationshipForm(): void
     renderFooter();
 }
 
+function handleRelationshipMaildirHint(): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $email = trim((string)($_GET['email'] ?? ''));
+    echo json_encode(relationshipMaildirHintForEmail($email), JSON_UNESCAPED_SLASHES);
+    exit();
+}
+
 function handleRelationshipSave(): void
 {
     $pdo = getPdo();
@@ -1729,7 +1751,8 @@ function handleRelationshipSave(): void
 
     if ($id > 0) {
         $stmt = $pdo->prepare(
-            'SELECT id, external_client_email, local_client_email, local_referent_email, active
+            'SELECT id, external_client_email, local_client_email, local_referent_email,
+                    local_client_maildir, active
              FROM clients WHERE id = ? AND referent_id = ?'
         );
         $stmt->execute([$id, $referentId]);
@@ -1794,6 +1817,28 @@ function handleRelationshipSave(): void
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
         ]));
+    }
+
+    try {
+        $data['local_client_maildir'] = resolveRelationshipClientMaildirForSave(
+            $data['local_client_maildir'],
+            $data['local_client_email'],
+            $existingRelationship
+        );
+    } catch (ReferentMaildirException $e) {
+        setFlash('error', $e->getUserMessage());
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
+    }
+
+    if ($data['local_client_maildir'] === '') {
+        setFlash('error', __('relationship.error.maildir_resolve_failed'));
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
     }
 
     // Cheap DB checks BEFORE any network I/O (PROMPT-80 hardening).

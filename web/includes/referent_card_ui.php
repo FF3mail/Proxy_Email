@@ -791,6 +791,7 @@ function renderReferentCardUi(): void
                 <div class="pm-f pm-full">
                     <label>Maildir клиента (необязательно)</label>
                     <input type="text" name="local_client_maildir" id="rel_local_client_maildir" class="pm-mono" autocomplete="off">
+                    <span class="pm-help"><?= h(__('relationship.maildir_hint')) ?></span>
                 </div>
                 <div class="pm-f pm-full">
                     <label class="pm-chk"><input type="checkbox" name="active" id="rel_active" value="1" checked> Связь активна</label>
@@ -860,6 +861,29 @@ function renderReferentCardUi(): void
           if (window.PanelModal) window.PanelModal.toast('Скопировано');
         });
       });
+
+      (function () {
+        var localClient = document.getElementById('rel_local_client_email');
+        var maildir = document.getElementById('rel_local_client_maildir');
+        if (!localClient || !maildir) return;
+        function hintMaildir() {
+          if (maildir.value.trim() !== '') return;
+          var email = localClient.value.trim();
+          if (!email) return;
+          fetch('index.php?action=relationship_maildir_hint&email=' + encodeURIComponent(email), {
+            credentials: 'same-origin'
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              if (j && j.ok && j.path && maildir.value.trim() === '') {
+                maildir.value = j.path;
+              }
+            })
+            .catch(function () {});
+        }
+        localClient.addEventListener('change', hintMaildir);
+        localClient.addEventListener('blur', hintMaildir);
+      })();
 
       function fillRel(data) {
         var isNew = !data || !data.id;
