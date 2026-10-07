@@ -875,7 +875,7 @@ class MailHandler:
                 account_id=account_id,
                 account_email=account_email,
                 from_address=from_addr,
-                referent_local_inbox=referent_data['local_inbox'],
+                referent_local_inbox=referent_data.get('local_inbox') or '',
             )
 
             if plan.lookup_error:
@@ -1104,7 +1104,7 @@ class MailHandler:
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
                     from_address='',
-                    referent_local_inbox=referent_data['local_inbox'],
+                    referent_local_inbox=referent_data.get('local_inbox') or '',
                 )
             return finalize_inbound_process_result(
                 plan,
