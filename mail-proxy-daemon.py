@@ -1367,6 +1367,7 @@ class MailHandler:
                     '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
                 )
                 return False
+            # TODO(PROMPT-83+): graceful fallback when referents.local_inbox is NULL (relationship-centric model).
             notify_to = task.referent_data.get('local_inbox')
             maybe_notify_outbound_disposal(
                 self._passage_journal,

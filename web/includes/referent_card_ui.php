@@ -249,7 +249,7 @@ function renderReferentListUi(): void
                     <tr tabindex="0" data-href="<?= h($url) ?>" class="<?= $i === 0 ? 'pm-sel' : '' ?>">
                         <td><?= $id ?></td>
                         <td><?= h((string) $row['username']) ?></td>
-                        <td class="pm-mono"><?= h((string) $row['local_inbox']) ?></td>
+                        <td class="pm-mono"><?= h(referentDisplayLocalInbox(isset($row['local_inbox']) ? (string) $row['local_inbox'] : null)) ?></td>
                         <td>
                             <?php if ((int) $row['active'] === 1): ?>
                                 <span class="pm-chip pm-chip-ok">Активен</span>
@@ -388,8 +388,9 @@ function renderReferentCardUi(): void
             <p class="pm-hint">Что нужно, чтобы демон обрабатывал почту этого референта. Кнопки справа открывают настройку без ухода с карточки.</p>
             <ul class="pm-steps">
                 <li>
-                    <span class="pm-dot pm-dot-ok">✓</span>
-                    <div class="pm-t">Локальный ящик<small><?= h((string) $row['local_inbox']) ?></small></div>
+                    <?php $hasRefLocal = trim((string) ($row['local_inbox'] ?? '')) !== ''; ?>
+                    <span class="pm-dot <?= $hasRefLocal ? 'pm-dot-ok' : 'pm-dot-todo' ?>"><?= $hasRefLocal ? '✓' : '·' ?></span>
+                    <div class="pm-t">Локальный ящик (необязательно)<small><?= h(referentDisplayLocalInbox(isset($row['local_inbox']) ? (string) $row['local_inbox'] : null)) ?></small></div>
                     <button type="button" class="pm-btn pm-btn-sm" data-pm-open="dlg-referent-edit">Изменить</button>
                 </li>
                 <li>
@@ -423,8 +424,10 @@ function renderReferentCardUi(): void
             <p class="pm-hint">Параметры для настройки Thunderbird, Outlook и других клиентов. Пароль в панели не хранится.</p>
             <dl class="pm-dl">
                 <dt>Email / логин</dt>
-                <dd class="pm-mono"><?= h((string) $row['local_inbox']) ?>
+                <dd class="pm-mono"><?= h(referentDisplayLocalInbox(isset($row['local_inbox']) ? (string) $row['local_inbox'] : null)) ?>
+                    <?php if (trim((string) ($row['local_inbox'] ?? '')) !== ''): ?>
                     <button type="button" class="pm-copy" data-copy="<?= h((string) $row['local_inbox']) ?>">копировать</button>
+                    <?php endif; ?>
                 </dd>
                 <dt>IMAP</dt>
                 <dd class="pm-mono"><?= h($localMail['imap_host']) ?>:<?= (int) $localMail['imap_port'] ?> (<?= h(formatMailEncryption($localMail['imap_encryption'])) ?>)</dd>
@@ -551,11 +554,11 @@ function renderReferentCardUi(): void
                     <input id="ref_username" type="text" name="username" required value="<?= h((string) $row['username']) ?>" autocomplete="off">
                 </div>
                 <div class="pm-f pm-full">
-                    <label for="ref_inbox">Локальный ящик (логин iRedMail) *</label>
-                    <input id="ref_inbox" type="email" name="local_inbox" required
+                    <label for="ref_inbox"><?= h(__('referent.local_inbox_optional')) ?></label>
+                    <input id="ref_inbox" type="email" name="local_inbox"
                            list="dl-sug-local-inbox"
-                           value="<?= h((string) $row['local_inbox']) ?>" autocomplete="off">
-                    <span class="pm-help">Адрес ящика на сервере DELTA-транзит</span>
+                           value="<?= h((string) ($row['local_inbox'] ?? '')) ?>" autocomplete="off">
+                    <span class="pm-help"><?= h(__('referent.local_inbox_optional_hint')) ?></span>
                 </div>
                 <?php if (!empty($row['local_outbox'])): ?>
                 <div class="pm-f pm-full">
