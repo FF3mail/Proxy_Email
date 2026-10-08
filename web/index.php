@@ -30,6 +30,7 @@ require_once __DIR__ . '/includes/oauth2.php';
 require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
 require_once __DIR__ . '/includes/relationship_editor.php';
+require_once __DIR__ . '/includes/referent_activation.php';
 require_once __DIR__ . '/includes/mailbox_verify.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
 require_once __DIR__ . '/includes/panel_modals.php';
@@ -217,6 +218,10 @@ switch ($action) {
 
     case 'relationship_form':
         renderRelationshipForm();
+        break;
+
+    case 'relationship_maildir_hint':
+        handleRelationshipMaildirHint();
         break;
 
     case 'relationship_save':
@@ -440,34 +445,6 @@ function renderReferentForm(): void
         </div>
 
         <div>
-            <label class="block mb-1 font-medium"><?= h(__('referent.email')) ?></label>
-            <input
-                type="email"
-                name="local_inbox"
-                required
-                class="w-full border rounded px-3 py-2"
-                placeholder="<?= h(__('referent.email_placeholder')) ?>"
-                value="<?= h((string)$referent['local_inbox']) ?>"
-            >
-            <p class="text-sm text-gray-600 mt-1">
-                <?= h(__('referent.email_hint')) ?>
-            </p>
-        </div>
-
-        <?php if (!empty($referent['local_outbox'])): ?>
-        <div>
-            <label class="block mb-1 font-medium"><?= h(__('referent.maildir_auto')) ?></label>
-            <input
-                type="text"
-                readonly
-                class="w-full border rounded px-3 py-2 bg-slate-50 text-slate-700"
-                value="<?= h((string)$referent['local_outbox']) ?>"
-                aria-readonly="true"
-            >
-        </div>
-        <?php endif; ?>
-
-        <div>
             <label class="inline-flex items-center gap-2">
                 <input
                     type="checkbox"
@@ -530,9 +507,9 @@ function handleReferentSave(): void
     $id = (int)($_POST['id'] ?? 0);
 
     $username = trim((string)($_POST['username'] ?? ''));
-    $localInbox = trim((string)($_POST['local_inbox'] ?? ''));
+    $localInboxRaw = trim((string)($_POST['local_inbox'] ?? ''));
 
-    $active = isset($_POST['active']) ? 1 : 0;
+    $requestedActive = isset($_POST['active']) ? 1 : 0;
 
     $clientEmail = trim((string)($_POST['client_email'] ?? ''));
     $clientActive = isset($_POST['client_active']) ? 1 : 0;
@@ -547,43 +524,17 @@ function handleReferentSave(): void
         $existing = $stmt->fetch();
         if ($existing) {
             $existingReferent = $existing;
-            $existingInbox = strtolower(trim((string)$existing['local_inbox']));
-            $existingOutbox = trim((string)$existing['local_outbox']);
+            $existingInbox = strtolower(trim((string) ($existing['local_inbox'] ?? '')));
+            $existingOutbox = trim((string) ($existing['local_outbox'] ?? ''));
         }
     }
 
-    try {
-        $normalizedInbox = normalizeReferentEmail($localInbox);
-    } catch (ReferentMaildirException $e) {
-        setFlash('error', $e->getUserMessage());
-        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
-            redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
-        }
-        header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
-        exit();
-    }
+    $localInboxDb = null;
+    $localOutboxDb = null;
 
-    // PROMPT-80 — skip local verify when inactive or inbox unchanged.
-    if (mailboxVerifyReferentNeedsLocalCheck($existingReferent, $normalizedInbox, $active)) {
-        $localInboxCheck = verifyLocalPhysicalMailbox($normalizedInbox);
-        if (empty($localInboxCheck['ok'])) {
-            $msg = ($localInboxCheck['code'] ?? '') === 'mailbox_verify.local_missing'
-                ? __('referent.mailbox_not_found', ['email' => $normalizedInbox])
-                : mailboxVerifyMessage($localInboxCheck);
-            setFlash('error', $msg);
-            if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
-                redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
-            }
-            header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
-            exit();
-        }
-    }
-
-    if ($id > 0 && $normalizedInbox === $existingInbox && $existingOutbox !== '') {
-        $localOutbox = $existingOutbox;
-    } else {
+    if ($localInboxRaw !== '') {
         try {
-            $localOutbox = resolveReferentMaildir($normalizedInbox);
+            $normalizedInbox = normalizeReferentEmail($localInboxRaw);
         } catch (ReferentMaildirException $e) {
             setFlash('error', $e->getUserMessage());
             if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
@@ -592,9 +543,43 @@ function handleReferentSave(): void
             header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
             exit();
         }
+
+        // PROMPT-80 — skip local verify when inactive or inbox unchanged.
+        if (mailboxVerifyReferentNeedsLocalCheck($existingReferent, $normalizedInbox, $requestedActive)) {
+            $localInboxCheck = verifyLocalPhysicalMailbox($normalizedInbox);
+            if (empty($localInboxCheck['ok'])) {
+                $msg = ($localInboxCheck['code'] ?? '') === 'mailbox_verify.local_missing'
+                    ? __('referent.mailbox_not_found', ['email' => $normalizedInbox])
+                    : mailboxVerifyMessage($localInboxCheck);
+                setFlash('error', $msg);
+                if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                    redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
+                }
+                header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+                exit();
+            }
+        }
+
+        if ($id > 0 && $normalizedInbox === $existingInbox && $existingOutbox !== '') {
+            $localOutboxDb = $existingOutbox;
+        } else {
+            try {
+                $localOutboxDb = resolveReferentMaildir($normalizedInbox);
+            } catch (ReferentMaildirException $e) {
+                setFlash('error', $e->getUserMessage());
+                if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+                    redirectUsingReturnTo('referent_view', [], (int) ($_POST['id'] ?? 0));
+                }
+                header('Location: index.php?action=referent_form' . ($id > 0 ? '&id=' . $id : ''));
+                exit();
+            }
+        }
+        $localInboxDb = $normalizedInbox;
     }
 
-    $localInbox = $normalizedInbox;
+    $activation = referentResolveActiveOnSave($pdo, $id, $requestedActive);
+    $active = $activation['active'];
+    $activationBlocked = $activation['blocked'];
 
     try {
         $pdo->beginTransaction();
@@ -612,8 +597,8 @@ function handleReferentSave(): void
 
             $stmt->execute([
                 $username,
-                $localInbox,
-                $localOutbox,
+                $localInboxDb,
+                $localOutboxDb,
                 $active,
                 $id,
             ]);
@@ -635,8 +620,8 @@ function handleReferentSave(): void
 
             $stmt->execute([
                 $username,
-                $localInbox,
-                $localOutbox,
+                $localInboxDb,
+                $localOutboxDb,
                 $active,
             ]);
 
@@ -694,7 +679,11 @@ function handleReferentSave(): void
 		}
         $pdo->commit();
 
-        setFlash('success', __('referent.saved'));
+        if ($activationBlocked) {
+            setFlash('warning', __('referent.cannot_activate_without_relationship'));
+        } else {
+            setFlash('success', __('referent.saved'));
+        }
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -1297,7 +1286,12 @@ function handleAccountSave(): void
             $pdo->commit();
         }
 
-        if ($accountVerifyWarning !== '') {
+        $rid = (int) ($_POST['referent_id'] ?? 0);
+        $autoDeactivated = $rid > 0 && referentSyncActiveAfterRelationshipChange($pdo, $rid);
+
+        if ($autoDeactivated) {
+            setFlash('warning', __('referent.auto_deactivated_no_relationship'));
+        } elseif ($accountVerifyWarning !== '') {
             setFlash('warning', __('account.saved') . ' — ' . $accountVerifyWarning);
         } else {
             setFlash('success', __('account.saved'));
@@ -1352,11 +1346,42 @@ function handleToggleActive(): void
     }
 
     $newActive = (int)!$row['active'];
+    $toggleFlashHandled = false;
+
+    if ($entity === 'referent' && $newActive === 1) {
+        $activation = referentResolveActiveOnSave($pdo, $id, 1);
+        if ($activation['blocked']) {
+            setFlash('error', __('referent.cannot_activate_without_relationship'));
+            $newActive = 0;
+            $toggleFlashHandled = true;
+        }
+    }
 
     $stmt = $pdo->prepare("UPDATE {$table} SET active = ?, updated_at = NOW() WHERE id = ?");
     $stmt->execute([$newActive, $id]);
 
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
+
+    $referentIdForSync = 0;
+    if ($entity === 'referent') {
+        $referentIdForSync = $id;
+    } elseif ($entity === 'client') {
+        $stmtRef = $pdo->prepare('SELECT referent_id FROM clients WHERE id = ?');
+        $stmtRef->execute([$id]);
+        $referentIdForSync = (int) ($stmtRef->fetchColumn() ?: 0);
+    } elseif ($entity === 'account') {
+        $stmtRef = $pdo->prepare('SELECT referent_id FROM external_accounts WHERE id = ?');
+        $stmtRef->execute([$id]);
+        $referentIdForSync = (int) ($stmtRef->fetchColumn() ?: 0);
+    }
+    if (
+        !$toggleFlashHandled
+        && $referentIdForSync > 0
+        && referentSyncActiveAfterRelationshipChange($pdo, $referentIdForSync)
+    ) {
+        setFlash('warning', __('referent.auto_deactivated_no_relationship'));
+        $toggleFlashHandled = true;
+    }
 
     $return = (string)($_POST['return_action'] ?? 'dashboard');
     $allowedReturns = [
@@ -1377,7 +1402,9 @@ function handleToggleActive(): void
     if ($return === 'accounts') {
         $return = 'account_list';
     }
-    setFlash('success', __('error.status_changed'));
+    if (!$toggleFlashHandled) {
+        setFlash('success', __('error.status_changed'));
+    }
 
     if ($return === 'referent_form' || $return === 'referent_view') {
         $refId = (int) ($_POST['referent_id'] ?? 0);
@@ -1485,6 +1512,9 @@ function handleAccountDelete(): void
 
     writeLog('External account deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', 'Внешний аккаунт удалён');
+    if (referentSyncActiveAfterRelationshipChange($pdo, $referentId)) {
+        setFlash('warning', __('referent.auto_deactivated_no_relationship'));
+    }
     if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
         redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
     }
@@ -1541,6 +1571,16 @@ function renderRelationshipForm(): void
     );
 
     // GET-only display prefill (PROMPT-57). Never written until relationship_save POST.
+    if (
+        trim((string)($row['local_client_maildir'] ?? '')) === ''
+        && trim((string)($row['local_client_email'] ?? '')) !== ''
+    ) {
+        $hint = relationshipMaildirHintForEmail((string)$row['local_client_email']);
+        if (!empty($hint['ok']) && !empty($hint['path'])) {
+            $row['local_client_maildir'] = (string)$hint['path'];
+        }
+    }
+
     $externalClientValue = relationshipExternalClientFormValue($row);
     $fromBackfill = (string)($_GET['from'] ?? '') === 'backfill';
 
@@ -1683,6 +1723,14 @@ function renderRelationshipForm(): void
     renderFooter();
 }
 
+function handleRelationshipMaildirHint(): void
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $email = trim((string)($_GET['email'] ?? ''));
+    echo json_encode(relationshipMaildirHintForEmail($email), JSON_UNESCAPED_SLASHES);
+    exit();
+}
+
 function handleRelationshipSave(): void
 {
     $pdo = getPdo();
@@ -1703,7 +1751,8 @@ function handleRelationshipSave(): void
 
     if ($id > 0) {
         $stmt = $pdo->prepare(
-            'SELECT id, external_client_email, local_client_email, local_referent_email, active
+            'SELECT id, external_client_email, local_client_email, local_referent_email,
+                    local_client_maildir, active
              FROM clients WHERE id = ? AND referent_id = ?'
         );
         $stmt->execute([$id, $referentId]);
@@ -1768,6 +1817,28 @@ function handleRelationshipSave(): void
             'referent_id' => $referentId,
             'id' => $id > 0 ? $id : null,
         ]));
+    }
+
+    try {
+        $data['local_client_maildir'] = resolveRelationshipClientMaildirForSave(
+            $data['local_client_maildir'],
+            $data['local_client_email'],
+            $existingRelationship
+        );
+    } catch (ReferentMaildirException $e) {
+        setFlash('error', $e->getUserMessage());
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
+    }
+
+    if ($data['local_client_maildir'] === '') {
+        setFlash('error', __('relationship.error.maildir_resolve_failed'));
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
     }
 
     // Cheap DB checks BEFORE any network I/O (PROMPT-80 hardening).
@@ -1947,7 +2018,11 @@ function handleRelationshipSave(): void
             $id = (int)$pdo->lastInsertId();
             writeLog("ClientRelationship created: ID {$id} referent={$referentId}");
         }
-        setFlash('success', __('relationship.saved'));
+        if (referentSyncActiveAfterRelationshipChange($pdo, $referentId)) {
+            setFlash('warning', __('referent.auto_deactivated_no_relationship'));
+        } else {
+            setFlash('success', __('relationship.saved'));
+        }
     } catch (PDOException $e) {
         writeLog('Relationship save PDO error: ' . $e->getMessage());
         $sqlState = $e->errorInfo[0] ?? '';
@@ -2012,6 +2087,9 @@ function handleRelationshipDelete(): void
     $stmt->execute([$id, $referentId]);
     writeLog('ClientRelationship deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', __('relationship.deleted'));
+    if (referentSyncActiveAfterRelationshipChange($pdo, $referentId)) {
+        setFlash('warning', __('referent.auto_deactivated_no_relationship'));
+    }
     if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
         redirectUsingReturnTo('referent_view', ['id' => $referentId], $referentId);
     }

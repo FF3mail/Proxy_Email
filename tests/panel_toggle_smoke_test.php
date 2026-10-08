@@ -36,6 +36,8 @@ function postAction(string $action, array $fields): void
 }
 
 require_once $webRoot . '/includes/helpers.php';
+require_once $webRoot . '/includes/relationship_editor.php';
+require_once $webRoot . '/includes/referent_activation.php';
 $pdo = getPdo();
 
 $row = $pdo->query('SELECT id, active FROM referents ORDER BY id LIMIT 1')->fetch(PDO::FETCH_ASSOC);
@@ -46,7 +48,8 @@ if (!is_array($row)) {
 
 $id = (int)$row['id'];
 $original = (int)$row['active'];
-$expected = $original === 1 ? 0 : 1;
+$canActivate = referentHasActivatableRelationship($pdo, $id);
+$expected = $original === 1 ? 0 : ($canActivate ? 1 : 0);
 
 postAction('toggle_active', [
     'entity' => 'referent',
@@ -59,14 +62,18 @@ $stmt->execute([$id]);
 $after = (int)$stmt->fetchColumn();
 assert_true($after === $expected, 'toggle changed referent active in database');
 
-postAction('toggle_active', [
-    'entity' => 'referent',
-    'id' => (string)$id,
-    'return_action' => 'referent_list',
-]);
+if ($canActivate || $original === 1) {
+    postAction('toggle_active', [
+        'entity' => 'referent',
+        'id' => (string)$id,
+        'return_action' => 'referent_list',
+    ]);
 
-$stmt->execute([$id]);
-$restored = (int)$stmt->fetchColumn();
-assert_true($restored === $original, 'second toggle restored original referent active state');
+    $stmt->execute([$id]);
+    $restored = (int)$stmt->fetchColumn();
+    assert_true($restored === $original, 'second toggle restored original referent active state');
+} else {
+    echo "OK: skip restore toggle (referent cannot activate without complete relationship)\n";
+}
 
 exit($failures > 0 ? 1 : 0);

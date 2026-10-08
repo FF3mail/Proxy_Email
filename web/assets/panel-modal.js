@@ -2,18 +2,46 @@
   'use strict';
 
   var PanelModal = {
-    dirty: false,
     opener: null,
     _tt: null,
+
+    _serializeForm: function (form) {
+      if (!form) return '';
+      var parts = [];
+      var els = form.querySelectorAll('input, select, textarea');
+      els.forEach(function (el) {
+        if (!el.name) return;
+        var type = (el.type || '').toLowerCase();
+        if (type === 'checkbox') {
+          parts.push(el.name + '=' + (el.checked ? '1' : '0'));
+        } else if (type === 'radio') {
+          if (el.checked) parts.push(el.name + '=' + el.value);
+        } else if (type !== 'file') {
+          parts.push(el.name + '=' + el.value);
+        }
+      });
+      parts.sort();
+      return parts.join('\n');
+    },
+
+    captureFormBaseline: function (dialogEl) {
+      var form = dialogEl && dialogEl.querySelector('form');
+      dialogEl._pmFormBaseline = this._serializeForm(form);
+    },
+
+    isDialogFormDirty: function (dialogEl) {
+      if (!dialogEl || dialogEl.getAttribute('data-pm-nodirty') === '1') return false;
+      var form = dialogEl.querySelector('form');
+      if (!form) return false;
+      var baseline = dialogEl._pmFormBaseline;
+      if (baseline === undefined) return false;
+      return this._serializeForm(form) !== baseline;
+    },
 
     open: function (dialogEl) {
       if (!dialogEl || typeof dialogEl.showModal !== 'function') return;
       this.opener = document.activeElement;
-      this.dirty = false;
-      dialogEl.dataset.pmDirty = '0';
       dialogEl.showModal();
-      // Prefer explicit data-pm-focus (confirm dialogs). Do not steal focus to Save
-      // on edit forms — operators expect the first field.
       var prefer = dialogEl.querySelector('[data-pm-focus]');
       if (!prefer && dialogEl.getAttribute('data-pm-nodirty') === '1') {
         prefer = dialogEl.querySelector('.pm-btn-danger-solid, .pm-btn-primary');
@@ -24,17 +52,20 @@
       if (first) {
         try { first.focus(); } catch (e) {}
       }
+      var self = this;
+      requestAnimationFrame(function () {
+        self.captureFormBaseline(dialogEl);
+      });
     },
 
     close: function (dialogEl, force) {
       if (!dialogEl) return;
       var skipDirty = dialogEl.getAttribute('data-pm-nodirty') === '1';
-      var isDirty = !skipDirty && dialogEl.dataset.pmDirty === '1';
+      var isDirty = !skipDirty && this.isDialogFormDirty(dialogEl);
       var msg = this._unsaved || 'Есть несохранённые изменения. Закрыть без сохранения?';
       if (!force && isDirty && !window.confirm(msg)) return;
       dialogEl.close();
-      this.dirty = false;
-      dialogEl.dataset.pmDirty = '0';
+      dialogEl._pmFormBaseline = undefined;
       if (this.opener && typeof this.opener.focus === 'function') {
         try { this.opener.focus(); } catch (e) {}
       }
@@ -56,17 +87,6 @@
       if (!dialogEl || dialogEl.dataset.pmBound === '1') return;
       dialogEl.dataset.pmBound = '1';
       var self = this;
-      var nodirty = dialogEl.getAttribute('data-pm-nodirty') === '1';
-      if (!nodirty) {
-        dialogEl.addEventListener('input', function () {
-          self.dirty = true;
-          dialogEl.dataset.pmDirty = '1';
-        });
-        dialogEl.addEventListener('change', function () {
-          self.dirty = true;
-          dialogEl.dataset.pmDirty = '1';
-        });
-      }
       dialogEl.addEventListener('cancel', function (e) {
         e.preventDefault();
         self.close(dialogEl);

@@ -5,8 +5,8 @@ USE mail_proxy;
 CREATE TABLE IF NOT EXISTS referents (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(100) NOT NULL,
-    local_inbox VARCHAR(255) UNIQUE NOT NULL,
-    local_outbox VARCHAR(255) UNIQUE NOT NULL,
+    local_inbox VARCHAR(255) UNIQUE NULL DEFAULT NULL,
+    local_outbox VARCHAR(255) UNIQUE NULL DEFAULT NULL,
     inbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
     outbound_routing_mode ENUM('legacy','shadow','relationship_live') NULL DEFAULT NULL,
     outbound_watch_mode ENUM('referent_only','dual','relationship_only') NULL DEFAULT NULL,

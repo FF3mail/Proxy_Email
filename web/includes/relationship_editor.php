@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/maildir_resolver.php';
+
 /**
  * ClientRelationship panel helpers (PROMPT-56).
  *
@@ -261,6 +263,29 @@ function fetchRelationshipsForReferent(PDO $pdo, int $referentId): array
  *
  * @return list<array<string, mixed>>
  */
+/**
+ * All external accounts for referent card (PROMPT-84) — one row per account.
+ *
+ * @return list<array<string, mixed>>
+ */
+function fetchExternalAccountsForReferentCard(PDO $pdo, int $referentId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT ea.id, ea.referent_id, ea.email, ea.username, ea.auth_type, ea.provider,
+                ea.imap_host, ea.imap_port, ea.imap_encryption,
+                ea.smtp_host, ea.smtp_port, ea.smtp_encryption,
+                ea.client_id, ea.active,
+                ot.expires_at
+         FROM external_accounts ea
+         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
+         WHERE ea.referent_id = ?
+         ORDER BY ea.id'
+    );
+    $stmt->execute([$referentId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
 function fetchExternalAccountsForRelationshipForm(
     PDO $pdo,
     int $referentId,
@@ -311,7 +336,7 @@ function parseRelationshipFormPost(array $post): array
     }
     $active = isset($post['active']) ? 1 : 0;
 
-    $parts = [$externalClient, $localClient, $localReferent, $maildir];
+    $parts = [$externalClient, $localClient, $localReferent];
     $filledCount = 0;
     foreach ($parts as $p) {
         if ($p !== '') {
@@ -321,12 +346,14 @@ function parseRelationshipFormPost(array $post): array
     if ($accountId !== null) {
         $filledCount++;
     }
-    $requiredSlots = 5; // four addresses/maildir + account
+    if ($maildir !== '') {
+        $filledCount++;
+    }
     $anyFilled = $filledCount > 0;
+    // Maildir is optional in the form; resolved from local_client_email on save (PROMPT-55).
     $allFilled = $externalClient !== ''
         && $localClient !== ''
         && $localReferent !== ''
-        && $maildir !== ''
         && $accountId !== null;
 
     return [
@@ -339,6 +366,49 @@ function parseRelationshipFormPost(array $post): array
         'any_filled' => $anyFilled,
         'all_filled' => $allFilled,
     ];
+}
+
+/**
+ * Resolve local_client_maildir for save: operator override, reuse when client unchanged, or vmail lookup.
+ *
+ * @param array{local_client_email?: string, local_client_maildir?: string}|null $existing
+ * @throws ReferentMaildirException
+ */
+function resolveRelationshipClientMaildirForSave(
+    string $postedMaildir,
+    string $localClientEmail,
+    ?array $existing
+): string {
+    $posted = normalizeRelationshipMaildirPath($postedMaildir);
+    if ($posted !== '') {
+        return $posted;
+    }
+
+    if ($existing !== null) {
+        $prevClient = normalizeRelationshipEmail((string)($existing['local_client_email'] ?? ''));
+        $prevMaildir = normalizeRelationshipMaildirPath((string)($existing['local_client_maildir'] ?? ''));
+        if ($localClientEmail === $prevClient && $prevMaildir !== '') {
+            return $prevMaildir;
+        }
+    }
+
+    return normalizeRelationshipMaildirPath(resolveReferentMaildir($localClientEmail));
+}
+
+/**
+ * Read-only hint for relationship forms (GET JSON). Does not write to DB.
+ *
+ * @return array{ok: bool, path?: string, error?: string}
+ */
+function relationshipMaildirHintForEmail(string $email): array
+{
+    try {
+        $path = resolveReferentMaildir($email);
+
+        return ['ok' => true, 'path' => $path];
+    } catch (ReferentMaildirException $e) {
+        return ['ok' => false, 'error' => $e->getUserMessage()];
+    }
 }
 
 /**
