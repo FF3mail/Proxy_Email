@@ -33,23 +33,28 @@
 
 ```
 ВХОДЯЩАЯ ПОЧТА
-  Внешний IMAP (Gmail/Yandex/…)
+  Внешний IMAP (Gmail/Yandex/…) — аккаунт связи
        │
        ▼  опрос каждые ~60 с
   mail-proxy-daemon (ImapPoller → очередь → 20 воркеров)
-       │
+       │  From → ClientRelationship → local_referent_email
        ▼  SMTP localhost:25
-  Postfix → Dovecot → Maildir референта (local_inbox)
+  Postfix → Dovecot → локальный ящик референта ЭТОЙ связи
 
 ИСХОДЯЩАЯ ПОЧТА
-  Пользователь кладёт письмо в local_outbox (Maildir)
+  Пользователь кладёт письмо в Maildir локального клиента ЭТОЙ связи
+  (clients.local_client_maildir/new)
        │
        ▼  watchdog (inotify)
   mail-proxy-daemon (очередь → 20 SMTP-воркеров)
        │
-       ▼  внешний SMTP (TLS)
+       ▼  внешний SMTP (TLS) аккаунта связи
   Интернет
 ```
+
+**Владение ящиками:** на уровне связи Референт ↔ Клиент. У каждой связи свои независимые
+`external_client`, `external_referent`, `local_client`, `local_referent`. Поля
+`referents.local_inbox` / `local_outbox` — устаревшие и не используются для маршрутизации.
 
 **Комментарий:** очереди внутри демона — это потоки в памяти (до 5000 задач IMAP и 1000 SMTP), а не таблица в MariaDB. В старых черновиках документации могла фигурировать таблица `mail_queue` — в текущей схеме её **нет**.
 

@@ -141,10 +141,28 @@ class RelationshipLivePlanTest(unittest.TestCase):
             account_id=1,
             account_email='referent-a@lab-a.example.test',
             from_address='client-a@lab-a.example.test',
-            referent_local_inbox='refloc1@testvps.loc',
+            referent_local_inbox='SHARED-LEGACY@testvps.loc',
         )
         self.assertEqual(plan.local_rcpts, [])
         self.assertIsNotNone(plan.lookup_error)
+        assert plan.lookup_error is not None
+        self.assertIn('local_client_maildir not found', plan.lookup_error)
+        # No shared referent-inbox fallback when Maildir is missing.
+        self.assertNotEqual(plan.mail_from, 'SHARED-LEGACY@testvps.loc')
+        self.assertNotIn('SHARED-LEGACY@testvps.loc', plan.local_rcpts)
+
+    @patch('relationship_routing.os.path.isdir', return_value=True)
+    def test_referent_local_inbox_kwarg_ignored_on_match(self, _isdir: MagicMock) -> None:
+        dto = _dto(local_referent='rel-local@testvps.loc')
+        plan = plan_inbound_delivery(
+            resolve_inbound=lambda _a, _s: dto,
+            account_id=1,
+            account_email='referent-a@lab-a.example.test',
+            from_address='client-a@lab-a.example.test',
+            referent_local_inbox='MUST-NOT-USE@legacy.loc',
+        )
+        self.assertEqual(plan.local_rcpts, ['rel-local@testvps.loc'])
+        self.assertEqual(plan.mail_from, 'rel-local@testvps.loc')
 
 
 class ProcessResultTest(unittest.TestCase):

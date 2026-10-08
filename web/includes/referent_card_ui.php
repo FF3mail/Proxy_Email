@@ -57,18 +57,17 @@ function referentCardExternalAccountMailSummary(array $account): string
  * Build read-only email/username suggestion lists for referent-card modals.
  *
  * Queries (getPdo):
- * - referents.local_inbox
  * - external_accounts.email, external_accounts.username
  * - clients.external_client_email, local_client_email, local_referent_email
  *
  * Consumed by:
- * - dlg-referent-edit → local_inbox (dl-sug-local-inbox)
  * - dlg-account-create / dlg-account-edit → email (dl-sug-ea-email), username (dl-sug-ea-username)
  * - dlg-rel-edit → external_client_email, local_client_email, local_referent_email
  *   (scoped lists prefer this referent, then global unique values)
  *
  * Intentionally without suggestions: display name (username on referent),
- * passwords/secrets, IMAP/SMTP hosts/ports, local_client_maildir (path, not email).
+ * passwords/secrets, IMAP/SMTP hosts/ports, local_client_maildir (path, not email),
+ * and referents.local_inbox (must not prefill relationship local_referent_email).
  *
  * @return array{
  *   local_inbox: list<string>,
@@ -103,20 +102,6 @@ function fetchReferentCardEmailSuggestions(PDO $pdo, int $referentId, int $limit
         return array_values($out);
     };
 
-    // Global local inboxes (referent modal convenience; uniqueness enforced server-side).
-    $localInboxAll = [];
-    try {
-        $stmt = $pdo->query('SELECT local_inbox FROM referents WHERE local_inbox IS NOT NULL AND local_inbox <> \'\'');
-        foreach ($stmt->fetchAll(PDO::FETCH_NUM) ?: [] as $row) {
-            $v = trim((string) ($row[0] ?? ''));
-            if ($v !== '') {
-                $localInboxAll[] = $v;
-            }
-        }
-    } catch (Throwable $e) {
-        $localInboxAll = [];
-    }
-
     // External accounts — emails and usernames (create/edit external modal).
     $eaEmails = [];
     $eaUsernames = [];
@@ -141,7 +126,7 @@ function fetchReferentCardEmailSuggestions(PDO $pdo, int $referentId, int $limit
         // leave empty
     }
 
-    // Relationship fields — prefer this referent, then global.
+    // Relationship fields only — never seed from referents.local_inbox.
     $scopedExt = [];
     $scopedLocalClient = [];
     $scopedLocalRef = [];
@@ -170,14 +155,6 @@ function fetchReferentCardEmailSuggestions(PDO $pdo, int $referentId, int $limit
             }
         }
 
-        // This referent's own local_inbox is a strong suggestion for local_referent_email.
-        $stmt = $pdo->prepare('SELECT local_inbox FROM referents WHERE id = ?');
-        $stmt->execute([$referentId]);
-        $mine = trim((string) ($stmt->fetchColumn() ?: ''));
-        if ($mine !== '') {
-            $scopedLocalRef[] = $mine;
-        }
-
         $stmt = $pdo->query(
             'SELECT external_client_email, local_client_email, local_referent_email FROM clients'
         );
@@ -195,16 +172,13 @@ function fetchReferentCardEmailSuggestions(PDO $pdo, int $referentId, int $limit
                 $globalLocalRef[] = $v;
             }
         }
-        // Also offer other referents' inboxes for local_referent_email fallback.
-        foreach ($localInboxAll as $inbox) {
-            $globalLocalRef[] = $inbox;
-        }
     } catch (Throwable $e) {
         // leave empty
     }
 
     return [
-        'local_inbox' => $mergePrefer([], $localInboxAll, $limit),
+        // Legacy referent edit field only — empty by design (no shared-mailbox hints).
+        'local_inbox' => [],
         'ea_email' => $mergePrefer([], $eaEmails, $limit),
         'ea_username' => $mergePrefer([], $eaUsernames, $limit),
         'rel_external_client' => $mergePrefer($scopedExt, $globalExt, $limit),
@@ -238,7 +212,7 @@ function renderReferentCardSuggestionDatalists(array $suggestions): void
 }
 
 /**
- * Clean referent list: ID, name, local_inbox, status, relationship count.
+ * Clean referent list: ID, name, optional legacy local note, status, relationship count.
  */
 function renderReferentListUi(): void
 {
@@ -275,7 +249,7 @@ function renderReferentListUi(): void
                 <tr>
                     <th data-sort="id">ID</th>
                     <th data-sort="username">Имя</th>
-                    <th data-sort="local_inbox">local_inbox</th>
+                    <th data-sort="local_inbox">legacy local</th>
                     <th data-sort="active">Статус</th>
                     <th data-sort="rel_count">Связи</th>
                     <th>Действия</th>
@@ -366,7 +340,7 @@ function renderReferentCardUi(): void
 
     $tabs = [
         'overview' => 'Обзор',
-        'local' => 'Локальный ящик',
+        'local' => __('referent.legacy_local_tab'),
         'external' => 'Внешние аккаунты',
         'clients' => 'Клиенты и связи',
     ];
@@ -419,14 +393,8 @@ function renderReferentCardUi(): void
         </div>
         <div class="pm-card">
             <div class="pm-ch"><h3>Готовность к работе</h3></div>
-            <p class="pm-hint">Что нужно, чтобы демон обрабатывал почту этого референта. Кнопки справа открывают настройку без ухода с карточки.</p>
+            <p class="pm-hint"><?= h(__('referent.readiness_hint')) ?></p>
             <ul class="pm-steps">
-                <li>
-                    <?php $hasRefLocal = trim((string) ($row['local_inbox'] ?? '')) !== ''; ?>
-                    <span class="pm-dot <?= $hasRefLocal ? 'pm-dot-ok' : 'pm-dot-todo' ?>"><?= $hasRefLocal ? '✓' : '·' ?></span>
-                    <div class="pm-t">Локальный ящик (необязательно)<small><?= h(referentDisplayLocalInbox(isset($row['local_inbox']) ? (string) $row['local_inbox'] : null)) ?></small></div>
-                    <button type="button" class="pm-btn pm-btn-sm" data-pm-open="dlg-referent-edit">Изменить</button>
-                </li>
                 <li>
                     <span class="pm-dot <?= $hasAcc ? 'pm-dot-ok' : 'pm-dot-todo' ?>"><?= $hasAcc ? '✓' : '!' ?></span>
                     <div class="pm-t">Внешние аккаунты
@@ -450,7 +418,7 @@ function renderReferentCardUi(): void
                     <span class="pm-dot <?= ($totalRel > 0 && $complete === $totalRel) ? 'pm-dot-ok' : 'pm-dot-todo' ?>">
                         <?= ($totalRel > 0 && $complete === $totalRel) ? '✓' : '!' ?>
                     </span>
-                    <div class="pm-t">Клиенты и связи<small><?= $complete ?> из <?= $totalRel ?> заполнены полностью</small></div>
+                    <div class="pm-t"><?= h(__('referent.readiness_clients')) ?><small><?= $complete ?> из <?= $totalRel ?> — каждая связь имеет свои четыре ящика</small></div>
                     <a class="pm-btn pm-btn-sm" href="index.php?action=referent_view&id=<?= $id ?>&tab=clients">Открыть</a>
                 </li>
             </ul>
@@ -458,23 +426,23 @@ function renderReferentCardUi(): void
     <?php elseif ($tab === 'local'): ?>
         <div class="pm-card">
             <div class="pm-ch">
-                <h3>Локальный ящик (iRedMail)</h3>
+                <h3><?= h(__('referent.legacy_local_heading')) ?></h3>
                 <button type="button" class="pm-btn" data-pm-open="dlg-referent-edit">✎ Изменить</button>
             </div>
-            <p class="pm-hint">Параметры для настройки Thunderbird, Outlook и других клиентов. Пароль в панели не хранится.</p>
+            <p class="pm-hint"><?= h(__('referent.legacy_local_hint')) ?></p>
             <dl class="pm-dl">
-                <dt>Email / логин</dt>
+                <dt><?= h(__('referent.legacy_local_email')) ?></dt>
                 <dd class="pm-mono"><?= h(referentDisplayLocalInbox(isset($row['local_inbox']) ? (string) $row['local_inbox'] : null)) ?>
                     <?php if (trim((string) ($row['local_inbox'] ?? '')) !== ''): ?>
                     <button type="button" class="pm-copy" data-copy="<?= h((string) $row['local_inbox']) ?>">копировать</button>
                     <?php endif; ?>
                 </dd>
-                <dt>IMAP</dt>
+                <dt>IMAP (справочно)</dt>
                 <dd class="pm-mono"><?= h($localMail['imap_host']) ?>:<?= (int) $localMail['imap_port'] ?> (<?= h(formatMailEncryption($localMail['imap_encryption'])) ?>)</dd>
-                <dt>SMTP</dt>
+                <dt>SMTP (справочно)</dt>
                 <dd class="pm-mono"><?= h($localMail['smtp_host']) ?>:<?= (int) $localMail['smtp_port'] ?> (<?= h(formatMailEncryption($localMail['smtp_encryption'])) ?>)</dd>
                 <?php if (!empty($row['local_outbox'])): ?>
-                <dt>Maildir (системный)</dt>
+                <dt>Maildir (legacy, не для маршрутизации)</dt>
                 <dd class="pm-mono" style="font-size:12px"><?= h((string) $row['local_outbox']) ?></dd>
                 <?php endif; ?>
             </dl>
@@ -614,15 +582,14 @@ function renderReferentCardUi(): void
                     <input id="ref_username" type="text" name="username" required value="<?= h((string) $row['username']) ?>" autocomplete="off">
                 </div>
                 <div class="pm-f pm-full">
-                    <label for="ref_inbox"><?= h(__('referent.local_inbox_optional')) ?></label>
+                    <label for="ref_inbox"><?= h(__('referent.local_inbox_legacy')) ?></label>
                     <input id="ref_inbox" type="email" name="local_inbox"
-                           list="dl-sug-local-inbox"
                            value="<?= h((string) ($row['local_inbox'] ?? '')) ?>" autocomplete="off">
-                    <span class="pm-help"><?= h(__('referent.local_inbox_optional_hint')) ?></span>
+                    <span class="pm-help"><?= h(__('referent.local_inbox_legacy_hint')) ?></span>
                 </div>
                 <?php if (!empty($row['local_outbox'])): ?>
                 <div class="pm-f pm-full">
-                    <label>Maildir (системный)</label>
+                    <label><?= h(__('referent.local_outbox_legacy')) ?></label>
                     <input type="text" readonly value="<?= h((string) $row['local_outbox']) ?>" class="pm-mono">
                 </div>
                 <?php endif; ?>

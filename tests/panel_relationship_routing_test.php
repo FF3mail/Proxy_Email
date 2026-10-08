@@ -48,12 +48,32 @@ assert_contains($helper, 'function findRelationshipUniqueCollision', 'app-layer 
 assert_contains($ru, 'relationship.error.mailbox_not_provisioned', 'RU i18n mailbox error');
 assert_contains($en, 'relationship.error.mailbox_not_provisioned', 'EN i18n mailbox error');
 
-// Legacy create path still posts client_email
-assert_contains($index, 'name="client_email"', 'legacy client_email field retained on create');
-assert_contains($index, 'Client created for referent', 'legacy client INSERT path retained');
-assert_contains($index, 'Client updated for referent', 'legacy client UPDATE path retained');
+// Legacy single client_email create path must not create incomplete relationships
+assert_true(!str_contains($index, 'name="client_email"'), 'legacy client_email field removed from create');
+assert_true(!str_contains($index, 'Client created for referent'), 'legacy client INSERT path removed');
+assert_contains($index, 'create_no_legacy_client', 'create form points operators to relationship editor');
+assert_contains($index, 'Legacy single client_email create path removed', 'save handler documents removal');
 
 $daemon = file_get_contents($root . '/mail-proxy-daemon.py');
 assert_true($daemon !== false && str_contains($daemon, 'relationship_lookup'), 'daemon uses relationship_lookup for live routing');
+assert_contains(
+    $daemon,
+    'Quarantined _resolve_local_recipients',
+    'daemon quarantines shared local_inbox recipient helper'
+);
+assert_contains(
+    $daemon,
+    'Quarantined _scan_existing_outgoing',
+    'daemon quarantines referent local_outbox backlog scan'
+);
+assert_true(
+    !preg_match('/notify_to\s*=\s*.*referent_data\.get\(\s*[\'"]local_inbox[\'"]/', $daemon),
+    'disposal notify does not fall back to referents.local_inbox'
+);
+
+$card = file_get_contents($root . '/web/includes/referent_card_ui.php');
+assert_true($card !== false, 'read referent_card_ui');
+assert_contains($card, 'never seed from referents.local_inbox', 'suggestions do not prefill from referent local_inbox');
+assert_contains($card, 'legacy_local_hint', 'Local tab demoted to legacy non-routing');
 
 echo "OK: panel relationship routing static checks passed\n";

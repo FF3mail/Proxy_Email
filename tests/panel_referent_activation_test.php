@@ -23,6 +23,10 @@ function assert_true(bool $cond, string $msg): void
     }
 }
 
+require_once $webRoot . '/includes/i18n.php';
+if (function_exists('initPanelI18n')) {
+    initPanelI18n();
+}
 require_once $webRoot . '/includes/relationship_editor.php';
 require_once $webRoot . '/includes/referent_activation.php';
 
@@ -68,6 +72,37 @@ $inactiveRel['active'] = 0;
 assert_true(
     !relationshipIsActivatableComplete($inactiveRel),
     'inactive relationship does not count toward referent activation'
+);
+
+// Issue #88 — R-C1 / R-C2 independence at relationship completeness level.
+$c1 = $completeRow;
+$c1['external_client_email'] = 'e-c1@example.test';
+$c1['local_client_email'] = 'l-c1@example.test';
+$c1['local_referent_email'] = 'l-r1@example.test';
+$c1['local_client_maildir'] = '/var/vmail/c1/Maildir';
+$c1['external_account_id'] = 11;
+$c1['active'] = 1;
+
+$c2 = $completeRow;
+$c2['external_client_email'] = 'e-c2@example.test';
+$c2['local_client_email'] = 'l-c2@example.test';
+$c2['local_referent_email'] = 'l-r2@example.test';
+$c2['local_client_maildir'] = '/var/vmail/c2/Maildir';
+$c2['external_account_id'] = 12;
+$c2['active'] = 0;
+
+assert_true(relationshipIsActivatableComplete($c1), 'R-C1 complete+active is activatable');
+assert_true(!relationshipIsActivatableComplete($c2), 'R-C2 inactive is not activatable');
+assert_true(
+    relationshipIsActivatableComplete($c1) && !relationshipIsActivatableComplete($c2),
+    'activating/completeness of C1 does not imply C2 activatable'
+);
+$c2Incomplete = $c2;
+$c2Incomplete['active'] = 1;
+$c2Incomplete['local_referent_email'] = '';
+assert_true(
+    relationshipIsActivatableComplete($c1) && !relationshipIsActivatableComplete($c2Incomplete),
+    'incomplete C2 does not invalidate complete C1'
 );
 
 $legacy = [

@@ -379,11 +379,6 @@ function renderReferentForm(): void
         'active' => 1,
     ];
 
-    $client = [
-        'email' => '',
-        'active' => 1,
-    ];
-
     if (!empty($_GET['id'])) {
         $stmt = $pdo->prepare(
             'SELECT *
@@ -396,19 +391,6 @@ function renderReferentForm(): void
 
         if ($row) {
             $referent = $row;
-
-            $stmt = $pdo->prepare(
-                'SELECT *
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([(int)$referent['id']]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $client = $clientRow;
-            }
         }
     }
 
@@ -458,31 +440,9 @@ function renderReferentForm(): void
 
         <?php if (empty($referent['id'])): ?>
         <hr>
-
         <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
         <p class="text-sm text-slate-600"><?= h(__('relationship.create_legacy_hint')) ?></p>
-
-        <div>
-            <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
-            <input
-                type="email"
-                name="client_email"
-                class="w-full border rounded px-3 py-2"
-                value="<?= h((string)$client['email']) ?>"
-            >
-        </div>
-
-        <div>
-            <label class="inline-flex items-center gap-2">
-                <input
-                    type="checkbox"
-                    name="client_active"
-                    value="1"
-                    <?= (int)$client['active'] === 1 ? 'checked' : '' ?>
-                >
-                <span><?= h(__('referent.client_active')) ?></span>
-            </label>
-        </div>
+        <p class="text-sm text-slate-600"><?= h(__('referent.create_no_legacy_client')) ?></p>
         <?php endif; ?>
 
         <button
@@ -511,8 +471,8 @@ function handleReferentSave(): void
 
     $requestedActive = isset($_POST['active']) ? 1 : 0;
 
-    $clientEmail = trim((string)($_POST['client_email'] ?? ''));
-    $clientActive = isset($_POST['client_active']) ? 1 : 0;
+    // Legacy single client_email create path removed: incomplete clients rows are
+    // not created here. Relationships are added via the relationship editor.
 
     $existingReferent = null;
     $existingInbox = '';
@@ -630,53 +590,6 @@ function handleReferentSave(): void
             writeLog("Referent created: ID {$referentId}");
         }
 
-        if ($clientEmail !== '') {
-            $stmt = $pdo->prepare(
-                'SELECT id
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([$referentId]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $stmt = $pdo->prepare(
-                    'UPDATE clients
-                     SET email = ?,
-                         active = ?,
-                         updated_at = NOW()
-                     WHERE referent_id = ?'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $clientActive,
-                    $referentId,
-                ]);
-
-                writeLog("Client updated for referent {$referentId}");
-            } else {
-                $stmt = $pdo->prepare(
-                    'INSERT INTO clients
-                    (
-                        email,
-                        referent_id,
-                        active
-                    )
-                    VALUES (?, ?, ?)'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $referentId,
-                    $clientActive,
-                ]);
-
-                writeLog("Client created for referent {$referentId}");
-            }
-        // Если email пустой — ничего не делать с clients (не удалять)
-		}
         $pdo->commit();
 
         if ($activationBlocked) {

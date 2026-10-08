@@ -163,10 +163,18 @@ def plan_inbound_delivery(
     account_id: int,
     account_email: str,
     from_address: str,
-    referent_local_inbox: str,
+    referent_local_inbox: str = '',
 ) -> InboundDeliveryPlan:
+    """
+    Plan inbound delivery for relationship_live routing.
+
+    ``referent_local_inbox`` is accepted for call-site compatibility only and is
+    ignored. Envelope mail_from / RCPT come from the matched relationship's
+    ``local_referent_email``. There is no shared referent-inbox fallback.
+    """
+    del referent_local_inbox  # unused; do not route via referents.local_inbox
     mode = InboundRoutingMode.RELATIONSHIP_LIVE
-    mail_from = referent_local_inbox
+    mail_from = ''
     sender = (from_address or '').strip()
     try:
         if classify_inbound is not None:

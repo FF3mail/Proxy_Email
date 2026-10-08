@@ -4,8 +4,16 @@ declare(strict_types=1);
 /**
  * Referent activation rules (PROMPT-83 / 2026-10-07 locked decisions).
  *
- * A referent may be active only when it has at least one relationship that is
+ * referents.active is a parent-level administrative kill-switch / enable gate:
+ * a referent may be active only when it has at least one relationship that is
  * complete (PROMPT-53 §9 field set) and active, with an active external account.
+ *
+ * Relationship isolation (unchanged by this gate):
+ * - Each relationship has its own clients.active and four-mailbox chain.
+ * - Incomplete R-C2 does not invalidate complete R-C1.
+ * - Activating/deactivating R-C1 does not change R-C2's clients.active.
+ * - Routing/watch eligibility is per-relationship once the parent referent is on.
+ * - This gate must NOT imply shared mailbox ownership (local_inbox/outbox).
  */
 
 /**
