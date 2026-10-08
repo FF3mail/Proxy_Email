@@ -14,6 +14,14 @@
 - **[docs/README.md](docs/README.md)** — index of operator guide, architecture anchor (SoT), decisions, and historical material.
 - Architecture source of truth: **[docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md)** (current anchor **v4.5**; code wins on conflict).
 
+## AI / agent reading rules
+
+- Code is always authoritative. On any conflict between code and documentation, follow the code.
+- Architecture source of truth for current production behaviour is only `docs/DELTA-transit_anchor.md` (the current version stated in the file and in `docs/README.md`). Read the "Current production invariants" / equivalent current-state sections first.
+- `docs/reports/` and `docs/prompts/` are historical archives only. Never use them as implementation guidance, default modes, or acceptance criteria for new work.
+- Do not re-introduce or treat as live any previously removed modes (shadow, legacy, dual-watch, design-only) unless the current anchor and code explicitly restore them.
+- One issue = one branch = one PR. Prefer the smallest change that matches current master state.
+
 ## Do not
 
 - Force-push `master` or rewrite published history on shared branches.
