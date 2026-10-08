@@ -672,18 +672,10 @@ function renderReferentCardUi(): void
                         <option value="oauth2">OAuth2</option>
                     </select>
                 </div>
-                <div class="pm-sect">Входящая почта (IMAP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="993"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="imap_encryption"><option value="ssl">SSL/TLS</option><option value="tls">STARTTLS</option><option value="none">Без шифрования</option></select>
-                </div>
-                <div class="pm-sect">Исходящая почта (SMTP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="587"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="smtp_encryption"><option value="tls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">Без шифрования</option></select>
-                </div>
+                <?php
+                require_once __DIR__ . '/panel_mail_account_fields.php';
+                renderExternalAccountMailFields(null, 'create');
+                ?>
                 <div class="pm-f pm-full" data-plain-only="create">
                     <label>Пароль *</label>
                     <input type="password" name="password" autocomplete="new-password">
@@ -725,26 +717,7 @@ function renderReferentCardUi(): void
                         <option value="oauth2">OAuth2</option>
                     </select>
                 </div>
-                <div class="pm-sect">Входящая почта (IMAP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="993"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="imap_encryption">
-                        <?php foreach (['ssl' => 'SSL/TLS', 'tls' => 'STARTTLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>"><?= h($lbl) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="pm-sect">Исходящая почта (SMTP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="587"></div>
-                <div class="pm-f pm-full"><label>Шифрование</label>
-                    <select name="smtp_encryption">
-                        <?php foreach (['tls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>"><?= h($lbl) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
+                <?php renderExternalAccountMailFields(null, 'edit'); ?>
                 <div class="pm-f pm-full" data-plain-only="edit">
                     <label>Пароль</label>
                     <input type="password" name="password" placeholder="оставьте пустым, чтобы не менять" autocomplete="new-password">
@@ -921,6 +894,19 @@ function renderReferentCardUi(): void
         }
       }
 
+      function setMailEncryptionUi(form, proto, stored) {
+        var hidden = form.querySelector('[name=' + proto + '_encryption]');
+        var ui = form.querySelector('[data-mail-' + proto + '-encryption]');
+        var value = stored || (proto === 'imap' ? 'ssl' : 'tls');
+        if (hidden) hidden.value = value;
+        if (!ui) return;
+        var matched = false;
+        Array.prototype.forEach.call(ui.options, function (opt) {
+          if (opt.value === value) matched = true;
+        });
+        ui.value = matched ? value : 'custom';
+      }
+
       function fillAccountEdit(data) {
         var form = document.getElementById('form-account-edit');
         if (!form || !data) return;
@@ -928,13 +914,14 @@ function renderReferentCardUi(): void
         form.querySelector('[name=email]').value = data.email || '';
         form.querySelector('[name=username]').value = data.username || '';
         setSelectByValue(form.querySelector('[name=auth_type]'), data.auth_type || 'plain');
-        setSelectByValue(form.querySelector('[name=imap_encryption]'), data.imap_encryption || 'ssl');
-        setSelectByValue(form.querySelector('[name=smtp_encryption]'), data.smtp_encryption || 'tls');
         setSelectByValue(form.querySelector('[name=provider]'), data.provider || '');
+        setSelectByValue(form.querySelector('[name=mail_provider]'), '');
         form.querySelector('[name=imap_host]').value = data.imap_host || '';
         form.querySelector('[name=imap_port]').value = data.imap_port ? String(data.imap_port) : '993';
         form.querySelector('[name=smtp_host]').value = data.smtp_host || '';
         form.querySelector('[name=smtp_port]').value = data.smtp_port ? String(data.smtp_port) : '587';
+        setMailEncryptionUi(form, 'imap', data.imap_encryption || 'ssl');
+        setMailEncryptionUi(form, 'smtp', data.smtp_encryption || 'tls');
         var clientId = form.querySelector('[name=client_id]');
         if (clientId) clientId.value = data.client_id || '';
         var pwd = form.querySelector('[name=password]');
@@ -1089,6 +1076,7 @@ function renderReferentCardUi(): void
       });
     })();
     </script>
+    <script src="assets/referent-mail-presets.js" defer></script>
     <?php
     renderPanelModalScripts(is_array($flash) ? $flash : null);
     ?>
