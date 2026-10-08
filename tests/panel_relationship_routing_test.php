@@ -51,6 +51,15 @@ assert_contains($helper, 'function toggleClientRelationshipActive', 'CRUD toggle
 assert_contains($index, 'updateClientRelationshipRow(', 'save handler uses update helper');
 assert_contains($index, 'deleteClientRelationshipRow(', 'delete handler uses delete helper');
 assert_contains($index, 'toggleClientRelationshipActive(', 'toggle handler uses client toggle helper');
+assert_contains(
+    $helper,
+    'WHERE id = ? AND referent_id = ?',
+    'toggle helper ownership scope present in editor'
+);
+assert_true(
+    str_contains($index, 'toggleClientRelationshipActive($pdo, $id, $postedReferentId)'),
+    'toggle handler passes posted referent_id for ownership scope'
+);
 assert_contains($ru, 'relationship.error.mailbox_not_provisioned', 'RU i18n mailbox error');
 assert_contains($en, 'relationship.error.mailbox_not_provisioned', 'EN i18n mailbox error');
 

@@ -12,6 +12,7 @@
  * - updateClientRelationshipRow scopes UPDATE by id+referent_id; C2 untouched
  * - deleteClientRelationshipRow deletes only the targeted row; C2 untouched
  * - toggleClientRelationshipActive flips only the targeted clients.active
+ * - toggle scoped by id+referent_id: cross-owner attempts return null and mutate nothing
  * - referentSyncActiveAfterRelationshipChange after deleting C1 does not mutate C2
  *
  * Not proven here (requires live MariaDB + panel HTTP POST harness):
@@ -147,10 +148,13 @@ final class FakeRelationshipCrudStatement
             return true;
         }
 
-        if ($sql === 'select active from clients where id = ?') {
+        if ($sql === 'select active from clients where id = ? and referent_id = ?') {
             $id = (int) ($this->params[0] ?? 0);
+            $referentId = (int) ($this->params[1] ?? 0);
             $row = $this->pdo->clients[$id] ?? null;
-            $this->result = $row === null ? false : ['active' => (int) $row['active']];
+            $this->result = ($row !== null && (int) $row['referent_id'] === $referentId)
+                ? ['active' => (int) $row['active']]
+                : false;
 
             return true;
         }
@@ -203,10 +207,13 @@ final class FakeRelationshipCrudStatement
             return true;
         }
 
-        if ($sql === 'update clients set active = ?, updated_at = now() where id = ?') {
+        if ($sql === 'update clients set active = ?, updated_at = now() where id = ? and referent_id = ?') {
             $active = (int) ($this->params[0] ?? 0) === 1 ? 1 : 0;
             $id = (int) ($this->params[1] ?? 0);
-            if (!isset($this->pdo->clients[$id])) {
+            $referentId = (int) ($this->params[2] ?? 0);
+            if (!isset($this->pdo->clients[$id])
+                || (int) $this->pdo->clients[$id]['referent_id'] !== $referentId
+            ) {
                 $this->rowCount = 0;
 
                 return true;
@@ -285,7 +292,12 @@ final class FakeRelationshipCrudStatement
 }
 
 /**
- * @return array{pdo: FakeRelationshipCrudPdo, c1: array<string,mixed>, c2: array<string,mixed>}
+ * @return array{
+ *   pdo: FakeRelationshipCrudPdo,
+ *   c1: array<string,mixed>,
+ *   c2: array<string,mixed>,
+ *   c3: array<string,mixed>
+ * }
  */
 function buildTwoRelationshipFixture(): array
 {
@@ -311,18 +323,32 @@ function buildTwoRelationshipFixture(): array
         'local_client_maildir' => '/var/vmail/c2/Maildir',
         'active' => 1,
     ];
+    // Cross-owner sibling under a different referent (negative toggle tests).
+    $c3 = [
+        'id' => 203,
+        'email' => 'e-c3@partner.test',
+        'referent_id' => 2,
+        'external_client_email' => 'e-c3@partner.test',
+        'local_client_email' => 'l-c3@local.test',
+        'local_referent_email' => 'l-r3@local.test',
+        'external_account_id' => 21,
+        'local_client_maildir' => '/var/vmail/c3/Maildir',
+        'active' => 1,
+    ];
     $pdo = new FakeRelationshipCrudPdo(
         [
             ['id' => 1, 'username' => 'R', 'active' => 1, 'local_inbox' => null, 'local_outbox' => null],
+            ['id' => 2, 'username' => 'R2', 'active' => 1, 'local_inbox' => null, 'local_outbox' => null],
         ],
         [
             ['id' => 11, 'referent_id' => 1, 'email' => 'e-r1@partner.test', 'active' => 1],
             ['id' => 12, 'referent_id' => 1, 'email' => 'e-r2@partner.test', 'active' => 1],
+            ['id' => 21, 'referent_id' => 2, 'email' => 'e-r3@partner.test', 'active' => 1],
         ],
-        [$c1, $c2]
+        [$c1, $c2, $c3]
     );
 
-    return ['pdo' => $pdo, 'c1' => $c1, 'c2' => $c2];
+    return ['pdo' => $pdo, 'c1' => $c1, 'c2' => $c2, 'c3' => $c3];
 }
 
 // --- 1) Save/update C1 must not mutate C2 ownership fields ---
@@ -395,19 +421,40 @@ assert_true(
 // --- 3) Activate/deactivate C1 must not mutate C2 clients.active ---
 $fxToggle = buildTwoRelationshipFixture();
 $c2ToggleBefore = relationshipOwnershipSnapshot($fxToggle['pdo']->clients[102]);
-$newActive = toggleClientRelationshipActive($fxToggle['pdo'], 101);
+$newActive = toggleClientRelationshipActive($fxToggle['pdo'], 101, 1);
 assert_true($newActive === 0, 'toggle C1 active 1→0');
 assert_true((int) $fxToggle['pdo']->clients[101]['active'] === 0, 'C1 deactivated');
 assert_true(
     relationshipOwnershipSnapshot($fxToggle['pdo']->clients[102]) === $c2ToggleBefore,
     'deactivating C1 does not mutate C2'
 );
-$newActive2 = toggleClientRelationshipActive($fxToggle['pdo'], 101);
+$newActive2 = toggleClientRelationshipActive($fxToggle['pdo'], 101, 1);
 assert_true($newActive2 === 1, 'toggle C1 active 0→1');
 assert_true((int) $fxToggle['pdo']->clients[101]['active'] === 1, 'C1 reactivated');
 assert_true(
     relationshipOwnershipSnapshot($fxToggle['pdo']->clients[102]) === $c2ToggleBefore,
     'activating C1 does not mutate C2'
+);
+
+// --- 3b) Cross-owner toggle must fail closed ---
+$fxCross = buildTwoRelationshipFixture();
+$c1CrossBefore = relationshipOwnershipSnapshot($fxCross['pdo']->clients[101]);
+$c3CrossBefore = relationshipOwnershipSnapshot($fxCross['pdo']->clients[203]);
+$cross1 = toggleClientRelationshipActive($fxCross['pdo'], 101, 2);
+assert_true($cross1 === null, 'toggle C1 with Referent 2 returns null');
+assert_true(
+    relationshipOwnershipSnapshot($fxCross['pdo']->clients[101]) === $c1CrossBefore,
+    'toggle C1 with wrong referent does not change C1'
+);
+$cross3 = toggleClientRelationshipActive($fxCross['pdo'], 203, 1);
+assert_true($cross3 === null, 'toggle C3 with Referent 1 returns null');
+assert_true(
+    relationshipOwnershipSnapshot($fxCross['pdo']->clients[203]) === $c3CrossBefore,
+    'toggle C3 with wrong referent does not change C3'
+);
+assert_true(
+    (int) $fxCross['pdo']->clients[102]['active'] === 1,
+    'cross-owner attempts leave C2 untouched'
 );
 
 $fxMix = buildTwoRelationshipFixture();
@@ -419,7 +466,7 @@ updateClientRelationshipRow($fxMix['pdo'], 101, 1, [
     'local_client_maildir' => '/var/vmail/c1-final/Maildir',
     'active' => 0,
 ]);
-toggleClientRelationshipActive($fxMix['pdo'], 102);
+toggleClientRelationshipActive($fxMix['pdo'], 102, 1);
 $snap1 = relationshipOwnershipSnapshot($fxMix['pdo']->clients[101]);
 $snap2 = relationshipOwnershipSnapshot($fxMix['pdo']->clients[102]);
 assert_true($snap1['active'] === 0 && $snap2['active'] === 0, 'both can be independently inactive');

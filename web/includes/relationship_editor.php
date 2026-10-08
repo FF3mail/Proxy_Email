@@ -345,14 +345,24 @@ function deleteClientRelationshipRow(
 
 /**
  * Toggle clients.active for one relationship (toggle_active entity=client path).
+ * Scoped by relationship id AND referent_id (same ownership boundary as save/delete).
  *
  * @param object $pdo
- * @return int|null new active flag, or null when the row is missing
+ * @return int|null new active flag when owned by $referentId; null if missing/wrong owner
  */
-function toggleClientRelationshipActive(object $pdo, int $relationshipId): ?int
-{
-    $stmt = $pdo->prepare('SELECT active FROM clients WHERE id = ?');
-    $stmt->execute([$relationshipId]);
+function toggleClientRelationshipActive(
+    object $pdo,
+    int $relationshipId,
+    int $referentId
+): ?int {
+    if ($relationshipId <= 0 || $referentId <= 0) {
+        return null;
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT active FROM clients WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([$relationshipId, $referentId]);
     $row = $stmt->fetch();
     if ($row === false) {
         return null;
@@ -360,9 +370,10 @@ function toggleClientRelationshipActive(object $pdo, int $relationshipId): ?int
 
     $newActive = (int) !((int) $row['active']);
     $upd = $pdo->prepare(
-        'UPDATE clients SET active = ?, updated_at = NOW() WHERE id = ?'
+        'UPDATE clients SET active = ?, updated_at = NOW()
+         WHERE id = ? AND referent_id = ?'
     );
-    $upd->execute([$newActive, $relationshipId]);
+    $upd->execute([$newActive, $relationshipId, $referentId]);
 
     return $newActive;
 }

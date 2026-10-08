@@ -319,10 +319,10 @@ function renderReferentRowActions(array $row, string $returnAction): void
     <div class="flex gap-2 flex-wrap mt-2">
         <?php renderEntityToggleButton('referent', $id, (int)$row['r_active'], 'Реф.', $returnAction); ?>
         <?php if (!empty($row['client_id'])): ?>
-            <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент', $returnAction); ?>
+            <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент', $returnAction, $id); ?>
         <?php endif; ?>
         <?php if (!empty($row['ea_id'])): ?>
-            <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.', $returnAction); ?>
+            <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.', $returnAction, $id); ?>
         <?php endif; ?>
     </div>
     <div class="flex gap-2 flex-wrap mt-2">
@@ -1250,9 +1250,17 @@ function handleToggleActive(): void
 
     $toggleFlashHandled = false;
     $newActive = 0;
+    // Ownership boundary for client/account toggles: POST referent_id from the
+    // panel form (already tied to the referent card / row actions), not a
+    // post-update read of the clients row.
+    $postedReferentId = (int) ($_POST['referent_id'] ?? 0);
 
     if ($entity === 'client') {
-        $toggled = toggleClientRelationshipActive($pdo, $id);
+        if ($postedReferentId <= 0) {
+            setFlash('error', __('error.invalid_entity'));
+            redirectTo('dashboard');
+        }
+        $toggled = toggleClientRelationshipActive($pdo, $id, $postedReferentId);
         if ($toggled === null) {
             setFlash('error', __('error.record_not_found'));
             redirectTo('dashboard');
@@ -1292,9 +1300,7 @@ function handleToggleActive(): void
     if ($entity === 'referent') {
         $referentIdForSync = $id;
     } elseif ($entity === 'client') {
-        $stmtRef = $pdo->prepare('SELECT referent_id FROM clients WHERE id = ?');
-        $stmtRef->execute([$id]);
-        $referentIdForSync = (int) ($stmtRef->fetchColumn() ?: 0);
+        $referentIdForSync = $postedReferentId;
     } elseif ($entity === 'account') {
         $stmtRef = $pdo->prepare('SELECT referent_id FROM external_accounts WHERE id = ?');
         $stmtRef->execute([$id]);
