@@ -48,7 +48,8 @@ function relationshipIsActivatableComplete(array $row): bool
     return true;
 }
 
-function referentHasActivatableRelationship(PDO $pdo, int $referentId): bool
+/** @param object $pdo PDO or panel test fake with prepare() */
+function referentHasActivatableRelationship(object $pdo, int $referentId): bool
 {
     if ($referentId <= 0) {
         return false;
@@ -65,9 +66,10 @@ function referentHasActivatableRelationship(PDO $pdo, int $referentId): bool
 /**
  * Apply activation gate on save/toggle. Returns active flag to persist (0 or 1).
  *
+ * @param object $pdo
  * @return array{active: int, blocked: bool}
  */
-function referentResolveActiveOnSave(PDO $pdo, int $referentId, int $requestedActive): array
+function referentResolveActiveOnSave(object $pdo, int $referentId, int $requestedActive): array
 {
     if ($requestedActive !== 1) {
         return ['active' => 0, 'blocked' => false];
@@ -82,9 +84,10 @@ function referentResolveActiveOnSave(PDO $pdo, int $referentId, int $requestedAc
 /**
  * After relationship/account changes: deactivate referent when no activatable relationship remains.
  *
+ * @param object $pdo
  * @return bool true when referent was auto-deactivated
  */
-function referentSyncActiveAfterRelationshipChange(PDO $pdo, int $referentId): bool
+function referentSyncActiveAfterRelationshipChange(object $pdo, int $referentId): bool
 {
     if ($referentId <= 0) {
         return false;

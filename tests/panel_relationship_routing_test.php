@@ -45,6 +45,12 @@ assert_contains($helper, 'function relationshipMissingFields', '§9 missing-fiel
 assert_contains($helper, 'function activePhysicalMailboxExists', 'mailbox precondition helper');
 assert_contains($helper, 'getVmailLookupPdo', 'reuses vmail lookup PDO');
 assert_contains($helper, 'function findRelationshipUniqueCollision', 'app-layer unique check');
+assert_contains($helper, 'function updateClientRelationshipRow', 'CRUD update helper extracted');
+assert_contains($helper, 'function deleteClientRelationshipRow', 'CRUD delete helper extracted');
+assert_contains($helper, 'function toggleClientRelationshipActive', 'CRUD toggle helper extracted');
+assert_contains($index, 'updateClientRelationshipRow(', 'save handler uses update helper');
+assert_contains($index, 'deleteClientRelationshipRow(', 'delete handler uses delete helper');
+assert_contains($index, 'toggleClientRelationshipActive(', 'toggle handler uses client toggle helper');
 assert_contains($ru, 'relationship.error.mailbox_not_provisioned', 'RU i18n mailbox error');
 assert_contains($en, 'relationship.error.mailbox_not_provisioned', 'EN i18n mailbox error');
 
