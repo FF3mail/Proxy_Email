@@ -68,14 +68,23 @@ Environment=MAX_INBOUND_MESSAGE_BYTES=104857600
 | Поле | Описание |
 |------|----------|
 | `username` | Имя для отображения в панели |
-| `local_inbox` | Email локального ящика (входящие) |
-| `local_outbox` | **Абсолютный путь** к корню Maildir исходящих |
+| `local_inbox` | **Legacy (nullable):** не владеет маршрутизацией связей |
+| `local_outbox` | **Legacy (nullable):** не используется для исходящего watch |
+| `active` | Родительский административный выключатель (kill-switch) |
 
-> **Важно:** `local_outbox` — это путь на диске (например `/var/vmail/vmail1/example.com/user/Maildir`), а не email. Путь должен существовать и принадлежать почтовой системе.
+> **Владение ящиками — на уровне связи.** Каждая связь Референт ↔ Клиент имеет свои
+> независимые внешний клиент, внешний референт, локальный клиент и локальный референт.
+> Исходящий watch смотрит на `clients.local_client_maildir`, не на `referents.local_outbox`.
 
-### clients — клиентские адреса
+### clients — связи с клиентами (ClientRelationship)
 
-Связывает email клиента с `referent_id`.
+| Поле | Описание |
+|------|----------|
+| `external_client_email` | Внешний ящик клиента (этой связи) |
+| `local_client_email` | Локальный ящик клиента |
+| `local_referent_email` | Локальный ящик референта (этой связи) |
+| `external_account_id` | Внешний ящик референта (1:1 со связью) |
+| `local_client_maildir` | Путь Maildir для исходящего watchdog |
 
 ### external_accounts — внешние ящики
 
@@ -195,9 +204,10 @@ fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
 
 Предпочтительно — через панель. При экстренном SQL убедитесь, что:
 
-1. `local_inbox` — существующий адрес на Postfix
-2. `local_outbox` — существующий путь Maildir с правами `vmail`
-3. Пароли шифруются тем же `crypto.key` (через PHP `Cryptor`)
+1. У референта есть имя и при необходимости `active` (родительский выключатель)
+2. Каждая связь в `clients` имеет свои четыре адреса + `external_account_id` + `local_client_maildir`
+3. `referents.local_inbox` / `local_outbox` можно оставить NULL — они не владеют маршрутизацией
+4. Пароли шифруются тем же `crypto.key` (через PHP `Cryptor`)
 
 ---
 

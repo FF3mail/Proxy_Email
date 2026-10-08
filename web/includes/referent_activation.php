@@ -4,8 +4,16 @@ declare(strict_types=1);
 /**
  * Referent activation rules (PROMPT-83 / 2026-10-07 locked decisions).
  *
- * A referent may be active only when it has at least one relationship that is
+ * referents.active is a parent-level administrative kill-switch / enable gate:
+ * a referent may be active only when it has at least one relationship that is
  * complete (PROMPT-53 §9 field set) and active, with an active external account.
+ *
+ * Relationship isolation (unchanged by this gate):
+ * - Each relationship has its own clients.active and four-mailbox chain.
+ * - Incomplete R-C2 does not invalidate complete R-C1.
+ * - Activating/deactivating R-C1 does not change R-C2's clients.active.
+ * - Routing/watch eligibility is per-relationship once the parent referent is on.
+ * - This gate must NOT imply shared mailbox ownership (local_inbox/outbox).
  */
 
 /**
@@ -40,7 +48,8 @@ function relationshipIsActivatableComplete(array $row): bool
     return true;
 }
 
-function referentHasActivatableRelationship(PDO $pdo, int $referentId): bool
+/** @param object $pdo PDO or panel test fake with prepare() */
+function referentHasActivatableRelationship(object $pdo, int $referentId): bool
 {
     if ($referentId <= 0) {
         return false;
@@ -57,9 +66,10 @@ function referentHasActivatableRelationship(PDO $pdo, int $referentId): bool
 /**
  * Apply activation gate on save/toggle. Returns active flag to persist (0 or 1).
  *
+ * @param object $pdo
  * @return array{active: int, blocked: bool}
  */
-function referentResolveActiveOnSave(PDO $pdo, int $referentId, int $requestedActive): array
+function referentResolveActiveOnSave(object $pdo, int $referentId, int $requestedActive): array
 {
     if ($requestedActive !== 1) {
         return ['active' => 0, 'blocked' => false];
@@ -74,9 +84,10 @@ function referentResolveActiveOnSave(PDO $pdo, int $referentId, int $requestedAc
 /**
  * After relationship/account changes: deactivate referent when no activatable relationship remains.
  *
+ * @param object $pdo
  * @return bool true when referent was auto-deactivated
  */
-function referentSyncActiveAfterRelationshipChange(PDO $pdo, int $referentId): bool
+function referentSyncActiveAfterRelationshipChange(object $pdo, int $referentId): bool
 {
     if ($referentId <= 0) {
         return false;

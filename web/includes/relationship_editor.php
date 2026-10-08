@@ -239,9 +239,10 @@ function activePhysicalMailboxExists(string $email): bool
 }
 
 /**
+ * @param object $pdo PDO or panel test fake with prepare()
  * @return list<array<string, mixed>>
  */
-function fetchRelationshipsForReferent(PDO $pdo, int $referentId): array
+function fetchRelationshipsForReferent(object $pdo, int $referentId): array
 {
     $stmt = $pdo->prepare(
         'SELECT c.*,
@@ -255,6 +256,151 @@ function fetchRelationshipsForReferent(PDO $pdo, int $referentId): array
     );
     $stmt->execute([$referentId]);
     return $stmt->fetchAll() ?: [];
+}
+
+/**
+ * Load one relationship owned by a referent (relationship_delete precondition).
+ *
+ * @param object $pdo
+ * @return array<string, mixed>|null
+ */
+function findClientRelationshipOwnedByReferent(
+    object $pdo,
+    int $relationshipId,
+    int $referentId
+): ?array {
+    $stmt = $pdo->prepare(
+        'SELECT id, email FROM clients WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([$relationshipId, $referentId]);
+    $row = $stmt->fetch();
+
+    return $row === false ? null : $row;
+}
+
+/**
+ * Persist relationship-local mailbox fields (relationship_save UPDATE path).
+ * Scoped by relationship id AND referent_id so sibling rows cannot be rewritten.
+ *
+ * @param object $pdo
+ * @param array{
+ *   external_client_email: string,
+ *   local_client_email: string,
+ *   local_referent_email: string,
+ *   external_account_id: int|string,
+ *   local_client_maildir: string,
+ *   active: int
+ * } $data
+ */
+function updateClientRelationshipRow(
+    object $pdo,
+    int $relationshipId,
+    int $referentId,
+    array $data
+): int {
+    $stmt = $pdo->prepare(
+        'UPDATE clients
+         SET email = ?,
+             external_client_email = ?,
+             local_client_email = ?,
+             local_referent_email = ?,
+             external_account_id = ?,
+             local_client_maildir = ?,
+             active = ?,
+             updated_at = NOW()
+         WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([
+        $data['external_client_email'],
+        $data['external_client_email'],
+        $data['local_client_email'],
+        $data['local_referent_email'],
+        $data['external_account_id'],
+        $data['local_client_maildir'],
+        (int) $data['active'] === 1 ? 1 : 0,
+        $relationshipId,
+        $referentId,
+    ]);
+
+    return (int) $stmt->rowCount();
+}
+
+/**
+ * Delete one relationship row (relationship_delete path).
+ *
+ * @param object $pdo
+ */
+function deleteClientRelationshipRow(
+    object $pdo,
+    int $relationshipId,
+    int $referentId
+): int {
+    $stmt = $pdo->prepare(
+        'DELETE FROM clients WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([$relationshipId, $referentId]);
+
+    return (int) $stmt->rowCount();
+}
+
+/**
+ * Toggle clients.active for one relationship (toggle_active entity=client path).
+ * Scoped by relationship id AND referent_id (same ownership boundary as save/delete).
+ *
+ * @param object $pdo
+ * @return int|null new active flag when owned by $referentId; null if missing/wrong owner
+ */
+function toggleClientRelationshipActive(
+    object $pdo,
+    int $relationshipId,
+    int $referentId
+): ?int {
+    if ($relationshipId <= 0 || $referentId <= 0) {
+        return null;
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT active FROM clients WHERE id = ? AND referent_id = ?'
+    );
+    $stmt->execute([$relationshipId, $referentId]);
+    $row = $stmt->fetch();
+    if ($row === false) {
+        return null;
+    }
+
+    $newActive = (int) !((int) $row['active']);
+    $upd = $pdo->prepare(
+        'UPDATE clients SET active = ?, updated_at = NOW()
+         WHERE id = ? AND referent_id = ?'
+    );
+    $upd->execute([$newActive, $relationshipId, $referentId]);
+
+    return $newActive;
+}
+
+/**
+ * Snapshot relationship-local ownership fields for isolation assertions.
+ *
+ * @param array<string, mixed> $row
+ * @return array{
+ *   external_client_email: string,
+ *   local_client_email: string,
+ *   local_referent_email: string,
+ *   external_account_id: int,
+ *   local_client_maildir: string,
+ *   active: int
+ * }
+ */
+function relationshipOwnershipSnapshot(array $row): array
+{
+    return [
+        'external_client_email' => (string) ($row['external_client_email'] ?? ''),
+        'local_client_email' => (string) ($row['local_client_email'] ?? ''),
+        'local_referent_email' => (string) ($row['local_referent_email'] ?? ''),
+        'external_account_id' => (int) ($row['external_account_id'] ?? 0),
+        'local_client_maildir' => (string) ($row['local_client_maildir'] ?? ''),
+        'active' => (int) ($row['active'] ?? 0) === 1 ? 1 : 0,
+    ];
 }
 
 /**

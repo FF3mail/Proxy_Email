@@ -319,10 +319,10 @@ function renderReferentRowActions(array $row, string $returnAction): void
     <div class="flex gap-2 flex-wrap mt-2">
         <?php renderEntityToggleButton('referent', $id, (int)$row['r_active'], 'Реф.', $returnAction); ?>
         <?php if (!empty($row['client_id'])): ?>
-            <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент', $returnAction); ?>
+            <?php renderEntityToggleButton('client', (int)$row['client_id'], (int)$row['c_active'], 'Клиент', $returnAction, $id); ?>
         <?php endif; ?>
         <?php if (!empty($row['ea_id'])): ?>
-            <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.', $returnAction); ?>
+            <?php renderEntityToggleButton('account', (int)$row['ea_id'], (int)$row['ea_active'], 'Внешн.', $returnAction, $id); ?>
         <?php endif; ?>
     </div>
     <div class="flex gap-2 flex-wrap mt-2">
@@ -379,11 +379,6 @@ function renderReferentForm(): void
         'active' => 1,
     ];
 
-    $client = [
-        'email' => '',
-        'active' => 1,
-    ];
-
     if (!empty($_GET['id'])) {
         $stmt = $pdo->prepare(
             'SELECT *
@@ -396,19 +391,6 @@ function renderReferentForm(): void
 
         if ($row) {
             $referent = $row;
-
-            $stmt = $pdo->prepare(
-                'SELECT *
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([(int)$referent['id']]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $client = $clientRow;
-            }
         }
     }
 
@@ -458,31 +440,9 @@ function renderReferentForm(): void
 
         <?php if (empty($referent['id'])): ?>
         <hr>
-
         <h3 class="text-lg font-semibold"><?= h(__('referent.client_section')) ?></h3>
         <p class="text-sm text-slate-600"><?= h(__('relationship.create_legacy_hint')) ?></p>
-
-        <div>
-            <label class="block mb-1 font-medium"><?= h(__('referent.client_email')) ?></label>
-            <input
-                type="email"
-                name="client_email"
-                class="w-full border rounded px-3 py-2"
-                value="<?= h((string)$client['email']) ?>"
-            >
-        </div>
-
-        <div>
-            <label class="inline-flex items-center gap-2">
-                <input
-                    type="checkbox"
-                    name="client_active"
-                    value="1"
-                    <?= (int)$client['active'] === 1 ? 'checked' : '' ?>
-                >
-                <span><?= h(__('referent.client_active')) ?></span>
-            </label>
-        </div>
+        <p class="text-sm text-slate-600"><?= h(__('referent.create_no_legacy_client')) ?></p>
         <?php endif; ?>
 
         <button
@@ -511,8 +471,8 @@ function handleReferentSave(): void
 
     $requestedActive = isset($_POST['active']) ? 1 : 0;
 
-    $clientEmail = trim((string)($_POST['client_email'] ?? ''));
-    $clientActive = isset($_POST['client_active']) ? 1 : 0;
+    // Legacy single client_email create path removed: incomplete clients rows are
+    // not created here. Relationships are added via the relationship editor.
 
     $existingReferent = null;
     $existingInbox = '';
@@ -630,53 +590,6 @@ function handleReferentSave(): void
             writeLog("Referent created: ID {$referentId}");
         }
 
-        if ($clientEmail !== '') {
-            $stmt = $pdo->prepare(
-                'SELECT id
-                 FROM clients
-                 WHERE referent_id = ?'
-            );
-            $stmt->execute([$referentId]);
-
-            $clientRow = $stmt->fetch();
-
-            if ($clientRow) {
-                $stmt = $pdo->prepare(
-                    'UPDATE clients
-                     SET email = ?,
-                         active = ?,
-                         updated_at = NOW()
-                     WHERE referent_id = ?'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $clientActive,
-                    $referentId,
-                ]);
-
-                writeLog("Client updated for referent {$referentId}");
-            } else {
-                $stmt = $pdo->prepare(
-                    'INSERT INTO clients
-                    (
-                        email,
-                        referent_id,
-                        active
-                    )
-                    VALUES (?, ?, ?)'
-                );
-
-                $stmt->execute([
-                    $clientEmail,
-                    $referentId,
-                    $clientActive,
-                ]);
-
-                writeLog("Client created for referent {$referentId}");
-            }
-        // Если email пустой — ничего не делать с clients (не удалять)
-		}
         $pdo->commit();
 
         if ($activationBlocked) {
@@ -1335,30 +1248,51 @@ function handleToggleActive(): void
 
     $table = $tableMap[$entity];
 
-    $stmt = $pdo->prepare("SELECT active FROM {$table} WHERE id = ?");
-    $stmt->execute([$id]);
-
-    $row = $stmt->fetch();
-
-    if (!$row) {
-        setFlash('error', __('error.record_not_found'));
-        redirectTo('dashboard');
-    }
-
-    $newActive = (int)!$row['active'];
     $toggleFlashHandled = false;
+    $newActive = 0;
+    // Ownership boundary for client/account toggles: POST referent_id from the
+    // panel form (already tied to the referent card / row actions), not a
+    // post-update read of the clients row.
+    $postedReferentId = (int) ($_POST['referent_id'] ?? 0);
 
-    if ($entity === 'referent' && $newActive === 1) {
-        $activation = referentResolveActiveOnSave($pdo, $id, 1);
-        if ($activation['blocked']) {
-            setFlash('error', __('referent.cannot_activate_without_relationship'));
-            $newActive = 0;
-            $toggleFlashHandled = true;
+    if ($entity === 'client') {
+        if ($postedReferentId <= 0) {
+            setFlash('error', __('error.invalid_entity'));
+            redirectTo('dashboard');
         }
-    }
+        $toggled = toggleClientRelationshipActive($pdo, $id, $postedReferentId);
+        if ($toggled === null) {
+            setFlash('error', __('error.record_not_found'));
+            redirectTo('dashboard');
+        }
+        $newActive = $toggled;
+    } else {
+        $stmt = $pdo->prepare("SELECT active FROM {$table} WHERE id = ?");
+        $stmt->execute([$id]);
 
-    $stmt = $pdo->prepare("UPDATE {$table} SET active = ?, updated_at = NOW() WHERE id = ?");
-    $stmt->execute([$newActive, $id]);
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            setFlash('error', __('error.record_not_found'));
+            redirectTo('dashboard');
+        }
+
+        $newActive = (int) !((int) $row['active']);
+
+        if ($entity === 'referent' && $newActive === 1) {
+            $activation = referentResolveActiveOnSave($pdo, $id, 1);
+            if ($activation['blocked']) {
+                setFlash('error', __('referent.cannot_activate_without_relationship'));
+                $newActive = 0;
+                $toggleFlashHandled = true;
+            }
+        }
+
+        $stmt = $pdo->prepare(
+            "UPDATE {$table} SET active = ?, updated_at = NOW() WHERE id = ?"
+        );
+        $stmt->execute([$newActive, $id]);
+    }
 
     writeLog("Toggled active for {$entity} ID {$id} → {$newActive}");
 
@@ -1366,9 +1300,7 @@ function handleToggleActive(): void
     if ($entity === 'referent') {
         $referentIdForSync = $id;
     } elseif ($entity === 'client') {
-        $stmtRef = $pdo->prepare('SELECT referent_id FROM clients WHERE id = ?');
-        $stmtRef->execute([$id]);
-        $referentIdForSync = (int) ($stmtRef->fetchColumn() ?: 0);
+        $referentIdForSync = $postedReferentId;
     } elseif ($entity === 'account') {
         $stmtRef = $pdo->prepare('SELECT referent_id FROM external_accounts WHERE id = ?');
         $stmtRef->execute([$id]);
@@ -1973,29 +1905,7 @@ function handleRelationshipSave(): void
 
     try {
         if ($id > 0) {
-            $stmt = $pdo->prepare(
-                'UPDATE clients
-                 SET email = ?,
-                     external_client_email = ?,
-                     local_client_email = ?,
-                     local_referent_email = ?,
-                     external_account_id = ?,
-                     local_client_maildir = ?,
-                     active = ?,
-                     updated_at = NOW()
-                 WHERE id = ? AND referent_id = ?'
-            );
-            $stmt->execute([
-                $data['external_client_email'],
-                $data['external_client_email'],
-                $data['local_client_email'],
-                $data['local_referent_email'],
-                $data['external_account_id'],
-                $data['local_client_maildir'],
-                $data['active'],
-                $id,
-                $referentId,
-            ]);
+            updateClientRelationshipRow($pdo, $id, $referentId, $data);
             writeLog("ClientRelationship updated: ID {$id} referent={$referentId}");
         } else {
             $stmt = $pdo->prepare(
@@ -2073,18 +1983,13 @@ function handleRelationshipDelete(): void
         redirectTo('referent_list');
     }
 
-    $stmt = $pdo->prepare(
-        'SELECT id, email FROM clients WHERE id = ? AND referent_id = ?'
-    );
-    $stmt->execute([$id, $referentId]);
-    $row = $stmt->fetch();
-    if (!$row) {
+    $row = findClientRelationshipOwnedByReferent($pdo, $id, $referentId);
+    if ($row === null) {
         setFlash('error', __('error.record_not_found'));
         redirectTo('referent_view', ['id' => $referentId, 'tab' => 'clients']);
     }
 
-    $stmt = $pdo->prepare('DELETE FROM clients WHERE id = ? AND referent_id = ?');
-    $stmt->execute([$id, $referentId]);
+    deleteClientRelationshipRow($pdo, $id, $referentId);
     writeLog('ClientRelationship deleted: ID ' . $id . ' email=' . (string)$row['email']);
     setFlash('success', __('relationship.deleted'));
     if (referentSyncActiveAfterRelationshipChange($pdo, $referentId)) {

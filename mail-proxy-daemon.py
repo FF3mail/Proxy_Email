@@ -119,6 +119,8 @@ OUTBOUND_WATCH_MODE = parse_outbound_watch_mode()
 MAX_SIZE_SKIP_RETRIES = 3
 # Hard cap on the process-local skip tracker.
 MAX_SIZE_SKIP_TRACKER_ENTRIES = 10000
+# Legacy local_* columns may still be loaded for display/collision diagnostics only.
+# Normal relationship routing must not use them as mailbox owners.
 _REFERENT_ROW_COLUMNS = 'id, username, local_inbox, local_outbox'
 GCM_PREFIX = 'gcm:'
 GCM_NONCE_LENGTH = 12
@@ -875,7 +877,6 @@ class MailHandler:
                 account_id=account_id,
                 account_email=account_email,
                 from_address=from_addr,
-                referent_local_inbox=referent_data.get('local_inbox') or '',
             )
 
             if plan.lookup_error:
@@ -907,8 +908,7 @@ class MailHandler:
                         referent_name=plan.referent_name
                         or referent_data.get('username'),
                         client_name=plan.client_name or from_addr or None,
-                        local_mailbox=plan.local_mailbox
-                        or referent_data.get('local_inbox'),
+                        local_mailbox=plan.local_mailbox,
                         external_mailbox=plan.external_mailbox or from_addr or None,
                         received_at=received_at,
                         source_message_id=source_message_id,
@@ -1104,7 +1104,6 @@ class MailHandler:
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
                     from_address='',
-                    referent_local_inbox=referent_data.get('local_inbox') or '',
                 )
             return finalize_inbound_process_result(
                 plan,
@@ -1266,35 +1265,19 @@ class MailHandler:
     def _resolve_local_recipients(
         self, msg: email.message.Message, referent_data: Dict[str, Any]
     ) -> List[str]:
-        """Сопоставляет адреса получателей письма с клиентами референта в БД."""
-        to_header = msg.get('To', '')
-        cc_header = msg.get('Cc', '')
-        all_rcpts = email.utils.getaddresses([to_header, cc_header])
-        resolved = []
-        conn = None
-        cursor = None
-        try:
-            conn = self._db.get_connection()
-            cursor = conn.cursor()
-            for name, addr in all_rcpts:
-                if not addr:
-                    continue
-                # Проверяем, привязан ли адрес к нашему референту
-                query = (
-                    "SELECT email FROM clients "
-                    "WHERE email = %s AND referent_id = %s AND active = 1"
-                )
-                cursor.execute(query, (addr, referent_data['id']))
-                row = cursor.fetchone()
-                if row:
-                    resolved.append(referent_data['local_inbox'])
-                    break
-        except Exception as e:
-            logger.error(f"Error resolving local clients: {e}")
-        finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
-        return list(set(resolved))
+        """
+        Quarantined legacy helper (pre-relationship_live To/Cc → shared local_inbox).
+
+        Normal inbound routing uses RelationshipLookup + plan_inbound_delivery and
+        must never call this. Kept only so accidental call sites fail closed
+        (empty list) instead of delivering to a shared referent mailbox.
+        """
+        logger.error(
+            'Quarantined _resolve_local_recipients invoked for referent=%s — '
+            'returning empty (no shared local_inbox fallback)',
+            referent_data.get('id'),
+        )
+        return []
     # -------------------------------------------------------------------------
     # Исходящая почта: потоковая отправка через внешний SMTP
     # -------------------------------------------------------------------------
@@ -1367,8 +1350,8 @@ class MailHandler:
                     '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
                 )
                 return False
-            # TODO(PROMPT-83+): graceful fallback when referents.local_inbox is NULL (relationship-centric model).
-            notify_to = task.referent_data.get('local_inbox')
+            # Notify only via relationship-local mailbox when classify provided one.
+            notify_to = classified.local_mailbox
             maybe_notify_outbound_disposal(
                 self._passage_journal,
                 journal_id,
@@ -1421,10 +1404,7 @@ class MailHandler:
                     '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
                 )
                 return False
-            notify_to = (
-                dto.local_referent_email
-                or task.referent_data.get('local_inbox')
-            )
+            notify_to = dto.local_referent_email
             maybe_notify_outbound_disposal(
                 self._passage_journal,
                 journal_id,
@@ -2025,7 +2005,11 @@ class ProxyDaemon:
         self._watch_registered_referent_ids.add(ref_id)
 
     def _referent_handler_data(self, referent_id: int) -> Dict[str, Any]:
-        """Minimal referent row for Maildir handlers (id + inbox for notify)."""
+        """Minimal referent row for Maildir handlers (id + username).
+
+        local_inbox / local_outbox may be present as legacy nullable fields but
+        must not be used for relationship routing or disposal notify addresses.
+        """
         data: Dict[str, Any] = {'id': int(referent_id)}
         conn = None
         cursor = None
@@ -2296,8 +2280,8 @@ class ProxyDaemon:
                     exc,
                 )
                 return
-            notify_to = referent_data.get('local_inbox')
-            mail_from = referent_data.get('local_inbox') or notify_to
+            # Relationship-local notify only (plan.local_mailbox = local_referent_email).
+            notify_to = plan.local_mailbox
             maybe_notify_outbound_disposal(
                 self._mail_handler._passage_journal,
                 journal_id,
@@ -2305,7 +2289,7 @@ class ProxyDaemon:
                 referent_name=plan.referent_name or referent_data.get('username'),
                 client_name=plan.client_name,
                 notify_to=notify_to,
-                mail_from=mail_from,
+                mail_from=notify_to,
                 received_at=received_at,
                 smtp_host=LOCAL_SMTP_HOST,
                 smtp_port=LOCAL_SMTP_PORT,
@@ -2374,39 +2358,18 @@ class ProxyDaemon:
 
     def _scan_existing_outgoing(self, ref: Dict[str, Any]) -> None:
         """
-        При старте демона сканирует Maildir/new на наличие необработанных писем
-        и добавляет их в smtp_task_queue для доставки.
+        Quarantined: referent-level local_outbox backlog scan.
+
+        Outbound watch uses relationship-local local_client_maildir via
+        _scan_existing_outgoing_for_relationship / _register_watches_for_referent.
+        Do not revive shared referent outbox watching.
         """
-        maildir_new = Path(ref['local_outbox']) / 'new'
-        if not maildir_new.exists():
-            return
-        try:
-            files = [f for f in maildir_new.iterdir() if f.is_file()]
-            if not files:
-                return
-            logger.info(
-                f"Found {len(files)} backlog files for referent {ref['id']}"
-            )
-            for f in files:
-                try:
-                    self._enqueue_outbound_file(
-                        referent_data=ref,
-                        file_path=f,
-                        relationship_lookup=self._mail_handler._relationship_lookup,
-                        smtp_queue=self._smtp_task_queue,
-                        source='backlog',
-                    )
-                except queue.Full:
-                    logger.warning(
-                        f"SMTP queue full during backlog scan, "
-                        f"will retry later: {f.name}"
-                    )
-                except Exception as e:
-                    logger.error(f"Error processing backlog file {f.name}: {e}")
-        except Exception as e:
-            logger.error(
-                f"Error scanning backlog for referent {ref['id']}: {e}"
-            )
+        logger.error(
+            'Quarantined _scan_existing_outgoing invoked for referent=%s — '
+            'ignored (use relationship local_client_maildir backlog)',
+            ref.get('id'),
+        )
+        return
 
     def _scan_existing_outgoing_for_relationship(
         self, target: Dict[str, Any]

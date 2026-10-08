@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""PROMPT-79.2-deploy-verify-fixups — regression for live notify bug.
+"""Regression: referent handler data must not own relationship notify addresses.
 
-Live failure: _referent_handler_data returned only {'id': N}, so outbound
-disposal used notify_to=None / from=None and left notified=0 despite a
-successful dispose (log: "outbound notify skipped missing addresses").
+Issue #88: disposal notify uses relationship local_referent_email / classify
+local_mailbox — never referents.local_inbox as a shared fallback.
 """
 
 from __future__ import annotations
@@ -19,8 +18,6 @@ sys.path.insert(0, str(ROOT))
 
 
 class ReferentHandlerDataNotifyRegressionTest(unittest.TestCase):
-    """Fails against pre-c13069f stub; passes when DB columns are loaded."""
-
     @classmethod
     def setUpClass(cls) -> None:
         import importlib.util
@@ -56,8 +53,7 @@ class ReferentHandlerDataNotifyRegressionTest(unittest.TestCase):
         daemon._db = db
         return daemon, cursor
 
-    def test_handler_data_includes_local_inbox_used_for_notify(self) -> None:
-        """Reproduce live gap: notify reads referent_data['local_inbox']."""
+    def test_handler_data_may_load_legacy_locals_but_they_are_not_required(self) -> None:
         row = {
             'id': 1,
             'username': 'Test Referent',
@@ -68,23 +64,13 @@ class ReferentHandlerDataNotifyRegressionTest(unittest.TestCase):
         data = self.mpd.ProxyDaemon._referent_handler_data(daemon, 1)
 
         self.assertEqual(data['id'], 1)
-        self.assertEqual(data.get('local_inbox'), 'refloc1@testvps.loc')
         self.assertEqual(data.get('username'), 'Test Referent')
-        self.assertEqual(data.get('local_outbox'), '/var/vmail/refloc1/Maildir')
-        self.assertIsNotNone(data.get('local_inbox'))
+        # Legacy columns may still be present for diagnostics — not for routing.
+        self.assertEqual(data.get('local_inbox'), 'refloc1@testvps.loc')
         cursor.execute.assert_called_once()
-        sql = cursor.execute.call_args[0][0]
-        self.assertIn('local_inbox', sql)
-        self.assertIn('username', sql)
-
-    def test_pre_fix_id_only_dict_cannot_supply_notify_address(self) -> None:
-        """Document the pre-c13069f failure mode the live deploy hit."""
-        pre_fix = {'id': 1}
-        self.assertIsNone(pre_fix.get('local_inbox'))
-        self.assertIsNone(pre_fix.get('username'))
 
     def test_handler_data_nullable_local_inbox_from_db(self) -> None:
-        """PROMPT-83: referent row may have NULL local_inbox (relationship-centric)."""
+        """PROMPT-83 / #88: referent row may have NULL local_inbox."""
         row = {
             'id': 2,
             'username': 'No Referent Inbox',
@@ -97,7 +83,16 @@ class ReferentHandlerDataNotifyRegressionTest(unittest.TestCase):
         self.assertIsNone(data.get('local_inbox'))
         self.assertIsNone(data.get('local_outbox'))
 
+    def test_daemon_source_has_no_local_inbox_notify_fallback(self) -> None:
+        src = (ROOT / 'mail-proxy-daemon.py').read_text(encoding='utf-8')
+        self.assertNotRegex(
+            src,
+            r'notify_to\s*=\s*.*referent_data\.get\(\s*[\'"]local_inbox[\'"]',
+        )
+        self.assertIn('classified.local_mailbox', src)
+        self.assertIn('dto.local_referent_email', src)
+        self.assertIn('plan.local_mailbox', src)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
-
