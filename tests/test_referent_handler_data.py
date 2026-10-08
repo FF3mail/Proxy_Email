@@ -83,6 +83,20 @@ class ReferentHandlerDataNotifyRegressionTest(unittest.TestCase):
         self.assertIsNone(pre_fix.get('local_inbox'))
         self.assertIsNone(pre_fix.get('username'))
 
+    def test_handler_data_nullable_local_inbox_from_db(self) -> None:
+        """PROMPT-83: referent row may have NULL local_inbox (relationship-centric)."""
+        row = {
+            'id': 2,
+            'username': 'No Referent Inbox',
+            'local_inbox': None,
+            'local_outbox': None,
+        }
+        daemon, _cursor = self._daemon_with_referent_row(row)
+        data = self.mpd.ProxyDaemon._referent_handler_data(daemon, 2)
+        self.assertEqual(data['id'], 2)
+        self.assertIsNone(data.get('local_inbox'))
+        self.assertIsNone(data.get('local_outbox'))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
