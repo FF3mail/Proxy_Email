@@ -1,8 +1,8 @@
-# DELTA-transit — Якорный документ v4.4
+# DELTA-transit — Якорный документ v4.5
 
-**Статус:** Production Candidate / pilot (Stage 2a inbound + Stage 2b outbound routing)  
-**Дата:** 2026-09-24  
-**Синхронизирован с:** кодом на момент этого обновления (код — источник истины)
+**Статус:** Production Candidate / pilot; production routing is **relationship_live** only (see §0.1 / §3.1–§3.2)  
+**Дата:** 2026-10-08  
+**Синхронизирован с:** `origin/master` на момент этого обновления; **код — источник истины при расхождении.**
 
 ---
 
@@ -10,9 +10,24 @@
 
 Документ передаёт контекст языковым моделям и подготавливает промпты на доработку.
 
-- Отражает **только текущее состояние** кодовой базы.
+- Отражает **только текущее состояние** кодовой базы на `origin/master`.
+- `docs/reports/` и `docs/prompts/` — **исторические** материалы; не считать их текущими требованиями.
 - Исторические дефекты (до патчей PROMPT 01–09 и V2.0) не считаются активными.
 - Изменения вносятся точечно.
+
+### 0.1 Current production invariants (AI must not invent otherwise)
+
+Нормативные факты текущего `origin/master` (post PR #89 / relationship mailbox ownership):
+
+- **Inbound / outbound routing и watch:** production = `relationship_live` / `relationship_live` / `relationship_only` через `mail-proxy.service.d/routing.conf`. Daemon code accepts only live/relationship aliases; unsupported env values fall back to those same live defaults (PROMPT-79.1). Shadow / legacy / dual **routing paths removed** from the daemon (`relationship_shadow.py` absent).
+- **Mailbox ownership / routing boundary** is the **ClientRelationship** only: external client + external account, `local_client_email`, `local_referent_email`, and `local_client_maildir`. Not 1:1 referent→account; not shared `referents.local_*`.
+- **`referents.local_inbox` / `local_outbox`:** nullable **legacy only** (`schema.sql` + `migrations/006_…`). Daemon **does not** use them for normal routing, disposal notify addresses, `_resolve_local_recipients` delivery, or referent-outbox backlog/watch (those paths are relationship-local or quarantined empty). Columns may still be loaded for display/collision diagnostics.
+- **`referents.active`:** parent-level administrative kill-switch / enable gate (PROMPT-83). A referent may be active only with at least one complete, active relationship that has an active external account. This gate does **not** imply shared mailbox ownership.
+- **Panel:** Local tab is demoted / non-routing (legacy note). No shared `local_referent_email` prefill from `referents.local_inbox`. Referent create does **not** invent incomplete `clients` rows from a legacy `client_email` field.
+- **Mail-passage journal:** write a durable journal row **before** irreversible IMAP delete/EXPUNGE or Maildir unlink (ADR-001 / PROMPT-79.2). See §21 for disposal reasons and attachment gates — do not restate every sub-PROMPT here.
+- **Attachment gates / disposal** are implemented on master (`attachment_policy.py`, `mail_disposal.py`, `message_rebuild.py`, `referent_notify.py`) — see §21.
+- **Panel / daemon:** do **not** invent features from `docs/reports/` or `docs/prompts/`. Prefer this anchor + the repository tree.
+- **Open PR behaviour is not on master** until merged. Never assume an open PR is already production.
 
 ---
 
@@ -24,7 +39,7 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 |-----------|------|
 | Postfix | MTA — приём/отправка |
 | Dovecot | IMAP — локальная доставка |
-| MariaDB | Конфигурация, аккаунты, OAuth2 |
+| MariaDB | Конфигурация, аккаунты, OAuth2, mail-passage journal |
 | Nginx + PHP-FPM | Веб-панель |
 | Python 3 + venv | Демон `mail-proxy-daemon.py` |
 | systemd | Управление сервисом |
@@ -35,8 +50,10 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 
 ### Потоки данных
 
-**Входящий:** `ImapPoller` → IMAP Queue (max 5000) → `ImapWorkerPool` (20) → local SMTP :25  
-**Исходящий:** `MaildirHandler` (watchdog) → SMTP Queue (max 1000) → `SmtpWorkerPool` (20) → external SMTP
+**Входящий:** `ImapPoller` → IMAP Queue (max 5000) → `ImapWorkerPool` (20) → relationship_live plan → rebuild / dispose → local SMTP `:25` → that relationship’s `local_referent_email`  
+**Исходящий:** `MaildirHandler` watches **only** `ClientRelationship.local_client_maildir/new` → SMTP Queue (max 1000) → `SmtpWorkerPool` (20) → that relationship’s external SMTP  
+
+> Shared `referents.local_inbox` / `local_outbox` are not part of these paths.
 
 ### Ключевые классы демона
 
@@ -47,35 +64,57 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 | `MailHandler` | Бизнес-логика IMAP/SMTP, `_validate_account_settings()` (FIX P7) |
 | `ProxyDaemon` | Lifecycle, watchdog, супервизор |
 
-### Структура дистрибутива
+### Структура дистрибутива (корень репозитория)
 
 ```
 DELTA-transit/
 ├── docs/
-│   ├── DELTA-transit_anchor.md      # этот документ
-│   ├── Ckeck-list_00.md             # чек-лист развёртывания
-│   └── prompts/                     # архивные промпты (не источник истины)
-├── web/                             # деплой веб-панели (rsync → /var/www/mail-proxy)
+│   ├── DELTA-transit_anchor.md       # этот документ (SoT)
+│   ├── README.md                     # индекс документации
+│   ├── Ckeck-list_00.md              # исторический чек-лист
+│   ├── DELTA_transit_admin_guide.pdf
+│   ├── decisions/                    # ADR (например ADR-001)
+│   ├── guide/                        # руководство оператора (Markdown)
+│   ├── prompts/                      # ИСТОРИЯ — не требования
+│   └── reports/                      # ИСТОРИЯ — не требования
+├── web/                              # веб-панель
 │   ├── index.php
 │   ├── config.php
 │   ├── monitor.php
-│   └── includes/
-│       ├── helpers.php
-│       ├── Cryptor.php
-│       ├── oauth2.php
-│       └── providers_ui.php
+│   ├── logs.php
+│   ├── relationship-status.php       # mail-passage journal views
+│   ├── lang/                         # en.php, ru.php
+│   ├── assets/                       # panel CSS/JS, brand, presets
+│   └── includes/                     # auth, Cryptor, relationship_*,
+│                                     # referent_*, panel_*, oauth2, …
 ├── mail-proxy-daemon.py
-├── relationship_lookup.py           # ClientRelationship lookup (PROMPT-53/54)
-├── relationship_routing.py          # Relationship-centric routing (live-only, PROMPT-79.1)
-├── mail-proxy.service.d/routing.conf  # Production routing Environment= drop-in
+├── relationship_lookup.py            # ClientRelationship lookup
+├── relationship_routing.py           # live-only routing (PROMPT-79.1)
+├── message_rebuild.py                # attachment-only rebuild / fan-out
+├── attachment_policy.py              # extension / subject / nested gates
+├── mail_passage_journal.py           # durable journal writer
+├── mail_disposal.py                  # dispose + notify orchestration
+├── referent_notify.py                # local disposal notifications
 ├── mail-proxy.service
-├── mail-proxy-setup.sh              # быстрая установка демона (без полного инсталлятора)
-├── delta-transit-install.sh         # полный инсталлятор v3.1.0
-├── configure_limits.sh              # лимиты Postfix/Dovecot/Nginx/PHP v2.0
+├── mail-proxy.service.d/routing.conf # production Environment= drop-in
+├── mail-proxy-setup.sh
+├── delta-transit-install.sh
+├── configure_limits.sh
 ├── logrotate-mail-proxy
+├── tmpfiles.d-mail-proxy.conf        # log dir ACLs / setgid (PROMPT-78)
 ├── schema.sql
+├── migrations/
+│   ├── 002_client_relationship_columns.sql
+│   ├── 003_referent_mode_overrides.sql
+│   ├── 004_mail_passage_journal.sql
+│   ├── 005_mail_passage_journal_skipped.sql
+│   └── 006_referent_local_nullable.sql
+├── scripts/
+│   ├── purge_mail_passage_journal.py
+│   ├── verify-install-regression.sh
+│   └── panel_ui_vps_deploy.sh
 ├── requirements.txt
-└── tests/test_large_attachment.py
+└── tests/                            # Python unittest + PHP panel static tests
 ```
 
 | Файл | Назначение |
@@ -83,6 +122,9 @@ DELTA-transit/
 | `delta-transit-install.sh` | Полная установка (venv, nginx, systemd, web, audit) |
 | `configure_limits.sh` | Настройка лимитов для вложений 150 МБ |
 | `logrotate-mail-proxy` | Ротация `/var/log/mail-proxy/*.log` |
+| `tmpfiles.d-mail-proxy.conf` | Durable log directory permissions |
+
+> `relationship_shadow.py` **отсутствует** на master (удалён в PROMPT-79.1).
 
 ---
 
@@ -90,14 +132,17 @@ DELTA-transit/
 
 | Таблица | Назначение |
 |---------|------------|
-| `referents` | Референты: `local_inbox`, `local_outbox` |
-| `clients` | ClientRelationship: legacy `email` + additive columns (`external_client_email`, `local_client_email`, `local_referent_email`, `external_account_id`, `local_client_maildir`) |
+| `referents` | Референты: `username`, nullable legacy `local_inbox` / `local_outbox` (non-routing), retained override ENUM columns (unused by daemon after 79.1), `active` (parent kill-switch) |
+| `clients` | **ClientRelationship** (sole mailbox ownership): legacy `email` + additive columns (`external_client_email`, `local_client_email`, `local_referent_email`, `external_account_id`, `local_client_maildir`) |
 | `external_accounts` | Внешние ящики: IMAP/SMTP, OAuth2 |
 | `oauth_tokens` | Токены OAuth2, **UNIQUE(`account_id`)** |
 | `oauth_providers` | Google, Yandex, Microsoft (идемпотентный seed) |
+| `panel_admins` | Операторы панели (`master` / `admin`) |
+| `mail_passage_journal` | Durable passage / disposal / skipped events — создаётся миграциями `004` + `005` (не дублируется как `CREATE` в `schema.sql`) |
 
-> `referents.local_outbox` — абсолютный путь к корню Maildir на диске (не email-адрес);
-> должен соответствовать ящику, уже созданному базовой почтовой системой (iRedMail или аналог).
+> `referents.local_inbox` / `local_outbox` — **nullable legacy only** on current master (`NULL DEFAULT NULL` in `schema.sql`; upgrade path `migrations/006_referent_local_nullable.sql`). They are **not** mailbox owners and are **not** used for routing, watch, or disposal notify after PR #89. Production identity is the ClientRelationship four-mailbox chain + `local_client_maildir`. Activation policy for `referents.active` is enforced in panel code (`referent_activation.php`, PROMPT-83).
+
+> If set, `referents.local_outbox` is an absolute Maildir root on disk (not an email address) — historical/diagnostic only; outbound watch uses `clients.local_client_maildir/new`.
 
 ### `external_accounts` — важные поля
 
@@ -118,7 +163,7 @@ DELTA-transit/
 |------|------------------|
 | `/etc/mail-proxy/crypto.key` | `root:mail-proxy-crypto` 0640 |
 | `/etc/mail-proxy/db.conf` | `root:mail-proxy-crypto` 0640, секция `[db]` |
-| `/var/log/mail-proxy/` | `vmail:mail-proxy-logs` 0750 |
+| `/var/log/mail-proxy/` | `vmail:mail-proxy-logs` 2750 (setgid; see PROMPT-78 / §19) |
 | `/var/spool/mail-proxy/tmp/` | `vmail:vmail` 0700 |
 | `/var/www/mail-proxy/` | `root:root` 0755/0644 |
 | `/opt/delta-transit/venv/` | Python virtualenv |
@@ -146,22 +191,23 @@ DELTA-transit/
 | `MAX_SIZE_SKIP_TRACKER_ENTRIES` | `10000` — cap on process-local skip tracker |
 | `LOG_FILE` | `/var/log/mail-proxy/mail-proxy-daemon.log` |
 | `APP_BASE_URL` | `config.php` — доверенный URL для OAuth redirect_uri |
-| `INBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.1 |
-| `OUTBOUND_ROUTING_MODE` | `shadow` (default) \| `legacy` \| `relationship_live` — env, см. §3.2 |
-| `OUTBOUND_WATCH_MODE` | `referent_only` (default) \| `dual` \| `relationship_only` — env, см. §3.2 |
-| `RELATIONSHIP_LOOKUP_SHADOW` | default **on** в режиме `shadow` — shadow-статистика (PROMPT-58) |
+| `INBOUND_ROUTING_MODE` | production / code default: **`relationship_live`** (see §3.1) |
+| `OUTBOUND_ROUTING_MODE` | production / code default: **`relationship_live`** (see §3.2) |
+| `OUTBOUND_WATCH_MODE` | production / code default: **`relationship_only`** (see §3.2) |
 
-### 3.1 Входящая маршрутизация (Stage 2a, PROMPT-63)
+### 3.1 Входящая маршрутизация (relationship_live)
 
-**Реализовано:**
+**Текущее поведение (master):**
 
 | Компонент | Модуль | Назначение |
 |-----------|--------|------------|
 | `RelationshipLookup` | `relationship_lookup.py` | Запросы ClientRelationship (inbound/outbound API) |
-| Shadow mode | `relationship_shadow.py` | Наблюдение AGREE/DIVERGE без изменения доставки |
-| Stage 2a routing | `relationship_routing.py` | Режимы `shadow` / `legacy` / `relationship_live` |
-| Панель CRUD | `web/includes/relationship_editor.php` | Редактор связей + legacy backfill |
-| Миграция | `migrations/002_client_relationship_columns.sql` | Additive columns на `clients` |
+| Live routing | `relationship_routing.py` | Только `relationship_live`; ignores `referent_local_inbox` |
+| Rebuild / fan-out | `message_rebuild.py` + `attachment_policy.py` | Attachment-only local RFC822 → `local_referent_email` |
+| Disposal / journal | `mail_disposal.py` + `mail_passage_journal.py` | Write-before-delete; notify via relationship local mailbox |
+| Панель CRUD | `relationship_editor.php` + `referent_card_ui.php` | Relationship-owned mailboxes; Local tab = legacy only |
+| Activation | `referent_activation.php` | Parent `referents.active` kill-switch (PROMPT-83) |
+| Миграция | `migrations/002_…` … `006_…` | Additive schema evolution |
 
 **Контракт inbound lookup (авторитетный):**
 
@@ -171,53 +217,34 @@ resolve_inbound(external_account_id, normalize_email(From))
 
 Не используется: To/Cc, Subject, envelope recipient.
 
-**Режимы `INBOUND_ROUTING_MODE`:**
+**Production env** (`mail-proxy.service.d/routing.conf`):
 
-| Режим | Доставка | Shadow |
-|-------|----------|--------|
-| `shadow` (default) | Legacy To/Cc + fallback `referent.local_inbox` | Да |
-| `legacy` | Legacy only | Нет |
-| `relationship_live` | `local_referent_email` выбранной связи | Нет |
+```text
+INBOUND_ROUTING_MODE=relationship_live
+```
 
-**Безопасный default:** незаданный `INBOUND_ROUTING_MODE` → `shadow`.
-
-**Rollback:** systemd drop-in `/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf` + `systemctl daemon-reload && systemctl restart mail-proxy`.
+Unset / unsupported values in code → still `relationship_live`.
 
 **`relationship_live` — текущее поведение:**
 
-| Ситуация | Локальная доставка | IMAP `\Seen` | Legacy fallback |
-|----------|-------------------|--------------|-----------------|
-| Match | Да → `local_referent_email`, оригинальный RFC822 | При успехе SMTP | Нет |
-| Miss (unknown sender) | Нет | Да (interim skip) | **Нет** |
-| Lookup/validation error | Нет | Нет (retry) | **Нет** |
+| Ситуация | Локальная доставка | IMAP | Legacy fallback |
+|----------|-------------------|------|-----------------|
+| Match + attach gates pass | Да → rebuild fan-out → `local_referent_email` | `\Seen` after success; source dispose after journal | Нет |
+| No relationship / inactive | Нет | Journal → Seen → Deleted+EXPUNGE | **Нет** |
+| Attach gate fail | Нет | Journal (disposed/skipped) → dispose | **Нет** |
+| Lookup/MIME/DB ambiguity | Нет | Leave UNSEEN (fail-closed) | **Нет** |
 
-**Ещё не реализовано (customer spec / Stage 3+):**
+**Historical (removed):** Stage 1–2a `shadow` / `legacy` dual-run and `relationship_shadow.py` existed during cutover; removed in PROMPT-79.1. See `docs/reports/PROMPT-58-*.md`, `PROMPT-63-*.md`, `PROMPT-79-1-*.md` (historical only).
 
-- MIME attachment-only transformation / пересборка RFC822
-- IMAP DELETE/EXPUNGE для unknown sender («spam delete»)
-- Полное соответствие customer-spec inbound transformation
+**Ops / rollback note:** production drop-in is `mail-proxy.service.d/routing.conf`. Changing modes back to shadow/legacy is **not** supported by current daemon code (values coerce to live). Rollback means redeploying an older package that still contained those paths — not a config-only flip on current master.
 
-**Shadow stats:** `/run/mail-proxy/relationship_shadow_stats.json` + лог `[RELATIONSHIP_SHADOW]`.
+### 3.2 Исходящая маршрутизация и watch (relationship_live / relationship_only)
 
-### 3.2 Исходящая маршрутизация (Stage 2b, PROMPT-65) и watch (Stage 2c, PROMPT-66)
+**Текущее поведение (master):**
 
-**Watch target (по умолчанию, без изменений):** `referents.local_outbox/new` — `OUTBOUND_WATCH_MODE=referent_only` (default). На тестовом VPS один референт обслуживает две ClientRelationship; детерминизм обеспечивается **не** 1:1 referent→relationship, а ключом сообщения (`From` → `local_client_email`).
-
-**Режимы `OUTBOUND_WATCH_MODE` (независимы от `OUTBOUND_ROUTING_MODE`, PROMPT-66):**
-
-| Режим | Referent `local_outbox/new` | Relationship `local_client_maildir/new` | Назначение |
-|-------|----------------------------|----------------------------------------|------------|
-| `referent_only` (default) | Да | Нет | Текущее поведение PROMPT-65 |
-| `dual` | Да | Да (dedup по пути) | Параллельное наблюдение; `[OUTBOUND_WATCH_DUAL]` при расхождении видимости путей |
-| `relationship_only` | Нет | Да | Только с `OUTBOUND_ROUTING_MODE=relationship_live`; иначе fail-closed → `referent_only` |
-
-**Безопасный default:** незаданный `OUTBOUND_WATCH_MODE` → `referent_only`.
-
-**Rollback:** тот же systemd drop-in — `Environment=OUTBOUND_WATCH_MODE=referent_only` + restart (без миграции БД).
-
-**Путь relationship watch:** `RelationshipLookup.list_watch_targets()` → `local_client_maildir/new`. Путь **не** auto-create (в отличие от referent outbox); невалидный путь → log + skip relationship.
-
-**Dual mode:** файлы в `local_client_maildir/new` **наблюдаются и подбираются**; лог `[OUTBOUND_WATCH_DUAL]` фиксирует файлы, видимые только на одном уровне watch. Выбор SMTP-аккаунта по-прежнему определяется только `OUTBOUND_ROUTING_MODE` (shadow/legacy/relationship_live).
+- Watch targets: `RelationshipLookup.list_watch_targets()` → `local_client_maildir/new` only (`OUTBOUND_WATCH_MODE=relationship_only`).
+- Referent-level `local_outbox/new` watches removed (PROMPT-79.1).
+- Account selection: `resolve_outbound(normalize_email(From))` → `ClientRelationship.external_account_id`.
 
 **Контракт outbound lookup (авторитетный):**
 
@@ -233,27 +260,22 @@ resolve_outbound(normalize_email(From))
 
 Не используется для выбора аккаунта: `referent_id LIMIT 1`, порядок строк в `external_accounts`, To/Cc.
 
-**Режимы `OUTBOUND_ROUTING_MODE` (независимы от inbound):**
+**Production env:**
 
-| Режим | Доставка | Shadow |
-|-------|----------|--------|
-| `shadow` (default) | Legacy `referent_id LIMIT 1` | Да (`[OUTBOUND_RELATIONSHIP_SHADOW]`) |
-| `legacy` | Legacy only | Нет |
-| `relationship_live` | `external_account_id` выбранной связи | Нет |
-
-**Безопасный default:** незаданный `OUTBOUND_ROUTING_MODE` → `shadow`.
-
-**Rollback:** тот же systemd drop-in `/etc/systemd/system/mail-proxy.service.d/inbound-routing.conf` — добавить `Environment=OUTBOUND_ROUTING_MODE=shadow` + restart.
+```text
+OUTBOUND_ROUTING_MODE=relationship_live
+OUTBOUND_WATCH_MODE=relationship_only
+```
 
 **`relationship_live` — текущее поведение:**
 
 | Ситуация | Внешняя доставка | Legacy fallback |
 |----------|------------------|-----------------|
-| Match | Да → SMTP через `dto.account` | Нет |
-| Miss (unknown From) | Нет; файл остаётся в `new` (retry) | **Нет** |
-| Lookup error | Нет; файл остаётся в `new` (retry) | **Нет** |
+| Match | Да → rebuild 1:1 → SMTP via `dto.account` | Нет |
+| Miss (unknown From) | Нет; файл остаётся в `new` (retry) / disposal path per code | **Нет** |
+| Lookup error | Нет; fail-closed / retry per code | **Нет** |
 
-**Целевой watch:** `ClientRelationship.local_client_maildir/new` — реализован в `dual` / `relationship_only` (PROMPT-66). Полный production cutover (`relationship_only` + `relationship_live`) — см. §12.
+**Historical (removed):** `OUTBOUND_WATCH_MODE=referent_only|dual` and outbound `shadow`/`legacy` routing existed during Stage 2b/2c; removed in PROMPT-79.1. Reports: `PROMPT-65-*.md`, `PROMPT-66-*.md`, `PROMPT-79-1-*.md` (historical only).
 
 ---
 
@@ -325,8 +347,8 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | `VALID_AUTH_TYPES` | `('plain', 'oauth2')` |
 | `VALID_ENCRYPTION_MODES` | `('none', 'ssl', 'tls')` |
 | Метод | `MailHandler._validate_account_settings(acc, encryption_field, protocol_label)` |
-| Вызов до IMAP | `poll_external_imap()` — строка ~417, до `imaplib` connect |
-| Вызов до SMTP | `send_via_external_smtp()` — строка ~653, до `smtplib` connect |
+| Вызов до IMAP | `poll_external_imap()` — до `imaplib` connect |
+| Вызов до SMTP | `send_via_external_smtp()` — до `smtplib` connect |
 | Невалидное значение | `logger.error(...)`, `return` / `return False` — аккаунт пропускается, **без подстановки умолчаний** |
 
 Константы синхронизированы с `ENUM` в `schema.sql` (`external_accounts.auth_type`, `imap_encryption`, `smtp_encryption`).
@@ -351,6 +373,12 @@ Whitelist `auth_type` и режимов шифрования реализова�
 - `www-data` не в группе `vmail`
 - `parse_ini_file($file, true)` для секции `[db]`
 - **FIX P7:** whitelist `auth_type` / `imap_encryption` / `smtp_encryption` через `_validate_account_settings()` перед каждым IMAP/SMTP-соединением
+- **PROMPT-79.1:** live-only routing; shadow/legacy/dual paths removed from daemon
+- **PROMPT-79.2 / ADR-001:** mail-passage journal write-before-delete
+- **PROMPT-77 / rebuild:** attachment-only inbound fan-out + outbound 1:1 under `relationship_live`
+- **PROMPT-78:** durable daemon log permissions via tmpfiles.d
+- **PROMPT-83:** nullable legacy `referents.local_*` + panel activation gate
+- **PR #89:** ClientRelationship is the sole normal mailbox ownership / routing boundary; daemon notify and recipient resolution no longer use shared `referents.local_*`
 
 ---
 
@@ -366,13 +394,21 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | SSRF OAuth endpoints | Реализовано (PHP + Python) |
 | CSRF веб-панели | Реализовано |
 | Whitelist auth_type/encryption | **Закрыт (P7 / FIX P7)** |
+| Journal before irreversible delete | **Закрыт (ADR-001 / 79.2)** |
 
 ---
 
 ## 10. Инструкция для следующей модели
 
+**Предпочитать:** этот якорь (v4.5) + код на `origin/master`. При конфликте текст ↔ код — **править текст** или реализовывать по коду, не по устаревшему абзацу.
+
 **НЕ ДЕЛАТЬ:**
 
+- Реализовывать фичи **только** из `docs/reports/` или `docs/prompts/` без проверки master
+- Считать поведение **открытого PR** уже находящимся на master
+- Возвращать shadow / legacy / dual как «безопасный default» — на текущем master их нет
+- Восстанавливать shared `referents.local_inbox` / `local_outbox` as routing, watch, notify, or `_resolve_local_recipients` owners
+- Prefill relationship `local_referent_email` from `referents.local_inbox`, or create incomplete `clients` from a legacy `client_email` on referent create
 - Менять архитектуру пула воркеров
 - Удалять OAuth2
 - Возвращаться к «1 референт = 1 поток»
@@ -382,6 +418,7 @@ Whitelist `auth_type` и режимов шифрования реализова�
 - Нарушать совместимость PHP `Cryptor` ↔ Python `Cryptor`
 - Доверять `X-Real-IP` без проверки `REMOTE_ADDR`
 - Удалять или обходить `_validate_account_settings()` (FIX P7)
+- Обходить write-before-delete journal invariant (ADR-001)
 
 ---
 
@@ -393,93 +430,55 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | Инсталлятор v3.1.0 (FIX-1…FIX-8) | Закрыт |
 | Синхронизация демон ↔ schema.sql (FIX-3.2-1) | Закрыт v3.2 |
 | Структура `web/` (FIX-3.2-2) | Закрыт v3.2 |
+| Live-only routing + relationship watch (79.1) | Закрыт |
+| Message rebuild + attachment gates (77 / 79.2) | Закрыт |
+| Mail-passage journal (ADR-001 / 79.2) | Закрыт |
+| Daemon log permissions (78) | Закрыт (reboot V4 deferred to maintenance) |
+| Relationship sole mailbox ownership (PR #89) | Закрыт |
+| Nullable legacy `referents.local_*` + activation (PROMPT-83) | Закрыт |
 | P4 — imaplib.fetch RAM | **Частично закрыт** (pre-fetch size guard; imaplib буфер для писем ≤ лимита) |
 | P7 — whitelist encryption | **Закрыт (FIX P7)** |
 
 ---
 
-## 12. Реестр открытых архитектурных пробелов (PROMPT-66)
+## 12. Реестр открытых архитектурных пробелов (актуально на v4.5)
+
+Закрыто на master и **не** числится открытым: PROMPT-77 rebuild, PROMPT-78 log perms, PROMPT-79.1 live-only cutover, PROMPT-79.2 journal/disposal, Stage 2a/2b/2c shadow dual-run, PROMPT-83 nullable locals + activation, PR #89 relationship sole mailbox ownership.
 
 | Группа | Открытые пункты |
 |--------|-----------------|
-| **Routing** | Полная замена legacy To/Cc inbound |
-| **Message Transformation** | Inbound 1:N fan-out (N attachments → N single-attachment local messages); outbound 1:1 rebuild; новый From/To per relationship; **NG-7** — fan-out duplicate suppression on IMAP retry (deferred hardening) |
-| **Spam Handling** | IMAP DELETE/EXPUNGE для unknown external sender |
-| **Outbound watch cutover** | Production rollout `OUTBOUND_WATCH_MODE=relationship_only` + `OUTBOUND_ROUTING_MODE=relationship_live` (PROMPT-67+); отключение referent-level watch после стабилизации dual-наблюдения |
-| **Operational Hardening** | Panel UI для shadow/routing/watch stats; non-interactive routing mode audit; ~~daemon log permission drift (Issue #23)~~ → **закрыто PROMPT-78** (§19) |
+| **P4 inbound RAM** | `imaplib` всё ещё буферизует принятые RFC822 ≤ `MAX_INBOUND_MESSAGE_BYTES` (§7) |
+| **Schema cleanup** | DB columns `referents.inbound_routing_mode` / `outbound_*` retained but unused by daemon after 79.1 (cleanup deferred historically as PROMPT-79.4); legacy `referents.local_*` columns retained as nullable non-routing |
+| **Isolation / scale** | Option B multi-instance daemon still deferred (§13); confirm operator isolation needs before designing |
+| **Hardening** | Fan-out duplicate suppression on IMAP retry (NG-7) remains deferred hardening if still absent in code |
 
-**PROMPT-68 (план готовности к cutover):** предпосылки, runbook, откат и чеклист go/no-go для целевого состояния `relationship_live` / `relationship_live` / `relationship_only` — [`docs/reports/PROMPT-68-cutover-readiness-plan.md`](reports/PROMPT-68-cutover-readiness-plan.md). Документ составлен, когда переключение режимов было только процесс-глобальным; поэтапный cutover теперь выполняется через per-referent overrides (§13, §§16–18).
+Do **not** treat open PR branches (e.g. UI polish) as master requirements until merged.
 
-**PROMPT-70:** симметричные коллизии путей Maildir (два relationship / outbox референта) должны блокироваться на этапе provisioning и не являются поддерживаемым runtime-случаем — см. [`docs/reports/PROMPT-70-provisioning-path-guard.md`](reports/PROMPT-70-provisioning-path-guard.md).
+**Historical cutover plan:** [`docs/reports/PROMPT-68-cutover-readiness-plan.md`](reports/PROMPT-68-cutover-readiness-plan.md) — written when mode flips were process-global; production is now live-only via drop-in.
+
+**PROMPT-70:** симметричные коллизии путей Maildir должны блокироваться на provisioning — см. [`docs/reports/PROMPT-70-provisioning-path-guard.md`](reports/PROMPT-70-provisioning-path-guard.md) (historical report; verify against current panel guards).
 
 ---
 
 ## 13. Decision record — per-referent mode granularity (PROMPT-71)
 
-**Status:** Accepted direction (design only; not implemented). *Уточнение:* формулировка «design only; not implemented» — историческая для PROMPT-71 и на практике снята; см. superseding note в этом разделе и §§16–18.  
+**Status:** Historical decision record. Option A was implemented in PROMPT-73, then **routing overrides / shadow paths were removed from the daemon in PROMPT-79.1**. Schema override columns remain; panel no longer edits them. Do **not** treat the old «design only; not implemented» line as current work.  
 **Full analysis:** [`docs/reports/PROMPT-71-mode-granularity-decision.md`](reports/PROMPT-71-mode-granularity-decision.md)  
-**Verified against:** `origin/master` @ `b1fb42a`
+**Verified against:** historical baseline noted in that report; current behaviour = §0.1 / §3.1–§3.2
 
-### Decision
+### Decision (historical summary)
 
-**Option A — single daemon process, DB-driven per-referent overrides** for
-`inbound_routing_mode` / `outbound_routing_mode` / `outbound_watch_mode`, with
-`NULL` = inherit process-global env defaults.
+**Option A — single daemon process, DB-driven per-referent overrides** was the accepted cutover approach for staggered pilots.
 
-**Overrides apply only after daemon restart** (not live inside the 60s
-`_sync_database_state()` loop). Membership changes (active referent /
-valid relationship add-remove) continue to sync live under the
-startup-resolved effective modes.
-
-**Option B (multi-instance / systemd template / referent partition) is deferred**
-until operator scale or failure-isolation requirements justify it. Unscoped
-`ImapPoller` + `_load_referents()` + `list_watch_targets()` would make naïve
-multi-instance **incorrect** (duplicate IMAP + duplicate watches), not merely
-inefficient.
-
-### Why A over B (summary)
-
-- Motivating gap is **staggered cutover policy**, not process isolation.
-- Per-message `plan_*` call sites already receive `referent_data`; routing wiring is local.
-- Watch-mode cost is real (loop inversion + filtered watch targets + heterogeneous registries) but bounded if live mode-flips are refused.
-- Option B’s partition + PID/log/stats/panel surface is a larger correctness project; scale N is **undocumented** (lab = 1 referent).
-
-### Limitations accepted
-
-- One process remains the shared failure domain.
-- Production referent-count expectation is an **open operator question**.
-
-### Reversibility
-
-Nullable overrides are additive; all-`NULL` restores global-env behaviour.
-Option B remains possible later and is not foreclosed.
-
-### PROMPT-72 (if proceeding)
-
-Implement Option A schema + startup-resolved effective modes + watch loop
-inversion. Do **not** implement live mode transitions, multi-instance units,
-or cutover execution in the same PROMPT.
+**Option B (multi-instance / systemd template / referent partition) remains deferred** until operator scale or failure-isolation requirements justify it.
 
 ### Superseding note — PROMPT-72 (2026-09-11)
 
 **Full reassessment:** [`docs/reports/PROMPT-72-scale-reassessment.md`](reports/PROMPT-72-scale-reassessment.md)
 
-**What changed:**
+Scale clause for Option B was met in lab planning (dozens of referents); isolation need remains unconfirmed. Staggered cutover used Option A during pilot; production on current master is process-global live-only via `routing.conf`.
 
-| PROMPT-71 assumption | PROMPT-72 finding |
-|---------------------|-------------------|
-| Scale N undocumented | **25 referents now, 50+ planned**; 125–250 relationships today, ~500 at growth target |
-| Option B deferred — scale unknown | **Scale clause of Option B trigger is now met** ("dozens of referents") |
-| Isolation need bundled with scale | **Isolation need remains unconfirmed** — must not be inferred from scale alone |
-
-**Revised recommendation (staged):**
-
-- **PROMPT-73 → Option A** (per-referent mode overrides, single process, restart-only). Synthetic verification shows DB/sync/collision paths comfortable at N=50; staggered cutover policy remains the immediate gap.
-- **Option B later** when operator confirms crash-isolation requirement **or** production proves IMAP poll cadence miss (~3.2 s avg poll budget at N=50 with 20 workers) or filesystem sync scan exceeds budget.
-
-**Measured at N=50 (lab VPS):** IMAP poller DB 94 ms; sync DB portion 121 ms; collision checks ~3 ms; log-tail 100% coverage at 35% shadow density (degrades to 53% at 10%). IMAP network poll latency **not measured**.
-
-**PROMPT-71 record above is preserved for audit; this note supersedes only the scale-based deferral rationale and PROMPT-72 scope pointer.**
+**PROMPT-71 record above is preserved for audit; production invariants are in §0.1.**
 
 ---
 
@@ -499,32 +498,28 @@ or cutover execution in the same PROMPT.
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-15 (PROMPT-76.1 revision) |
-| **Type** | Design/spec only (no code) |
-| **Code baseline** | `88339c4` — `_stream_file_via_smtp()` still relays **original RFC822** both directions |
-| **Approved target** | Attachment-only rebuild + new From/To per ClientRelationship (PROMPT-52 §3.2–3.3, inbound refined) |
-| **Primary PDF admin guide** | **Silent** on rebuild semantics (size limits only) |
-| **Rebuild gate** | **`relationship_live`** per direction (shadow/legacy remain raw stream); no independent toggle (CQ-11) |
-| **Customer questions** | **CQ-1…CQ-12 closed** — see report §7 (resolved decisions table) |
-| **Non-goals** | Spam delete (PROMPT-78), full spec reconciliation (PROMPT-79) |
+| **Type** | Design/spec (implementation landed in PROMPT-77; see §16–§18) |
+| **Approved target** | Attachment-only rebuild + new From/To per ClientRelationship |
+| **Rebuild gate** | **`relationship_live`** per direction |
+| **Customer questions** | **CQ-1…CQ-12 closed** — see report §7 |
+| **Non-goals at spec time** | Spam delete / journal (later PROMPT-79.2) |
 
 ### Inbound fan-out architecture (PROMPT-76.1)
-
-Customer confirmation changed inbound from 1:1 message transformation to **1:N fan-out**:
 
 | Aspect | Rule |
 |--------|------|
 | **Shape** | One internet message with N attachable parts → **N separate** local RFC822 messages, each with **exactly one** attachment |
-| **Subject** | Regenerated per child = that attachment's filename (with extension); original multi-file Subject is never copied |
+| **Subject** | Regenerated per child = that attachment's filename (with extension) |
 | **Inline parts** | Discarded (CQ-3) |
-| **Zero attachments** | Fail closed — no delivery, UNSEEN (CQ-1/CQ-7) |
-| **Nested .eml / forward** | Fail closed as malformed MIME (CQ-9/CQ-12) — no distinct handling |
-| **Atomicity (RD-13)** | All-or-nothing: rebuild all N before any SMTP; `\Seen` only when all N deliveries succeed; retry may duplicate already-delivered children |
+| **Zero attachments** | Fail closed / dispose path (see §21 on master) |
+| **Nested .eml / forward** | `nested_message` disposal (79.2i/j) on master |
+| **Atomicity (RD-13)** | All-or-nothing before source dispose; retry may duplicate already-delivered children (NG-7 deferred) |
 
-### Outbound (unchanged shape: 1:1)
+### Outbound (1:1)
 
-Locally originated messages are **already single-attachment** by house convention. Outbound rebuild is **1:1** — no fan-out. Unexpected multi-attachment outbound → fail closed.
+Locally originated messages are **already single-attachment** by house convention. Outbound rebuild is **1:1**. Unexpected multi-attachment outbound → fail closed / dispose.
 
-**Status:** Spec **ready for PROMPT-77 implementation** (all CQ items closed; RD-13 atomicity decided in spec).
+**Status on master:** Implemented (PROMPT-77 + 79.2 gates). Spec report remains historical detail.
 
 ---
 
@@ -536,15 +531,9 @@ Locally originated messages are **already single-attachment** by house conventio
 |-------|-------|
 | **Date** | 2026-09-17 |
 | **Host** | Lab VPS `192.0.2.10` |
-| **Code merge** | `1d5f8c1` (PR #21, PROMPT-77) deployed to VPS |
-| **Isolation** | Shadow-first deploy (overrides cleared → deploy → restart on shadow → then live flip) |
-| **Live flip** | `2026-09-17T07:30:16Z` — `relationship_live` / `relationship_live` / `referent_only` |
-| **Observation** | 60 min (`07:40:56Z`–`08:40:57Z`); no unexpected `[MESSAGE_REBUILD]` beyond deliberate zero-attach |
-| **Verdict** | **NOT ACCEPTED** |
-| **Rollback** | Overrides cleared to NULL; effective `shadow`/`shadow`/`referent_only` since `2026-09-17T08:42:17Z` |
-| **Blockers for ACCEPTED** | (1) fail-closed does not retain IMAP UNSEEN (`FETCH RFC822` side-effect); (2) inbound fan-out into watched referent outbox echoes rebuilt children outbound |
+| **Verdict** | **NOT ACCEPTED** (see report; superseded by §17–§18) |
 
-**Next:** ~~PROMPT-77.2~~ → see §17. ~~PROMPT-77.3~~ → see §18. **PROMPT-78** (spam/unknown-sender deletion) remains after 77.3 closure.
+**Next:** see §17–§18. Historical «PROMPT-78 spam delete» pointer in older text was retargeted — disposal/journal is PROMPT-79.2; PROMPT-78 closed log permissions (§19).
 
 ---
 
@@ -555,12 +544,9 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-09-18 |
-| **Branch** | `prompt-77-2-rebuild-live-defects` (from `origin/master` `c55aa9e`) |
-| **Defect 1** | `FETCH (BODY.PEEK[])` — `\Seen` only via gated `STORE`; regression `tests/test_imap_fetch_seen.py` |
-| **Defect 2 investigation** | **Confirmed:** rebuilt `From=local_client_email` matches `resolve_outbound`; raw external From does not — path coupling under `referent_only` now fires |
-| **Defect 2 fix** | **Config (option c):** rebuild pilot must use `outbound_watch_mode=relationship_only` (not `referent_only`); no delivery-target or watch-exclusion code change |
-| **VPS in this PROMPT** | **No** live flip / no override change — code + docs only |
-| **Next** | **PROMPT-77.3** — deploy PEEK, shadow-first, then live with `relationship_live`/`relationship_live`/`relationship_only` |
+| **Defect 1** | `FETCH (BODY.PEEK[])` — `\Seen` only via gated `STORE` |
+| **Defect 2 fix** | Rebuild pilot required `outbound_watch_mode=relationship_only` |
+| **Next** | **PROMPT-77.3** — see §18 |
 
 ---
 
@@ -572,15 +558,8 @@ Locally originated messages are **already single-attachment** by house conventio
 |-------|-------|
 | **Date** | 2026-09-18 (pilot) / 2026-09-21 (observation closure) |
 | **Host** | Lab VPS `192.0.2.10` |
-| **Code** | `6718ce6` (PR #22) deployed; binaries match repo — no drift vs `origin/master` code |
-| **PEEK gate** | **PASS** — independent `BODY.PEEK[]`; UNSEEN retained |
-| **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** (`2026-09-18T12:04:28Z`) |
-| **Topology** | `0` referent watches, `2` relationship maildir paths |
-| **Fan-out** | Delivered; children retained in referent Maildir; **no outbound echo** across full window |
-| **Outbound inject** | `local_client_maildir/new` only — external delivery confirmed (PROMPT-77.3) |
-| **Observation (PROMPT-77.4)** | **60 min completed** — `2026-09-21T07:27:25Z` → `2026-09-21T08:29:35Z` (3730 s wall clock; 60 poll samples) |
-| **Rollback** | **Not required** |
-| **Verdict** | **ACCEPTED** — full window clean; referent #1 remains live |
+| **Live flip** | `relationship_live` / `relationship_live` / **`relationship_only`** |
+| **Verdict** | **ACCEPTED** |
 | **Next** | ~~PROMPT-78 (daemon log permissions)~~ → see §19 |
 
 ---
@@ -592,15 +571,10 @@ Locally originated messages are **already single-attachment** by house conventio
 | Field | Value |
 |-------|-------|
 | **Issue** | [#23](https://github.com/FF3mail/Proxy_Email/issues/23) — panel `monitor.php` shows `"(недоступен)"` for daemon log after restart/rotation |
-| **Root cause** | `logrotate` `create 0640 vmail vmail` + daemon creates `vmail:vmail`; fragile `ExecStartPre chown` fails as unprivileged `vmail` |
 | **Fix** | `tmpfiles.d` (setgid `2750` dir + file ACLs); `UMask=0027`; `ExecStartPre=+systemd-tmpfiles`; logrotate `create … mail-proxy-logs` |
 | **Target perms** | dir `2750 vmail:mail-proxy-logs`; `mail-proxy-daemon.log` `0640 vmail:mail-proxy-logs`; `web_admin.log` `0660 vmail:mail-proxy-logs` |
-| **Invariant** | `/var/log/mail-proxy` **must** retain setgid (`2750`) so new files inherit `mail-proxy-logs`; enforced via `tmpfiles.d` + installers |
-| **Operational note** | Forced `logrotate -f` same calendar day as midnight `dateext` rotation fails if `…-YYYYMMDD` archive already exists — remove dated archive first or wait next day |
-| **V4 (reboot)** | **Deferred** — `systemd-tmpfiles --cat-config` confirms boot registration; execute at next maintenance window |
-| **Pilot state** | referent #1 modes unchanged: `relationship_live` / `relationship_live` / `relationship_only` (§18; pre-existing) |
-| **Out of scope** | `message_rebuild.py`, routing/watch, PHP panel code (proposal: distinguish missing vs unreadable in `monitor.php:603`) |
-| **Verdict** | **ACCEPTED** — V1–V3 pass on lab VPS (`ac24213`); V4 reboot deferred to maintenance window |
+| **V4 (reboot)** | **Deferred** — execute at next maintenance window |
+| **Verdict** | **ACCEPTED** — V1–V3 pass on lab VPS |
 
 ---
 
@@ -613,9 +587,9 @@ Locally originated messages are **already single-attachment** by house conventio
 | **Scope** | Remove `relationship_shadow.py`, shadow/legacy/dual routing paths, per-referent mode UI, shadow observability parsing |
 | **Daemon** | `relationship_routing.py` live-only; `mail-proxy-daemon.py` relationship-only watches; override cache removed |
 | **Production modes** | `INBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_ROUTING_MODE=relationship_live`, `OUTBOUND_WATCH_MODE=relationship_only` via `mail-proxy.service.d/routing.conf` |
-| **Panel** | Referent form no longer edits `inbound_routing_mode` / `outbound_*` columns; `relationship-status.php` → mail-passage journal views (PROMPT-79.2) |
-| **Schema** | DB override columns retained (cleanup deferred PROMPT-79.4) |
-| **Verdict** | See closure report |
+| **Panel** | Referent form no longer edits routing override columns; `relationship-status.php` → mail-passage journal views (PROMPT-79.2) |
+| **Schema** | DB override columns retained (cleanup deferred) |
+| **Verdict** | Landed on master — current production default |
 
 ---
 
@@ -627,19 +601,19 @@ Locally originated messages are **already single-attachment** by house conventio
 
 | Field | Value |
 |-------|-------|
-| **Storage** | MySQL `mail_passage_journal` via `004` + `005` (`skipped` event + `detail` VARCHAR(1024); `schema.sql` / `003` untouched) |
-| **Timestamps** | `event_ts` / `received_at` / `action_at` — UTC computed in application code; naive `DATETIME(0)`; never SQL `NOW()` |
-| **One row** | Per delivered recipient/child and per disposal event |
-| **Disposal** | `no_relationship` / `relationship_inactive` / attachment gates (`zero_attachments`, `disallowed_extension`, `subject_mismatch`, `too_many_attachments`, `missing_filename`; outbound `multiple_attachments`). Skipped → `event_type=skipped`. Inbound IMAP: journal → Seen → Deleted+EXPUNGE |
-| **Inbound attach gate (79.2d/e/i/j)** | One path for N≥1; attachment = Disposition contains `attachment` only (inline ignored). Archives ∪ images (no SVG); MAX=20; archive Subject (E2 NFC); `missing_filename` skip; **`nested_message`** for `message/rfc822` attachment (opaque, no inner walk); dispose order Seen→delete (E4); shared enumerator with `nested_policy` (inbound opaque on **classify and rebuild** / outbound error — 79.2j desync fix). Reports: `PROMPT-79-2d-…`, `PROMPT-79-2e-…`, `PROMPT-79-2i-…`, `PROMPT-79-2j-….md` |
+| **Storage** | MySQL `mail_passage_journal` via `004` + `005` (`skipped` event + `detail` VARCHAR(1024)) |
+| **Timestamps** | `event_ts` / `received_at` / `action_at` — UTC in application code; naive `DATETIME(0)`; never SQL `NOW()` |
+| **One row** | Per delivered recipient/child and per disposal / skipped event |
+| **Disposal** | `no_relationship` / `relationship_inactive` / attachment gates (`zero_attachments`, `disallowed_extension`, `subject_mismatch`, `too_many_attachments`, `missing_filename`; outbound `multiple_attachments`; inbound `nested_message`). Skipped → `event_type=skipped` |
+| **Inbound attach gate (79.2d/e/i/j)** | Attachment = Disposition contains `attachment` only (inline ignored). Archives ∪ images (no SVG); MAX=20; archive Subject (E2 NFC); `missing_filename` skip; **`nested_message`** for `message/rfc822` attachment (opaque, no inner walk) |
 | **Fail-closed** | Lookup/MIME/DB errors → leave message (UNSEEN / Maildir intact); never dispose on ambiguity |
 | **Write-before-delete** | Journal `INSERT` must succeed before IMAP `\Deleted`+EXPUNGE or Maildir unlink |
-| **Notify** | Outbound disposal → local §4 template to referent; inbound-from-internet → silent; `notified` flipped to 1 only after confirmed send |
-| **Inactive model** | Deactivated relationship disposed like no-match with distinct reason code (operator clarification 2026-09-23; decisions log §2 amended) |
-| **Retention** | 1 year; daily cron `scripts/purge_mail_passage_journal.py` (independent of debug-log logrotate) |
+| **Notify** | Outbound disposal → local template to referent; inbound-from-internet → silent; `notified` flipped to 1 only after confirmed send |
+| **Inactive model** | Deactivated relationship disposed like no-match with distinct reason code |
+| **Retention** | 1 year; daily cron `scripts/purge_mail_passage_journal.py` |
 | **Panel** | `relationship-status.php` — passage table + nonstandard events from journal only |
-| **Verdict** | See closure report |
+| **Verdict** | Landed on master |
 
 ---
 
-*Конец документа · DELTA-transit Anchor v4.4*
+*Конец документа · DELTA-transit Anchor v4.5*
