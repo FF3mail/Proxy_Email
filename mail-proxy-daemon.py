@@ -875,7 +875,7 @@ class MailHandler:
                 account_id=account_id,
                 account_email=account_email,
                 from_address=from_addr,
-                referent_local_inbox=referent_data['local_inbox'],
+                referent_local_inbox=referent_data.get('local_inbox') or '',
             )
 
             if plan.lookup_error:
@@ -1104,7 +1104,7 @@ class MailHandler:
                     account_id=int(account['id']) if account else 0,
                     account_email=str(account.get('email') or '') if account else '',
                     from_address='',
-                    referent_local_inbox=referent_data['local_inbox'],
+                    referent_local_inbox=referent_data.get('local_inbox') or '',
                 )
             return finalize_inbound_process_result(
                 plan,
@@ -1367,6 +1367,7 @@ class MailHandler:
                     '[MAIL_DISPOSAL] journal write failed — not deleting: %s', exc
                 )
                 return False
+            # TODO(PROMPT-83+): graceful fallback when referents.local_inbox is NULL (relationship-centric model).
             notify_to = task.referent_data.get('local_inbox')
             maybe_notify_outbound_disposal(
                 self._passage_journal,
