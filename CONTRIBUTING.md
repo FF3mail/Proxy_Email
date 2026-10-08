@@ -12,7 +12,7 @@
 ## Documentation entry point
 
 - **[docs/README.md](docs/README.md)** — index of operator guide, architecture anchor (SoT), decisions, and historical material.
-- Architecture source of truth: **[docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md)** (current anchor **v4.4**; code wins on conflict).
+- Architecture source of truth: **[docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md)** (current anchor **v4.5**; code wins on conflict).
 
 ## Do not
 
