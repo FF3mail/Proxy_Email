@@ -17,15 +17,17 @@
 
 ### 0.1 Current production invariants (AI must not invent otherwise)
 
-Нормативные факты текущего `origin/master`:
+Нормативные факты текущего `origin/master` (post PR #89 / relationship mailbox ownership):
 
 - **Inbound / outbound routing и watch:** production = `relationship_live` / `relationship_live` / `relationship_only` через `mail-proxy.service.d/routing.conf`. Daemon code accepts only live/relationship aliases; unsupported env values fall back to those same live defaults (PROMPT-79.1). Shadow / legacy / dual **routing paths removed** from the daemon (`relationship_shadow.py` absent).
-- **Target identity** is **ClientRelationship** (`local_referent_email` + `local_client_email` + `external_account_id`); not 1:1 referent→account.
+- **Mailbox ownership / routing boundary** is the **ClientRelationship** only: external client + external account, `local_client_email`, `local_referent_email`, and `local_client_maildir`. Not 1:1 referent→account; not shared `referents.local_*`.
+- **`referents.local_inbox` / `local_outbox`:** nullable **legacy only** (`schema.sql` + `migrations/006_…`). Daemon **does not** use them for normal routing, disposal notify addresses, `_resolve_local_recipients` delivery, or referent-outbox backlog/watch (those paths are relationship-local or quarantined empty). Columns may still be loaded for display/collision diagnostics.
+- **`referents.active`:** parent-level administrative kill-switch / enable gate (PROMPT-83). A referent may be active only with at least one complete, active relationship that has an active external account. This gate does **not** imply shared mailbox ownership.
+- **Panel:** Local tab is demoted / non-routing (legacy note). No shared `local_referent_email` prefill from `referents.local_inbox`. Referent create does **not** invent incomplete `clients` rows from a legacy `client_email` field.
 - **Mail-passage journal:** write a durable journal row **before** irreversible IMAP delete/EXPUNGE or Maildir unlink (ADR-001 / PROMPT-79.2). See §21 for disposal reasons and attachment gates — do not restate every sub-PROMPT here.
 - **Attachment gates / disposal** are implemented on master (`attachment_policy.py`, `mail_disposal.py`, `message_rebuild.py`, `referent_notify.py`) — see §21.
-- **`referents.local_inbox` / `local_outbox`:** nullable (`NULL` allowed) on current master `schema.sql` + `migrations/006_referent_local_nullable.sql`. Panel activation gate lives in `web/includes/referent_activation.php` (landed with PROMPT-83 / PR #87). Residual daemon paths that still assume non-NULL locals may exist — treat code as authority; do not invent extra activation rules from reports.
 - **Panel / daemon:** do **not** invent features from `docs/reports/` or `docs/prompts/`. Prefer this anchor + the repository tree.
-- **Open PR behaviour is not on master** until merged (e.g. further mailbox-ownership follow-ups). Never assume an open PR is already production.
+- **Open PR behaviour is not on master** until merged. Never assume an open PR is already production.
 
 ---
 
@@ -48,8 +50,10 @@ DELTA-transit — корпоративный почтовый прокси-шл�
 
 ### Потоки данных
 
-**Входящий:** `ImapPoller` → IMAP Queue (max 5000) → `ImapWorkerPool` (20) → relationship_live plan → rebuild / dispose → local SMTP `:25`  
-**Исходящий:** `MaildirHandler` watches `ClientRelationship.local_client_maildir/new` → SMTP Queue (max 1000) → `SmtpWorkerPool` (20) → external SMTP
+**Входящий:** `ImapPoller` → IMAP Queue (max 5000) → `ImapWorkerPool` (20) → relationship_live plan → rebuild / dispose → local SMTP `:25` → that relationship’s `local_referent_email`  
+**Исходящий:** `MaildirHandler` watches **only** `ClientRelationship.local_client_maildir/new` → SMTP Queue (max 1000) → `SmtpWorkerPool` (20) → that relationship’s external SMTP  
+
+> Shared `referents.local_inbox` / `local_outbox` are not part of these paths.
 
 ### Ключевые классы демона
 
@@ -128,17 +132,17 @@ DELTA-transit/
 
 | Таблица | Назначение |
 |---------|------------|
-| `referents` | Референты: `username`, nullable `local_inbox` / `local_outbox`, retained override ENUM columns (unused by daemon after 79.1), `active` |
-| `clients` | ClientRelationship: legacy `email` + additive columns (`external_client_email`, `local_client_email`, `local_referent_email`, `external_account_id`, `local_client_maildir`) |
+| `referents` | Референты: `username`, nullable legacy `local_inbox` / `local_outbox` (non-routing), retained override ENUM columns (unused by daemon after 79.1), `active` (parent kill-switch) |
+| `clients` | **ClientRelationship** (sole mailbox ownership): legacy `email` + additive columns (`external_client_email`, `local_client_email`, `local_referent_email`, `external_account_id`, `local_client_maildir`) |
 | `external_accounts` | Внешние ящики: IMAP/SMTP, OAuth2 |
 | `oauth_tokens` | Токены OAuth2, **UNIQUE(`account_id`)** |
 | `oauth_providers` | Google, Yandex, Microsoft (идемпотентный seed) |
 | `panel_admins` | Операторы панели (`master` / `admin`) |
 | `mail_passage_journal` | Durable passage / disposal / skipped events — создаётся миграциями `004` + `005` (не дублируется как `CREATE` в `schema.sql`) |
 
-> `referents.local_inbox` / `local_outbox` — **nullable** on current master (`NULL DEFAULT NULL` in `schema.sql`; upgrade path `migrations/006_referent_local_nullable.sql`). They are **not** the production routing identity; routing uses ClientRelationship mailboxes. Activation policy for `referents.active` is enforced in panel code (`referent_activation.php`).
+> `referents.local_inbox` / `local_outbox` — **nullable legacy only** on current master (`NULL DEFAULT NULL` in `schema.sql`; upgrade path `migrations/006_referent_local_nullable.sql`). They are **not** mailbox owners and are **not** used for routing, watch, or disposal notify after PR #89. Production identity is the ClientRelationship four-mailbox chain + `local_client_maildir`. Activation policy for `referents.active` is enforced in panel code (`referent_activation.php`, PROMPT-83).
 
-> `referents.local_outbox`, when set, is an absolute Maildir root on disk (not an email address) and must match a mailbox already provisioned by the base mail system (iRedMail or equivalent).
+> If set, `referents.local_outbox` is an absolute Maildir root on disk (not an email address) — historical/diagnostic only; outbound watch uses `clients.local_client_maildir/new`.
 
 ### `external_accounts` — важные поля
 
@@ -198,10 +202,11 @@ DELTA-transit/
 | Компонент | Модуль | Назначение |
 |-----------|--------|------------|
 | `RelationshipLookup` | `relationship_lookup.py` | Запросы ClientRelationship (inbound/outbound API) |
-| Live routing | `relationship_routing.py` | Только `relationship_live` |
-| Rebuild / fan-out | `message_rebuild.py` + `attachment_policy.py` | Attachment-only local RFC822 |
-| Disposal / journal | `mail_disposal.py` + `mail_passage_journal.py` | Write-before-delete; reasons in §21 |
-| Панель CRUD | `web/includes/relationship_editor.php` | Редактор связей |
+| Live routing | `relationship_routing.py` | Только `relationship_live`; ignores `referent_local_inbox` |
+| Rebuild / fan-out | `message_rebuild.py` + `attachment_policy.py` | Attachment-only local RFC822 → `local_referent_email` |
+| Disposal / journal | `mail_disposal.py` + `mail_passage_journal.py` | Write-before-delete; notify via relationship local mailbox |
+| Панель CRUD | `relationship_editor.php` + `referent_card_ui.php` | Relationship-owned mailboxes; Local tab = legacy only |
+| Activation | `referent_activation.php` | Parent `referents.active` kill-switch (PROMPT-83) |
 | Миграция | `migrations/002_…` … `006_…` | Additive schema evolution |
 
 **Контракт inbound lookup (авторитетный):**
@@ -372,6 +377,8 @@ Whitelist `auth_type` и режимов шифрования реализова�
 - **PROMPT-79.2 / ADR-001:** mail-passage journal write-before-delete
 - **PROMPT-77 / rebuild:** attachment-only inbound fan-out + outbound 1:1 under `relationship_live`
 - **PROMPT-78:** durable daemon log permissions via tmpfiles.d
+- **PROMPT-83:** nullable legacy `referents.local_*` + panel activation gate
+- **PR #89:** ClientRelationship is the sole normal mailbox ownership / routing boundary; daemon notify and recipient resolution no longer use shared `referents.local_*`
 
 ---
 
@@ -400,6 +407,8 @@ Whitelist `auth_type` и режимов шифрования реализова�
 - Реализовывать фичи **только** из `docs/reports/` или `docs/prompts/` без проверки master
 - Считать поведение **открытого PR** уже находящимся на master
 - Возвращать shadow / legacy / dual как «безопасный default» — на текущем master их нет
+- Восстанавливать shared `referents.local_inbox` / `local_outbox` as routing, watch, notify, or `_resolve_local_recipients` owners
+- Prefill relationship `local_referent_email` from `referents.local_inbox`, or create incomplete `clients` from a legacy `client_email` on referent create
 - Менять архитектуру пула воркеров
 - Удалять OAuth2
 - Возвращаться к «1 референт = 1 поток»
@@ -425,6 +434,8 @@ Whitelist `auth_type` и режимов шифрования реализова�
 | Message rebuild + attachment gates (77 / 79.2) | Закрыт |
 | Mail-passage journal (ADR-001 / 79.2) | Закрыт |
 | Daemon log permissions (78) | Закрыт (reboot V4 deferred to maintenance) |
+| Relationship sole mailbox ownership (PR #89) | Закрыт |
+| Nullable legacy `referents.local_*` + activation (PROMPT-83) | Закрыт |
 | P4 — imaplib.fetch RAM | **Частично закрыт** (pre-fetch size guard; imaplib буфер для писем ≤ лимита) |
 | P7 — whitelist encryption | **Закрыт (FIX P7)** |
 
@@ -432,17 +443,16 @@ Whitelist `auth_type` и режимов шифрования реализова�
 
 ## 12. Реестр открытых архитектурных пробелов (актуально на v4.5)
 
-Закрыто на master и **не** числится открытым: PROMPT-77 rebuild, PROMPT-78 log perms, PROMPT-79.1 live-only cutover, PROMPT-79.2 journal/disposal, Stage 2a/2b/2c shadow dual-run.
+Закрыто на master и **не** числится открытым: PROMPT-77 rebuild, PROMPT-78 log perms, PROMPT-79.1 live-only cutover, PROMPT-79.2 journal/disposal, Stage 2a/2b/2c shadow dual-run, PROMPT-83 nullable locals + activation, PR #89 relationship sole mailbox ownership.
 
 | Группа | Открытые пункты |
 |--------|-----------------|
 | **P4 inbound RAM** | `imaplib` всё ещё буферизует принятые RFC822 ≤ `MAX_INBOUND_MESSAGE_BYTES` (§7) |
-| **Schema cleanup** | DB columns `referents.inbound_routing_mode` / `outbound_*` retained but unused by daemon after 79.1 (cleanup deferred historically as PROMPT-79.4) |
+| **Schema cleanup** | DB columns `referents.inbound_routing_mode` / `outbound_*` retained but unused by daemon after 79.1 (cleanup deferred historically as PROMPT-79.4); legacy `referents.local_*` columns retained as nullable non-routing |
 | **Isolation / scale** | Option B multi-instance daemon still deferred (§13); confirm operator isolation needs before designing |
 | **Hardening** | Fan-out duplicate suppression on IMAP retry (NG-7) remains deferred hardening if still absent in code |
-| **Residual NULL locals** | Some notify / legacy diagnostic paths may still assume populated `local_inbox`/`local_outbox` — verify in code before changing behaviour |
 
-Do **not** treat open PR branches (mailbox-ownership follow-ups, UI polish, etc.) as master requirements until merged.
+Do **not** treat open PR branches (e.g. UI polish) as master requirements until merged.
 
 **Historical cutover plan:** [`docs/reports/PROMPT-68-cutover-readiness-plan.md`](reports/PROMPT-68-cutover-readiness-plan.md) — written when mode flips were process-global; production is now live-only via drop-in.
 
