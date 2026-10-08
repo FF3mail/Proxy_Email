@@ -14,6 +14,46 @@ function panelReturnFields(int $referentId, string $tab): void
 }
 
 /**
+ * @param array<string, mixed> $account external_accounts row (+ optional expires_at)
+ * @return array<string, mixed>
+ */
+function referentCardExternalAccountPayload(array $account): array
+{
+    return [
+        'id' => (int) ($account['id'] ?? 0),
+        'email' => (string) ($account['email'] ?? ''),
+        'username' => (string) ($account['username'] ?? ''),
+        'auth_type' => (string) ($account['auth_type'] ?? 'plain'),
+        'provider' => (string) ($account['provider'] ?? ''),
+        'imap_host' => (string) ($account['imap_host'] ?? ''),
+        'imap_port' => (int) ($account['imap_port'] ?? 0),
+        'imap_encryption' => (string) ($account['imap_encryption'] ?? ''),
+        'smtp_host' => (string) ($account['smtp_host'] ?? ''),
+        'smtp_port' => (int) ($account['smtp_port'] ?? 0),
+        'smtp_encryption' => (string) ($account['smtp_encryption'] ?? ''),
+        'client_id' => (string) ($account['client_id'] ?? ''),
+        'active' => (int) ($account['active'] ?? 0) === 1 ? 1 : 0,
+        'expires_at' => (string) ($account['expires_at'] ?? ''),
+    ];
+}
+
+/**
+ * @param array<string, mixed> $account
+ */
+function referentCardExternalAccountMailSummary(array $account): string
+{
+    return sprintf(
+        'IMAP %s:%d (%s) · SMTP %s:%d (%s)',
+        (string) ($account['imap_host'] ?? ''),
+        (int) ($account['imap_port'] ?? 0),
+        formatMailEncryption((string) ($account['imap_encryption'] ?? '')),
+        (string) ($account['smtp_host'] ?? ''),
+        (int) ($account['smtp_port'] ?? 0),
+        formatMailEncryption((string) ($account['smtp_encryption'] ?? ''))
+    );
+}
+
+/**
  * Build read-only email/username suggestion lists for referent-card modals.
  *
  * Queries (getPdo):
@@ -288,17 +328,9 @@ function renderReferentCardUi(): void
     }
 
     $stmt = $pdo->prepare(
-        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active AS r_active,
-                ea.id AS ea_id, ea.email AS ea_email, ea.username AS ea_username,
-                ea.auth_type, ea.provider, ea.imap_host, ea.imap_port, ea.imap_encryption,
-                ea.smtp_host, ea.smtp_port, ea.smtp_encryption, ea.active AS ea_active,
-                ea.client_id AS ea_client_id,
-                ot.expires_at
+        'SELECT r.id, r.username, r.local_inbox, r.local_outbox, r.active AS r_active
          FROM referents r
-         LEFT JOIN external_accounts ea ON ea.referent_id = r.id
-         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
-         WHERE r.id = ?
-         LIMIT 1'
+         WHERE r.id = ?'
     );
     $stmt->execute([$id]);
     $row = $stmt->fetch();
@@ -307,6 +339,7 @@ function renderReferentCardUi(): void
         redirectTo('referent_list');
     }
 
+    $externalAccounts = fetchExternalAccountsForReferentCard($pdo, $id);
     $relationships = fetchRelationshipsForReferent($pdo, $id);
     $accounts = fetchExternalAccountsForRelationshipForm($pdo, $id, null);
     // Autocomplete sources for modal email fields (datalists rendered once per card).
@@ -317,7 +350,8 @@ function renderReferentCardUi(): void
     $providers = $providersStmt ? ($providersStmt->fetchAll() ?: []) : [];
     $localMail = loadLocalMailClientSettings();
 
-    $hasAcc = !empty($row['ea_id']);
+    $hasAcc = $externalAccounts !== [];
+    $externalAccountCount = count($externalAccounts);
     $complete = 0;
     foreach ($relationships as $rel) {
         if (relationshipMissingFields($rel) === [] && !relationshipIsLegacyOnly($rel)) {
@@ -333,7 +367,7 @@ function renderReferentCardUi(): void
     $tabs = [
         'overview' => 'Обзор',
         'local' => 'Локальный ящик',
-        'external' => 'Внешний аккаунт',
+        'external' => 'Внешние аккаунты',
         'clients' => 'Клиенты и связи',
     ];
 
@@ -395,13 +429,19 @@ function renderReferentCardUi(): void
                 </li>
                 <li>
                     <span class="pm-dot <?= $hasAcc ? 'pm-dot-ok' : 'pm-dot-todo' ?>"><?= $hasAcc ? '✓' : '!' ?></span>
-                    <div class="pm-t">Внешний аккаунт
-                        <small><?= $hasAcc
-                            ? h((string) $row['ea_email']) . ' · ' . h((string) $row['auth_type'])
-                            : 'Не настроен — демон не сможет забирать и отправлять почту' ?></small>
+                    <div class="pm-t">Внешние аккаунты
+                        <small><?php if ($hasAcc): ?>
+                            <?php if ($externalAccountCount === 1): ?>
+                                <?= h((string) $externalAccounts[0]['email']) ?> · <?= h((string) $externalAccounts[0]['auth_type']) ?>
+                            <?php else: ?>
+                                <?= (int) $externalAccountCount ?> аккаунтов (например <?= h((string) $externalAccounts[0]['email']) ?>)
+                            <?php endif; ?>
+                        <?php else: ?>
+                            Не настроены — демон не сможет забирать и отправлять почту
+                        <?php endif; ?></small>
                     </div>
                     <?php if ($hasAcc): ?>
-                        <button type="button" class="pm-btn pm-btn-sm" data-pm-open="dlg-account-edit">Изменить</button>
+                        <a class="pm-btn pm-btn-sm" href="index.php?action=referent_view&id=<?= $id ?>&tab=external">Открыть</a>
                     <?php else: ?>
                         <button type="button" class="pm-btn pm-btn-sm pm-btn-primary" data-pm-open="dlg-account-create">Настроить</button>
                     <?php endif; ?>
@@ -440,40 +480,60 @@ function renderReferentCardUi(): void
             </dl>
         </div>
     <?php elseif ($tab === 'external'): ?>
-        <?php if ($hasAcc): ?>
         <div class="pm-card">
             <div class="pm-ch">
-                <h3>Внешний почтовый аккаунт</h3>
-                <div style="display:flex;gap:8px">
-                    <button type="button" class="pm-btn" data-pm-open="dlg-account-edit">✎ Изменить</button>
-                    <button type="button" class="pm-btn pm-btn-danger" data-pm-open="dlg-account-delete">Удалить</button>
-                </div>
+                <h3>Внешние почтовые аккаунты</h3>
+                <button type="button" class="pm-btn pm-btn-primary" data-pm-open="dlg-account-create">+ Добавить ещё</button>
             </div>
-            <p class="pm-hint">Демон опрашивает внешний IMAP и отправляет исходящую почту через внешний SMTP. Пароли и токены хранятся зашифрованно и не показываются.</p>
-            <dl class="pm-dl">
-                <dt>Email</dt><dd class="pm-mono"><?= h((string) $row['ea_email']) ?></dd>
-                <dt>Логин IMAP/SMTP</dt><dd class="pm-mono"><?= h((string) ($row['ea_username'] ?: $row['ea_email'])) ?></dd>
-                <dt>Авторизация</dt><dd><?= h((string) $row['auth_type']) ?><?= $row['provider'] ? ' (' . h((string) $row['provider']) . ')' : '' ?></dd>
-                <dt>Статус</dt>
-                <dd><?php if ((int) $row['ea_active'] === 1): ?><span class="pm-chip pm-chip-ok">Активен</span><?php else: ?><span class="pm-chip pm-chip-off">Отключён</span><?php endif; ?></dd>
-                <dt>IMAP</dt><dd class="pm-mono"><?= h((string) $row['imap_host']) ?>:<?= (int) $row['imap_port'] ?> (<?= h(formatMailEncryption((string) $row['imap_encryption'])) ?>)</dd>
-                <dt>SMTP</dt><dd class="pm-mono"><?= h((string) $row['smtp_host']) ?>:<?= (int) $row['smtp_port'] ?> (<?= h(formatMailEncryption((string) $row['smtp_encryption'])) ?>)</dd>
-                <?php if ($row['auth_type'] === 'oauth2' && !empty($row['expires_at'])): ?>
-                <dt>OAuth2 токен</dt>
-                <dd>до <?= h((string) $row['expires_at']) ?>
-                    <span class="pm-chip <?= strtotime((string) $row['expires_at']) > time() ? 'pm-chip-ok' : 'pm-chip-warn' ?>">
-                        <?= strtotime((string) $row['expires_at']) > time() ? 'активен' : 'истёк' ?>
-                    </span>
-                </dd>
-                <?php endif; ?>
-            </dl>
+            <p class="pm-hint">У референта может быть несколько внешних аккаунтов; каждая связь с клиентом использует ровно один из них. Пароли и токены хранятся зашифрованно и не показываются.</p>
+            <?php if ($externalAccounts === []): ?>
+                <div class="pm-empty">
+                    Внешних аккаунтов пока нет. Без них демон не сможет синхронизировать почту с удалённым сервером.<br>
+                    <button type="button" class="pm-btn pm-btn-primary" style="margin-top:10px" data-pm-open="dlg-account-create">+ Создать первый аккаунт</button>
+                </div>
+            <?php else: ?>
+                <div class="pm-table-wrap">
+                    <table class="pm-table" id="ext-accounts-table" data-pm-table="1">
+                        <thead>
+                        <tr>
+                            <th data-sort="email">Email</th>
+                            <th data-sort="auth_type">Авторизация</th>
+                            <th>IMAP / SMTP</th>
+                            <th data-sort="active">Статус</th>
+                            <th>OAuth2</th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($externalAccounts as $ei => $acc):
+                            $payload = referentCardExternalAccountPayload($acc);
+                            $login = trim((string) ($acc['username'] ?? '')) !== ''
+                                ? (string) $acc['username']
+                                : (string) $acc['email'];
+                            ?>
+                            <tr tabindex="0" data-open="1" data-account='<?= h(json_encode($payload, JSON_UNESCAPED_UNICODE)) ?>'
+                                class="<?= $ei === 0 ? 'pm-sel' : '' ?>">
+                                <td class="pm-mono"><?= h((string) $acc['email']) ?><br><span class="pm-help"><?= h($login) ?></span></td>
+                                <td><?= h((string) $acc['auth_type']) ?><?= !empty($acc['provider']) ? ' (' . h((string) $acc['provider']) . ')' : '' ?></td>
+                                <td class="pm-mono" style="font-size:12px"><?= h(referentCardExternalAccountMailSummary($acc)) ?></td>
+                                <td><?php if ((int) $acc['active'] === 1): ?><span class="pm-chip pm-chip-ok">Активен</span><?php else: ?><span class="pm-chip pm-chip-off">Отключён</span><?php endif; ?></td>
+                                <td><?php if (($acc['auth_type'] ?? '') === 'oauth2' && !empty($acc['expires_at'])): ?>
+                                    <?= h((string) $acc['expires_at']) ?>
+                                    <span class="pm-chip <?= strtotime((string) $acc['expires_at']) > time() ? 'pm-chip-ok' : 'pm-chip-warn' ?>">
+                                        <?= strtotime((string) $acc['expires_at']) > time() ? 'активен' : 'истёк' ?>
+                                    </span>
+                                <?php else: ?>—<?php endif; ?></td>
+                                <td style="white-space:nowrap">
+                                    <button type="button" class="pm-btn pm-btn-sm" data-account-edit="1">Изменить</button>
+                                    <button type="button" class="pm-btn pm-btn-sm pm-btn-danger" data-account-delete="1">Удалить</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
         </div>
-        <?php else: ?>
-        <div class="pm-empty">
-            Внешний аккаунт не настроен. Без него демон не сможет синхронизировать почту с удалённым сервером.<br>
-            <button type="button" class="pm-btn pm-btn-primary" style="margin-top:10px" data-pm-open="dlg-account-create">+ Создать внешний аккаунт</button>
-        </div>
-        <?php endif; ?>
     <?php else: /* clients */ ?>
         <div class="pm-card">
             <div class="pm-ch">
@@ -639,7 +699,7 @@ function renderReferentCardUi(): void
                 </div>
                 <div class="pm-f" data-oauth-only="create" style="display:none"><label>Client ID</label><input type="text" name="client_id" autocomplete="off"></div>
                 <div class="pm-f" data-oauth-only="create" style="display:none"><label>Client Secret</label><input type="password" name="client_secret" autocomplete="new-password"></div>
-                <div class="pm-notice pm-notice-info" data-oauth-only="create" style="display:none">OAuth2: после сохранения можно авторизовать аккаунт на вкладке «Внешний аккаунт».</div>
+                <div class="pm-notice pm-notice-info" data-oauth-only="create" style="display:none">OAuth2: после сохранения можно авторизовать аккаунт на вкладке «Внешние аккаунты».</div>
                 <div class="pm-f pm-full"><label class="pm-chk"><input type="checkbox" name="active" value="1" checked> Аккаунт активен</label></div>
             </div></div>
             <div class="pm-mf"><span></span><div class="pm-r">
@@ -648,41 +708,40 @@ function renderReferentCardUi(): void
             </div></div>
         </form>
     </dialog>
-    <?php if ($hasAcc): ?>
     <dialog class="pm-dialog" id="dlg-account-edit" aria-modal="true">
-        <form method="post" action="index.php?action=account_save">
+        <form method="post" action="index.php?action=account_save" id="form-account-edit">
             <div class="pm-mh"><h2>Внешний аккаунт</h2><button type="button" class="pm-x" data-pm-close aria-label="Закрыть">×</button></div>
             <div class="pm-mb"><div class="pm-fg">
                 <input type="hidden" name="action" value="account_save">
                 <input type="hidden" name="referent_id" value="<?= $id ?>">
-                <input type="hidden" name="account_id" value="<?= (int) $row['ea_id'] ?>">
+                <input type="hidden" name="account_id" value="">
                 <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
                 <?php panelReturnFields($id, 'external'); ?>
-                <div class="pm-f pm-full"><label>Email *</label><input type="email" name="email" required list="dl-sug-ea-email" value="<?= h((string) $row['ea_email']) ?>" autocomplete="off"></div>
-                <div class="pm-f pm-full"><label>Логин IMAP/SMTP</label><input type="text" name="username" list="dl-sug-ea-username" value="<?= h((string) $row['ea_username']) ?>" autocomplete="off"><span class="pm-help">Если пусто — используется email</span></div>
+                <div class="pm-f pm-full"><label>Email *</label><input type="email" name="email" required list="dl-sug-ea-email" autocomplete="off"></div>
+                <div class="pm-f pm-full"><label>Логин IMAP/SMTP</label><input type="text" name="username" list="dl-sug-ea-username" autocomplete="off"><span class="pm-help">Если пусто — используется email</span></div>
                 <div class="pm-f pm-full"><label>Авторизация</label>
                     <select name="auth_type" data-auth-toggle="edit">
-                        <option value="plain" <?= $row['auth_type'] === 'plain' ? 'selected' : '' ?>>Пароль</option>
-                        <option value="oauth2" <?= $row['auth_type'] === 'oauth2' ? 'selected' : '' ?>>OAuth2</option>
+                        <option value="plain">Пароль</option>
+                        <option value="oauth2">OAuth2</option>
                     </select>
                 </div>
                 <div class="pm-sect">Входящая почта (IMAP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required value="<?= h((string) $row['imap_host']) ?>"></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="<?= (int) $row['imap_port'] ?>"></div>
+                <div class="pm-f"><label>Сервер *</label><input type="text" name="imap_host" required></div>
+                <div class="pm-f"><label>Порт</label><input type="number" name="imap_port" value="993"></div>
                 <div class="pm-f pm-full"><label>Шифрование</label>
                     <select name="imap_encryption">
                         <?php foreach (['ssl' => 'SSL/TLS', 'tls' => 'STARTTLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>" <?= $row['imap_encryption'] === $k ? 'selected' : '' ?>><?= h($lbl) ?></option>
+                            <option value="<?= $k ?>"><?= h($lbl) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 <div class="pm-sect">Исходящая почта (SMTP)</div>
-                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required value="<?= h((string) $row['smtp_host']) ?>"></div>
-                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="<?= (int) $row['smtp_port'] ?>"></div>
+                <div class="pm-f"><label>Сервер *</label><input type="text" name="smtp_host" required></div>
+                <div class="pm-f"><label>Порт</label><input type="number" name="smtp_port" value="587"></div>
                 <div class="pm-f pm-full"><label>Шифрование</label>
                     <select name="smtp_encryption">
                         <?php foreach (['tls' => 'STARTTLS', 'ssl' => 'SSL/TLS', 'none' => 'Без шифрования'] as $k => $lbl): ?>
-                            <option value="<?= $k ?>" <?= $row['smtp_encryption'] === $k ? 'selected' : '' ?>><?= h($lbl) ?></option>
+                            <option value="<?= $k ?>"><?= h($lbl) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -695,19 +754,17 @@ function renderReferentCardUi(): void
                     <label>OAuth provider</label>
                     <select name="provider"><option value="">— Выберите —</option>
                     <?php foreach ($providers as $p): ?>
-                        <option value="<?= h((string) $p['code']) ?>" <?= $row['provider'] === $p['code'] ? 'selected' : '' ?>><?= h((string) $p['name']) ?></option>
+                        <option value="<?= h((string) $p['code']) ?>"><?= h((string) $p['name']) ?></option>
                     <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="pm-f" data-oauth-only="edit" style="display:none"><label>Client ID</label><input type="text" name="client_id" value="<?= h((string) ($row['ea_client_id'] ?? '')) ?>" autocomplete="off"></div>
+                <div class="pm-f" data-oauth-only="edit" style="display:none"><label>Client ID</label><input type="text" name="client_id" autocomplete="off"></div>
                 <div class="pm-f" data-oauth-only="edit" style="display:none"><label>Client Secret</label><input type="password" name="client_secret" placeholder="оставьте пустым, чтобы не менять" autocomplete="new-password"></div>
-                <div class="pm-f pm-full"><label class="pm-chk"><input type="checkbox" name="active" value="1" <?= (int) $row['ea_active'] === 1 ? 'checked' : '' ?>> Аккаунт активен</label></div>
+                <div class="pm-f pm-full"><label class="pm-chk"><input type="checkbox" name="active" value="1" checked> Аккаунт активен</label></div>
             </div></div>
             <div class="pm-mf">
                 <span>
-                <?php if (!empty($row['ea_id'])): ?>
-                    <button type="submit" form="oauth_initiate_form_card" class="pm-btn">OAuth2 авторизация</button>
-                <?php endif; ?>
+                    <button type="submit" form="oauth_initiate_form_card" class="pm-btn" id="btn-oauth-initiate-card" style="display:none">OAuth2 авторизация</button>
                 </span>
                 <div class="pm-r">
                     <button type="button" class="pm-btn" data-pm-close>Отмена</button>
@@ -718,16 +775,16 @@ function renderReferentCardUi(): void
     </dialog>
     <form id="oauth_initiate_form_card" method="post" action="index.php" class="hidden" style="display:none">
         <input type="hidden" name="action" value="oauth_initiate">
-        <input type="hidden" name="account_id" value="<?= (int) $row['ea_id'] ?>">
+        <input type="hidden" name="account_id" id="oauth_initiate_account_id" value="">
         <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
     </form>
     <dialog class="pm-dialog" id="dlg-account-delete" aria-modal="true" data-pm-nodirty="1">
         <form method="post" action="index.php?action=account_delete">
             <div class="pm-mh"><h2>Удалить внешний аккаунт?</h2><button type="button" class="pm-x" data-pm-close aria-label="Закрыть">×</button></div>
             <div class="pm-mb">
-                <p style="margin:0">Аккаунт <?= h((string) $row['ea_email']) ?> будет удалён. Связи, использующие его, останутся без внешнего аккаунта.</p>
+                <p style="margin:0" id="acc-del-text">Аккаунт будет удалён. Связи, использующие его, останутся без внешнего аккаунта.</p>
                 <input type="hidden" name="action" value="account_delete">
-                <input type="hidden" name="id" value="<?= (int) $row['ea_id'] ?>">
+                <input type="hidden" name="id" id="acc_del_id" value="">
                 <input type="hidden" name="referent_id" value="<?= $id ?>">
                 <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
                 <?php panelReturnFields($id, 'external'); ?>
@@ -738,7 +795,6 @@ function renderReferentCardUi(): void
             </div></div>
         </form>
     </dialog>
-    <?php endif; ?>
     <!-- Modal: relationship create/edit -->
     <dialog class="pm-dialog" id="dlg-rel-edit" aria-modal="true">
         <form method="post" action="index.php?action=relationship_save" id="form-rel-edit">
@@ -854,6 +910,82 @@ function renderReferentCardUi(): void
         syncAuth(sel.getAttribute('data-auth-toggle'));
       });
 
+      function setSelectByValue(sel, value) {
+        if (!sel) return;
+        var v = value || '';
+        sel.value = v;
+        if (sel.value !== v && v) {
+          Array.prototype.forEach.call(sel.options, function (opt) {
+            if (opt.value === v) sel.value = v;
+          });
+        }
+      }
+
+      function fillAccountEdit(data) {
+        var form = document.getElementById('form-account-edit');
+        if (!form || !data) return;
+        form.querySelector('[name=account_id]').value = data.id ? String(data.id) : '';
+        form.querySelector('[name=email]').value = data.email || '';
+        form.querySelector('[name=username]').value = data.username || '';
+        setSelectByValue(form.querySelector('[name=auth_type]'), data.auth_type || 'plain');
+        setSelectByValue(form.querySelector('[name=imap_encryption]'), data.imap_encryption || 'ssl');
+        setSelectByValue(form.querySelector('[name=smtp_encryption]'), data.smtp_encryption || 'tls');
+        setSelectByValue(form.querySelector('[name=provider]'), data.provider || '');
+        form.querySelector('[name=imap_host]').value = data.imap_host || '';
+        form.querySelector('[name=imap_port]').value = data.imap_port ? String(data.imap_port) : '993';
+        form.querySelector('[name=smtp_host]').value = data.smtp_host || '';
+        form.querySelector('[name=smtp_port]').value = data.smtp_port ? String(data.smtp_port) : '587';
+        var clientId = form.querySelector('[name=client_id]');
+        if (clientId) clientId.value = data.client_id || '';
+        var pwd = form.querySelector('[name=password]');
+        if (pwd) pwd.value = '';
+        var secret = form.querySelector('[name=client_secret]');
+        if (secret) secret.value = '';
+        var active = form.querySelector('[name=active]');
+        if (active) active.checked = Number(data.active) === 1;
+        syncAuth('edit');
+        var oauthId = document.getElementById('oauth_initiate_account_id');
+        if (oauthId) oauthId.value = data.id ? String(data.id) : '';
+        var oauthBtn = document.getElementById('btn-oauth-initiate-card');
+        if (oauthBtn) {
+          oauthBtn.style.display = data.id && data.auth_type === 'oauth2' ? '' : 'none';
+        }
+      }
+
+      window.ReferentCardAccounts = {
+        parse: function (tr) {
+          try { return JSON.parse(tr.getAttribute('data-account') || '{}'); } catch (e) { return null; }
+        },
+        openEdit: function (data) {
+          fillAccountEdit(data);
+          if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-account-edit'));
+        },
+        openDelete: function (data) {
+          document.getElementById('acc_del_id').value = String(data.id || '');
+          document.getElementById('acc-del-text').textContent =
+            'Аккаунт ' + (data.email || '') + ' будет удалён. Связи, использующие его, останутся без внешнего аккаунта.';
+          if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-account-delete'));
+        }
+      };
+
+      var extTable = document.getElementById('ext-accounts-table');
+      if (extTable) {
+        extTable.addEventListener('click', function (e) {
+          if (e.target.closest('[data-account-edit]')) {
+            e.preventDefault();
+            e.stopPropagation();
+            var tr = e.target.closest('tr[data-account]');
+            if (tr) window.ReferentCardAccounts.openEdit(window.ReferentCardAccounts.parse(tr));
+          }
+          if (e.target.closest('[data-account-delete]')) {
+            e.preventDefault();
+            e.stopPropagation();
+            var tr = e.target.closest('tr[data-account]');
+            if (tr) window.ReferentCardAccounts.openDelete(window.ReferentCardAccounts.parse(tr));
+          }
+        });
+      }
+
       document.querySelectorAll('[data-copy]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var v = btn.getAttribute('data-copy') || '';
@@ -968,6 +1100,16 @@ function renderReferentCardUi(): void
         rowSelector: 'tr[data-rel]',
         onOpen: function (tr) {
           window.ReferentCardRels.open(window.ReferentCardRels.parse(tr));
+        }
+      });
+    })();
+    (function () {
+      var table = document.getElementById('ext-accounts-table');
+      if (!table || !window.PanelTable || !window.ReferentCardAccounts) return;
+      window.PanelTable.bind(table, {
+        rowSelector: 'tr[data-account]',
+        onOpen: function (tr) {
+          window.ReferentCardAccounts.openEdit(window.ReferentCardAccounts.parse(tr));
         }
       });
     })();

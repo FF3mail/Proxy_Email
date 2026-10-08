@@ -263,6 +263,29 @@ function fetchRelationshipsForReferent(PDO $pdo, int $referentId): array
  *
  * @return list<array<string, mixed>>
  */
+/**
+ * All external accounts for referent card (PROMPT-84) — one row per account.
+ *
+ * @return list<array<string, mixed>>
+ */
+function fetchExternalAccountsForReferentCard(PDO $pdo, int $referentId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT ea.id, ea.referent_id, ea.email, ea.username, ea.auth_type, ea.provider,
+                ea.imap_host, ea.imap_port, ea.imap_encryption,
+                ea.smtp_host, ea.smtp_port, ea.smtp_encryption,
+                ea.client_id, ea.active,
+                ot.expires_at
+         FROM external_accounts ea
+         LEFT JOIN oauth_tokens ot ON ot.account_id = ea.id
+         WHERE ea.referent_id = ?
+         ORDER BY ea.id'
+    );
+    $stmt->execute([$referentId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
 function fetchExternalAccountsForRelationshipForm(
     PDO $pdo,
     int $referentId,
