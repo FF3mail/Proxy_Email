@@ -42,4 +42,5 @@ Before requesting review:
 - Do not replace ordinary words (status values, labels, enum names) when anonymizing; tests must pass identically before and after.
 - One issue = one branch = one PR to master; no stacked PRs unless the operator explicitly approves it.
 - Merging is done by the operator only.
+- Audit reports, internal security notes, and temporary audit branches must not be published in public-facing documentation or left in the default branch. Keep them under docs/reports/ (historical) or delete after the corresponding issue is closed.
 - Line endings: .gitattributes enforces LF for text files. Build deploy archives from git with `git archive -o <file>` (never with a PowerShell `>` redirect) and verify checksums of binary assets before copying to a server.
