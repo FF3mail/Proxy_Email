@@ -71,6 +71,14 @@ $check(str_contains($dash, 'DASHBOARD_MAIL_ACTIVITY_HOURS'), '24h constant');
 $check(!str_contains($dash, 'dashboard.quick_nav'), 'quick nav removed');
 $check(str_contains($dash, 'panelSafeBlock'), 'dashboard uses panelSafeBlock');
 $check(str_contains($dash, 'panelSafeRenderBlock'), 'dashboard uses panelSafeRenderBlock');
+$check(str_contains($dash, "__('dashboard.host_title')"), 'dashboard host section');
+$check(str_contains($dash, "__('dashboard.services_title')"), 'dashboard services section');
+$check(str_contains($dash, 'pm-svc-grid'), 'services multi-column grid');
+
+$authUi = (string) file_get_contents($root . '/web/includes/panel_auth_ui.php');
+$check(!str_contains($authUi, 'auth.login_heading'), 'login heading removed');
+$nav = (string) file_get_contents($root . '/web/includes/panel_nav.php');
+$check(!str_contains($nav, 'logo-mark.png'), 'sidebar brand mark removed');
 
 echo "CHECK_COUNT {$checks}\n";
 if ($failures > 0) {
