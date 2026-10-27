@@ -96,8 +96,21 @@ GROUP_CRYPTO="mail-proxy-crypto"
 # Обязательные файлы дистрибутива
 # -----------------------------------------------------------------------------
 
+# Локальные модули, которые mail-proxy-daemon.py импортирует при запуске
+# (прямые импорты и транзитивное замыкание, включая referent_notify.py).
+DAEMON_RUNTIME_MODULES=(
+    "./relationship_lookup.py"
+    "./relationship_routing.py"
+    "./message_rebuild.py"
+    "./attachment_policy.py"
+    "./mail_passage_journal.py"
+    "./mail_disposal.py"
+    "./referent_notify.py"
+)
+
 REQUIRED_FILES=(
     "./mail-proxy-daemon.py"
+    "${DAEMON_RUNTIME_MODULES[@]}"
     "./mail-proxy.service"
     "./logrotate-mail-proxy"
     "./tmpfiles.d-mail-proxy.conf"
@@ -1436,17 +1449,34 @@ install_python_dependencies() {
 }
 
 install_daemon_binary() {
-    local tmp
+    local tmp dest_dir mod
     tmp="$(mktemp)"
     register_tmpfile "$tmp"
     cp ./mail-proxy-daemon.py "$tmp"
     chmod 0755 "$tmp"
     chown root:root "$tmp"
     mv "$tmp" "$DAEMON_TARGET"
+
+    dest_dir="$(dirname "$DAEMON_TARGET")"
+    for mod in "${DAEMON_RUNTIME_MODULES[@]}"
+    do
+        tmp="$(mktemp)"
+        register_tmpfile "$tmp"
+        cp "$mod" "$tmp"
+        chmod 0644 "$tmp"
+        chown root:root "$tmp"
+        mv "$tmp" "${dest_dir}/$(basename "$mod")"
+    done
 }
 
 verify_daemon_syntax() {
+    local dest_dir mod
+    dest_dir="$(dirname "$DAEMON_TARGET")"
     "${VENV_PATH}/bin/python3" -m py_compile "$DAEMON_TARGET"
+    for mod in "${DAEMON_RUNTIME_MODULES[@]}"
+    do
+        "${VENV_PATH}/bin/python3" -m py_compile "${dest_dir}/$(basename "$mod")"
+    done
 }
 
 create_runtime_directories() {
@@ -3216,7 +3246,12 @@ audit_required_files() {
         "$SYSTEMD_TARGET"
         "$DAEMON_TARGET"
     )
-    local file
+    local file dest_dir mod
+    dest_dir="$(dirname "$DAEMON_TARGET")"
+    for mod in "${DAEMON_RUNTIME_MODULES[@]}"
+    do
+        files+=("${dest_dir}/$(basename "$mod")")
+    done
     for file in "${files[@]}"
     do
         [[ -f "$file" ]] || fatal "Required file missing: $file"
