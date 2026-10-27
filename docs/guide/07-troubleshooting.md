@@ -31,7 +31,7 @@ ls -l /etc/mail-proxy/crypto.key /etc/mail-proxy/db.conf
 
 | Причина | Решение |
 |---------|---------|
-| Нет `crypto.key` или `db.conf` | Переустановите фазу UsersGroups или `mail-proxy-setup.sh` |
+| Нет `crypto.key` или `db.conf` | Повторно запустите `delta-transit-install.sh` (фаза UsersGroups) |
 | Ошибка подключения к MariaDB | Проверьте пароль в `db.conf`, `systemctl status mariadb` |
 | Permission denied на лог | `chown vmail:mail-proxy-logs /var/log/mail-proxy/*.log` |
 | systemd hardening / ReadWritePaths | Убедитесь, что путь Maildir в `ReadWritePaths` unit-файла соответствует вашему `/var/vmail/...` |

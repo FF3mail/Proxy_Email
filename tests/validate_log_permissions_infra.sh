@@ -7,7 +7,6 @@ cd "$ROOT"
 
 echo "=== bash -n ==="
 bash -n delta-transit-install.sh
-bash -n mail-proxy-setup.sh
 bash -n tests/validate_log_permissions_infra.sh
 
 echo "=== systemd-analyze verify (unit template) ==="
