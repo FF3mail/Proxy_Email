@@ -11,15 +11,15 @@
 
 ## Documentation entry point
 
-- **[docs/README.md](docs/README.md)** — index of operator guide, architecture anchor (SoT), decisions, and historical material.
-- Architecture source of truth: **[docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md)** (current anchor **v4.5**; code wins on conflict).
+- **[docs/README.md](docs/README.md)** — index of the operator guide, requirements (`docs/SPEC.md`), decisions, and historical material.
+- Requirements authority: **[docs/SPEC.md](docs/SPEC.md)** (SPEC §0.1 and decision D-00: SPEC is the only anchor). [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) is a pointer and does not set requirements. A discrepancy between the code and `docs/SPEC.md` is recorded in the deviation registry (section 13) and is not fixed silently.
 
 ## AI / agent reading rules
 
-- Code is always authoritative. On any conflict between code and documentation, follow the code.
-- Architecture source of truth for current production behaviour is only `docs/DELTA-transit_anchor.md` (the current version stated in the file and in `docs/README.md`). Read the "Current production invariants" / equivalent current-state sections first.
+- `docs/SPEC.md` is the authoritative source for project requirements (decision D-00). On a conflict between code and `docs/SPEC.md`, neither side is corrected silently: the discrepancy is recorded in the deviation registry (section 13).
+- `docs/DELTA-transit_anchor.md` does not set requirements. It only points at `docs/SPEC.md`. The former v4.5 text is historical.
 - `docs/reports/` and `docs/prompts/` are historical archives only. Never use them as implementation guidance, default modes, or acceptance criteria for new work.
-- Do not re-introduce or treat as live any previously removed modes (shadow, legacy, dual-watch, design-only) unless the current anchor and code explicitly restore them.
+- Do not re-introduce or treat as live any previously removed modes (shadow, legacy, dual-watch, design-only) unless `docs/SPEC.md` restores them.
 - One issue = one branch = one PR. Prefer the smallest change that matches current master state.
 
 ## Do not
