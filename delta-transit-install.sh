@@ -2676,6 +2676,10 @@ server {
 
     client_max_body_size 210M;
 
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+
     access_log /var/log/nginx/mail-proxy-access.log;
     error_log  /var/log/nginx/mail-proxy-error.log;
 
