@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -14,19 +15,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "delta-transit-install.sh"
-
-# Transitive local import closure of mail-proxy-daemon.py.
-# referent_notify.py is required: the daemon imports mail_disposal at module
-# level, and mail_disposal imports referent_notify at module level.
-EXPECTED_RUNTIME_MODULES = (
-    "./relationship_lookup.py",
-    "./relationship_routing.py",
-    "./message_rebuild.py",
-    "./attachment_policy.py",
-    "./mail_passage_journal.py",
-    "./mail_disposal.py",
-    "./referent_notify.py",
-)
 
 _ARRAY_RE = re.compile(
     r"(?m)^(?P<name>[A-Z_]+)=\(\n(?P<body>.*?)\n\)",
@@ -61,6 +49,74 @@ def _function_body(text: str, name: str) -> str:
 def runtime_module_array(text: str | None = None) -> tuple[str, ...]:
     body = _array_body(_read_installer(text), "DAEMON_RUNTIME_MODULES")
     return tuple(re.findall(r'"(\./[^"]+)"', body))
+
+
+def _top_level_module_name(dotted: str) -> str:
+    return dotted.split(".", 1)[0]
+
+
+def local_import_closure(
+    root: Path,
+    entry_filename: str = "mail-proxy-daemon.py",
+) -> set[str]:
+    """Transitive project-local imports of entry, excluding the entry module.
+
+    Parses source with ast only. Does not import or execute the files.
+    A name is project-local when <root>/<top-level-name>.py exists.
+    """
+    root = Path(root).resolve()
+    entry = (root / entry_filename).resolve()
+    seen: set[Path] = set()
+    found: set[str] = set()
+
+    def consider(name: str) -> None:
+        if not name or name == entry.stem:
+            return
+        path = (root / f"{name}.py").resolve()
+        if not path.is_file() or path == entry or path in seen:
+            return
+        found.add(name)
+        walk(path)
+
+    def walk(path: Path) -> None:
+        path = path.resolve()
+        if path in seen:
+            return
+        seen.add(path)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    consider(_top_level_module_name(alias.name))
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    consider(_top_level_module_name(node.module))
+                else:
+                    for alias in node.names:
+                        consider(_top_level_module_name(alias.name))
+
+    walk(entry)
+    found.discard(entry.stem)
+    return found
+
+
+def daemon_runtime_module_names(text: str | None = None) -> set[str]:
+    """Module names from the DAEMON_RUNTIME_MODULES=(...) block, without ./ or .py."""
+    names: set[str] = set()
+    for raw in runtime_module_array(text):
+        name = raw[2:] if raw.startswith("./") else raw
+        if name.endswith(".py"):
+            name = name[: -len(".py")]
+        names.add(name)
+    return names
+
+
+def closure_list_diff(
+    closure: set[str],
+    listed: set[str],
+) -> tuple[set[str], set[str]]:
+    """Return (missing from listed, extra in listed)."""
+    return closure - listed, listed - closure
 
 
 def validation_includes_runtime_modules(text: str | None = None) -> bool:
@@ -120,7 +176,33 @@ def _drop_copy_loop(text: str) -> str:
 
 class InstallerRuntimeModuleListTests(unittest.TestCase):
     def test_runtime_array_is_the_import_closure(self) -> None:
-        self.assertEqual(runtime_module_array(), EXPECTED_RUNTIME_MODULES)
+        closure = local_import_closure(ROOT)
+        listed = daemon_runtime_module_names()
+        missing, extra = closure_list_diff(closure, listed)
+        self.assertEqual(
+            closure,
+            listed,
+            "missing from installer: "
+            + ", ".join(sorted(missing))
+            + "; extra in installer: "
+            + ", ".join(sorted(extra)),
+        )
+
+    def test_function_import_absent_from_list_is_reported_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="delta-issue-124-closure-") as tmp:
+            root = Path(tmp)
+            (root / "mail-proxy-daemon.py").write_text(
+                "import os\n"
+                "\n"
+                "def start():\n"
+                "    import extra_local\n",
+                encoding="utf-8",
+            )
+            (root / "extra_local.py").write_text("VALUE = 1\n", encoding="utf-8")
+            closure = local_import_closure(root)
+            missing, extra = closure_list_diff(closure, set())
+            self.assertEqual(extra, set())
+            self.assertEqual(missing, {"extra_local"})
 
     def test_required_file_validation_includes_every_runtime_module(self) -> None:
         self.assertTrue(validation_includes_runtime_modules())
@@ -135,7 +217,7 @@ class InstallerRuntimeModuleListTests(unittest.TestCase):
 
     def test_missing_validation_entry_is_detected(self) -> None:
         mutated = _drop_required_files_expansion(_read_installer())
-        self.assertEqual(runtime_module_array(mutated), EXPECTED_RUNTIME_MODULES)
+        self.assertEqual(runtime_module_array(mutated), runtime_module_array())
         self.assertFalse(validation_includes_runtime_modules(mutated))
         self.assertTrue(copy_installs_runtime_modules(mutated))
 
@@ -143,12 +225,12 @@ class InstallerRuntimeModuleListTests(unittest.TestCase):
         mutated = _drop_copy_loop(_read_installer())
         self.assertTrue(validation_includes_runtime_modules(mutated))
         self.assertFalse(copy_installs_runtime_modules(mutated))
-        self.assertEqual(runtime_module_array(mutated), EXPECTED_RUNTIME_MODULES)
+        self.assertEqual(runtime_module_array(mutated), runtime_module_array())
 
     def test_module_removed_from_the_shared_list_is_detected(self) -> None:
         mutated = _read_installer().replace('    "./referent_notify.py"\n', "", 1)
         self.assertNotIn("./referent_notify.py", runtime_module_array(mutated))
-        self.assertNotEqual(runtime_module_array(mutated), EXPECTED_RUNTIME_MODULES)
+        self.assertNotEqual(runtime_module_array(mutated), runtime_module_array())
 
 
 class StagedDaemonInstallTests(unittest.TestCase):
@@ -189,9 +271,10 @@ class StagedDaemonInstallTests(unittest.TestCase):
                 completed.stderr or completed.stdout,
             )
             installed = sorted(path.name for path in dest.iterdir() if path.is_file())
-            expected_names = ["mail-proxy-daemon.py", *[
-                Path(module).name for module in EXPECTED_RUNTIME_MODULES
-            ]]
+            expected_names = [
+                "mail-proxy-daemon.py",
+                *[f"{name}.py" for name in daemon_runtime_module_names()],
+            ]
             self.assertEqual(installed, sorted(expected_names))
 
             compile_env = os.environ.copy()
@@ -271,7 +354,7 @@ class StagedDaemonInstallTests(unittest.TestCase):
             )
             self.assertIn("VALIDATION_OK", completed.stdout)
             listed = listing.read_text(encoding="utf-8").splitlines()
-            for module in EXPECTED_RUNTIME_MODULES:
+            for module in runtime_module_array():
                 self.assertIn(module, listed)
 
 
