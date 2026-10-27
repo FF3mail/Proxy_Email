@@ -20,7 +20,7 @@ DROPIN="/etc/systemd/system/mail-proxy.service.d/routing.conf"
 
 deploy_files() {
   log "=== DEPLOY ==="
-  for f in mail-proxy-daemon.py relationship_routing.py relationship_lookup.py; do
+  for f in mail-proxy-daemon.py relationship_lookup.py relationship_routing.py message_rebuild.py attachment_policy.py mail_passage_journal.py mail_disposal.py referent_notify.py; do
     cp -a "/root/Proxy_Email/${f}" "/usr/local/bin/${f}"
     md5sum "/usr/local/bin/${f}"
   done
@@ -28,7 +28,9 @@ deploy_files() {
     install -d -m 0755 /etc/systemd/system/mail-proxy.service.d
     install -m 0644 /root/Proxy_Email/mail-proxy.service.d/routing.conf "$DROPIN"
   fi
-  /opt/delta-transit/venv/bin/python3 -m py_compile /usr/local/bin/mail-proxy-daemon.py
+  for f in mail-proxy-daemon.py relationship_lookup.py relationship_routing.py message_rebuild.py attachment_policy.py mail_passage_journal.py mail_disposal.py referent_notify.py; do
+    /opt/delta-transit/venv/bin/python3 -m py_compile "/usr/local/bin/${f}"
+  done
 }
 
 set_modes() {
