@@ -13,7 +13,6 @@ SERVICE = (ROOT / 'mail-proxy.service').read_text(encoding='utf-8')
 LOGROTATE = (ROOT / 'logrotate-mail-proxy').read_text(encoding='utf-8')
 TMPFILES = (ROOT / 'tmpfiles.d-mail-proxy.conf').read_text(encoding='utf-8')
 INSTALLER = (ROOT / 'delta-transit-install.sh').read_text(encoding='utf-8')
-SETUP = (ROOT / 'mail-proxy-setup.sh').read_text(encoding='utf-8')
 
 
 class LogPermissionsInfraTests(unittest.TestCase):
@@ -52,10 +51,6 @@ class LogPermissionsInfraTests(unittest.TestCase):
         self.assertIn('tmpfiles.d-mail-proxy.conf', INSTALLER)
         self.assertIn('install -d -m 2750', INSTALLER)
         self.assertIn('systemd-tmpfiles --create', INSTALLER)
-
-    def test_setup_script_setgid_and_tmpfiles(self) -> None:
-        self.assertIn('install -d -m 2750', SETUP)
-        self.assertIn('tmpfiles.d-mail-proxy.conf', SETUP)
 
 
 if __name__ == '__main__':

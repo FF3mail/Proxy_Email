@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
-# Сторонние зависимости, устанавливаемые через mail-proxy-setup.sh
+# Сторонние зависимости (устанавливаются delta-transit-install.sh из requirements.txt)
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from watchdog.observers import Observer

@@ -1,13 +1,12 @@
 # 3. Установка DELTA-transit
 
-## 3.1. Два способа установки
+## 3.1. Способ установки
 
 | Способ | Скрипт | Когда использовать |
 |--------|--------|-------------------|
-| **Полная установка** | `delta-transit-install.sh` | Новый сервер или первое развёртывание (рекомендуется) |
-| **Только демон** | `mail-proxy-setup.sh` | Демон на уже настроенном хосте, панель и БД настроены вручную |
+| **Установка** | `delta-transit-install.sh` | Новый сервер или первое развёртывание |
 
-Далее описан **полный** путь через `delta-transit-install.sh`.
+Далее описан путь через `delta-transit-install.sh`.
 
 ---
 
@@ -218,26 +217,7 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 
 ---
 
-## 3.8. Установка только демона (`mail-proxy-setup.sh`)
-
-Используйте, если веб-панель и MariaDB уже настроены:
-
-```bash
-./mail-proxy-setup.sh
-```
-
-Скрипт:
-
-- Ставит Python-зависимости (системный pip)
-- Создаёт `/etc/mail-proxy/`, группы, `crypto.key` при отсутствии
-- Копирует демон в `/usr/local/bin/`
-- Устанавливает systemd unit
-
-После этого вручную проверьте `db.conf`, права и `systemctl enable --now mail-proxy`.
-
----
-
-## 3.9. Режимы только валидации
+## 3.8. Режимы только валидации
 
 Для повторной проверки без переустановки:
 
@@ -251,7 +231,7 @@ DELTA_VALIDATION_LOG_ONLY=1 ./delta-transit-install.sh
 
 ---
 
-## 3.10. Следующие шаги
+## 3.9. Следующие шаги
 
 1. Настройте референтов в панели — [05-web-panel.md](05-web-panel.md)
 2. Пройдите чек-лист — [10-deployment-checklist.md](10-deployment-checklist.md)
