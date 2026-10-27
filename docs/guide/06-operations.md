@@ -63,7 +63,27 @@ grep "IMAP size skip" /var/log/mail-proxy/mail-proxy-daemon.log | tail -10
 ## 6.4. Обновление демона
 
 1. Остановите сервис (опционально): `systemctl stop mail-proxy`
-2. Скопируйте новый `mail-proxy-daemon.py` в `/usr/local/bin/`
+2. Скопируйте `mail-proxy-daemon.py` и модули времени выполнения в `/usr/local/bin/` (каталог установленного демона). Набор модулей должен совпадать с массивом `DAEMON_RUNTIME_MODULES` в `delta-transit-install.sh`. Владелец `root:root`: демон — режим `0755`, каждый модуль — `0644`.
+
+```bash
+cp mail-proxy-daemon.py /usr/local/bin/mail-proxy-daemon.py
+chmod 0755 /usr/local/bin/mail-proxy-daemon.py
+chown root:root /usr/local/bin/mail-proxy-daemon.py
+for module in \
+    relationship_lookup.py \
+    relationship_routing.py \
+    message_rebuild.py \
+    attachment_policy.py \
+    mail_passage_journal.py \
+    mail_disposal.py \
+    referent_notify.py
+do
+    cp "$module" "/usr/local/bin/$module"
+    chmod 0644 "/usr/local/bin/$module"
+    chown root:root "/usr/local/bin/$module"
+done
+```
+
 3. При изменении зависимостей:
 
 ```bash
