@@ -3,7 +3,7 @@
 Corporate mail proxy gateway between external IMAP/SMTP accounts and local referent Maildirs (iRedMail).
 
 **Status:** Production Candidate / pilot  
-**Source of truth:** [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) (anchor **v4.5**)
+**Requirements authority:** [docs/SPEC.md](docs/SPEC.md) is the authoritative source for project requirements (SPEC §0.1 and decision D-00: SPEC is the only anchor). [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) is a pointer and does not set requirements.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ Verified staging baseline: Ubuntu 24.04 LTS, PHP-FPM 8.3, MariaDB 10.11, existin
 
 ## Documentation
 
-Start here: **[docs/README.md](docs/README.md)** — index of operator guide, anchor (SoT), decisions, and historical material.
+Start here: **[docs/README.md](docs/README.md)** — index of the operator guide, [docs/SPEC.md](docs/SPEC.md) (requirements authority), decisions, and historical material.
 
 | Document | Purpose |
 |----------|---------|
@@ -48,7 +48,8 @@ Start here: **[docs/README.md](docs/README.md)** — index of operator guide, an
 | [docs/guide/README.md](docs/guide/README.md) | Operator install/ops guide (10 chapters, Markdown) |
 | [docs/guide/10-deployment-checklist.md](docs/guide/10-deployment-checklist.md) | Current deployment / pilot checklist |
 | [docs/DELTA_transit_admin_guide.pdf](docs/DELTA_transit_admin_guide.pdf) | Formal admin reference (PDF) |
-| [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) | Architecture, schema, security, production criteria (**SoT**) |
+| [docs/SPEC.md](docs/SPEC.md) | Authoritative source for project requirements (decision D-00: the only anchor) |
+| [docs/DELTA-transit_anchor.md](docs/DELTA-transit_anchor.md) | Pointer only; does not set requirements (former v4.5 text is historical) |
 | [docs/decisions/](docs/decisions/) | ADRs and decision registers |
 | [docs/reports/](docs/reports/) | Historical PROMPT closure reports (**not for ops**) |
 | [docs/prompts/](docs/prompts/) | Historical AI prompts (**not for ops**) |

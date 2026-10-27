@@ -8,10 +8,11 @@
 | Документ | Назначение |
 |----------|------------|
 | [../DELTA_transit_admin_guide.pdf](../DELTA_transit_admin_guide.pdf) | Формальный справочник администратора (PDF, WeasyPrint) |
-| [../DELTA-transit_anchor.md](../DELTA-transit_anchor.md) | Внутренний архитектурный якорь (**v4.4**) для разработки и агентов |
+| [../SPEC.md](../SPEC.md) | Авторитетный источник требований (`docs/SPEC.md`, SPEC §0.1 и решение D-00: единственный якорь) |
+| [../DELTA-transit_anchor.md](../DELTA-transit_anchor.md) | Указатель; не задаёт требований (прежнее обозначение v4.4 — история) |
 | [../Ckeck-list_00.md](../Ckeck-list_00.md) | Исторический чек-лист пилота (может отставать от кода) |
 
-> **Источник истины при расхождении:** код и скрипты (`delta-transit-install.sh`, `configure_limits.sh`).
+> **Расхождение с требованиями:** если код или скрипты установки (`delta-transit-install.sh`, `configure_limits.sh`) расходятся с `docs/SPEC.md`, расхождение записывается в реестр расхождений (раздел 13) и не исправляется молча. Требования задаёт `docs/SPEC.md`.
 
 ---
 
