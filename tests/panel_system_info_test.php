@@ -78,7 +78,7 @@ $check(str_contains($dash, 'pm-svc-grid'), 'services multi-column grid');
 $authUi = (string) file_get_contents($root . '/web/includes/panel_auth_ui.php');
 $check(!str_contains($authUi, 'auth.login_heading'), 'login heading removed');
 $nav = (string) file_get_contents($root . '/web/includes/panel_nav.php');
-$check(!str_contains($nav, 'logo-mark.png'), 'sidebar brand mark removed');
+$check(str_contains($nav, 'class="pm-brand-mark"') && str_contains($nav, "panelBrandUrl('logo-mark.png')"), 'sidebar compact mark uses logo-mark');
 
 echo "CHECK_COUNT {$checks}\n";
 if ($failures > 0) {

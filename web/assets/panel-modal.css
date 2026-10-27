@@ -125,16 +125,17 @@ dialog.pm-dialog::backdrop{background:var(--pm-overlay)}
 .pm-svc-item .pm-chip{flex:0 0 auto}
 .pm-dash-daemon-meta{margin-top:8px;padding-top:6px;border-top:1px solid var(--pm-border)}
 .pm-dashboard details>summary{cursor:pointer;font-size:13px;padding:4px 0}
-/* Collapsed and ≤720px sidebars hide the wordmarks. Keep the text brand visible there only. */
+/* Collapsed and ≤720px sidebars show the existing D mark. The app name stays on the link, not clipped into the box. */
+.pm-brand-mark{display:none;flex:0 0 auto;width:24px;height:19px;object-fit:contain}
 .pm-side.collapsed .pm-brand{padding:8px 4px;gap:2px}
-.pm-side.collapsed .pm-brand-link{flex:0 0 22px;min-width:22px;width:22px;overflow:hidden}
+.pm-side.collapsed .pm-brand-link{flex:0 0 auto;min-width:24px;width:auto;overflow:visible}
 .pm-side.collapsed .pm-side-toggle{padding:0;flex-shrink:0}
-.pm-side.collapsed .pm-brand-fallback{display:block;width:22px;height:22px;overflow:hidden;border-radius:4px;background:#334155;text-align:center;font-size:13px;font-weight:700;line-height:22px;color:#fff}
+.pm-side.collapsed .pm-brand-mark{display:block}
 @media (max-width:720px){
 .pm-side .pm-brand{padding:8px 4px;gap:2px}
-.pm-side .pm-brand-link{flex:0 0 22px;min-width:22px;width:22px;overflow:hidden}
+.pm-side .pm-brand-link{flex:0 0 auto;min-width:24px;width:auto;overflow:visible}
 .pm-side .pm-side-toggle{padding:0;flex-shrink:0}
-.pm-side .pm-brand-fallback{display:block;width:22px;height:22px;overflow:hidden;border-radius:4px;background:#334155;text-align:center;font-size:13px;font-weight:700;line-height:22px;color:#fff}
+.pm-side .pm-brand-mark{display:block}
 }
 .pm-cell-wrap{max-width:28rem;word-break:break-word}
 .pm-log-meta{color:var(--pm-muted);font-size:12px;margin:0 0 12px}

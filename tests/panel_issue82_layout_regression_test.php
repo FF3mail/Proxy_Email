@@ -5,8 +5,8 @@ declare(strict_types=1);
 /**
  * Issue #82 follow-up: layout behavior, not class-name presence.
  * The daemon-log action must stay outside the scrolling issue list.
- * Collapsed and narrow sidebars must keep one text brand, and the expanded
- * sidebar must not show that text beside the wordmarks.
+ * Collapsed and narrow sidebars must show the logo mark, not a clipped name.
+ * The expanded sidebar must show the wordmarks only.
  * At 1366px the dashboard must not keep three columns of non-wrapping rows.
  */
 $failures = 0;
@@ -87,7 +87,7 @@ function interestingTemplateNodes(string $php): array
             }
         }
         if ($name === 'a' && in_array('pm-brand-link', $classes, true)) {
-            $found['brand'][] = $node + ['wordmarks' => 0, 'fallback' => 0];
+            $found['brand'][] = $node + ['wordmarks' => 0, 'fallback' => 0, 'mark' => 0];
         } elseif ($underBrand && $found['brand'] !== []) {
             $idx = count($found['brand']) - 1;
             if (in_array('pm-brand-wordmarks', $classes, true)) {
@@ -95,6 +95,9 @@ function interestingTemplateNodes(string $php): array
             }
             if (in_array('pm-brand-fallback', $classes, true)) {
                 $found['brand'][$idx]['fallback']++;
+            }
+            if ($name === 'img' && in_array('pm-brand-mark', $classes, true)) {
+                $found['brand'][$idx]['mark']++;
             }
         }
         $selfClose = str_ends_with(rtrim($full), '/>') || isset($void[$name]);
@@ -337,29 +340,43 @@ $collapsedAncestors = [
 ];
 $fallbackClasses = ['pm-brand-text', 'pm-brand-fallback'];
 $wordmarkClasses = ['pm-brand-wordmarks'];
+$markClasses = ['pm-brand-mark'];
 
 $expandedFallback = computedStyle($rules, $fallbackClasses, $brandAncestors, 1920, 1080);
 $expandedMarks = computedStyle($rules, $wordmarkClasses, $brandAncestors, 1920, 1080);
+$expandedMark = computedStyle($rules, $markClasses, $brandAncestors, 1920, 1080);
 assert_true(($expandedFallback['display'] ?? '') === 'none', 'expanded sidebar hides the text fallback');
 assert_true(($expandedMarks['display'] ?? '') === 'flex', 'expanded sidebar shows the wordmarks');
+assert_true(($expandedMark['display'] ?? '') === 'none', 'expanded sidebar hides the compact mark');
 
 $collapsedFallback = computedStyle($rules, $fallbackClasses, $collapsedAncestors, 1920, 1080);
 $collapsedMarks = computedStyle($rules, $wordmarkClasses, $collapsedAncestors, 1920, 1080);
+$collapsedMark = computedStyle($rules, $markClasses, $collapsedAncestors, 1920, 1080);
 $collapsedLink = computedStyle($rules, ['pm-brand-link'], [['pm-brand'], ['pm-side', 'collapsed']], 1920, 1080);
-assert_true(($collapsedFallback['display'] ?? '') === 'block', 'collapsed sidebar shows the text brand');
+assert_true(($collapsedFallback['display'] ?? '') === 'none', 'collapsed sidebar does not clip the app name into a text box');
+assert_true(($collapsedFallback['width'] ?? '') !== '22px', 'collapsed brand is not the 22px clipped-name box');
 assert_true(($collapsedMarks['display'] ?? '') === 'none', 'collapsed sidebar hides the wordmarks');
-assert_true(($collapsedFallback['width'] ?? '') === '22px' && ($collapsedFallback['height'] ?? '') === '22px', 'collapsed text brand has a non-zero box');
-assert_true(($collapsedLink['width'] ?? '') === '22px', 'collapsed brand link is not allowed to shrink to zero');
+assert_true(($collapsedMark['display'] ?? '') === 'block', 'collapsed sidebar shows the compact mark');
+assert_true(($collapsedMark['object-fit'] ?? '') === 'contain', 'compact mark keeps its aspect ratio');
+assert_true(($collapsedMark['width'] ?? '') === '24px' && ($collapsedMark['height'] ?? '') === '19px', 'compact mark has a designed 24×19 box');
+assert_true(($collapsedMark['overflow'] ?? '') !== 'hidden', 'compact mark is not clipped by its own box');
+assert_true(($collapsedLink['width'] ?? '') !== '22px' && ($collapsedLink['overflow'] ?? '') === 'visible', 'collapsed brand link does not clip its contents');
 
 $narrowFallback = computedStyle($rules, $fallbackClasses, $brandAncestors, 720, 900);
 $narrowMarks = computedStyle($rules, $wordmarkClasses, $brandAncestors, 720, 900);
+$narrowMark = computedStyle($rules, $markClasses, $brandAncestors, 720, 900);
 $narrowLink = computedStyle($rules, ['pm-brand-link'], [['pm-brand'], ['pm-side']], 720, 900);
-assert_true(($narrowFallback['display'] ?? '') === 'block', 'narrow sidebar shows the text brand');
+assert_true(($narrowFallback['display'] ?? '') === 'none', 'narrow sidebar does not clip the app name into a text box');
+assert_true(($narrowFallback['width'] ?? '') !== '22px', 'narrow brand is not the 22px clipped-name box');
 assert_true(($narrowMarks['display'] ?? '') === 'none', 'narrow sidebar hides the wordmarks');
-assert_true(($narrowLink['width'] ?? '') === '22px', 'narrow brand link is not allowed to shrink to zero');
+assert_true(($narrowMark['display'] ?? '') === 'block', 'narrow sidebar shows the compact mark');
+assert_true(($narrowMark['object-fit'] ?? '') === 'contain', 'narrow compact mark keeps its aspect ratio');
+assert_true(($narrowLink['width'] ?? '') !== '22px' && ($narrowLink['overflow'] ?? '') === 'visible', 'narrow brand link does not clip its contents');
 assert_true(
-    ($expandedFallback['display'] ?? '') === 'none' && ($expandedMarks['display'] ?? '') !== 'none',
-    'expanded sidebar does not show wordmarks and text brand together'
+    ($expandedFallback['display'] ?? '') === 'none'
+        && ($expandedMark['display'] ?? '') === 'none'
+        && ($expandedMarks['display'] ?? '') !== 'none',
+    'expanded sidebar shows the wordmarks only'
 );
 
 $grid1920 = computedStyle($rules, ['pm-dash-grid-main'], [], 1920, 1080);
@@ -387,7 +404,13 @@ if (is_array($brandLink)) {
     );
     assert_true($brandLink['wordmarks'] === 1, 'wordmarks remain in the brand link');
     assert_true($brandLink['fallback'] === 1, 'text fallback remains in the brand link');
-    assert_true(!str_contains($nav, 'logo-mark.png'), 'compact logo image stays removed');
+    assert_true($brandLink['mark'] === 1, 'brand link has one dedicated compact mark');
+    $markAt = strpos($nav, '<img class="pm-brand-mark"');
+    $markTag = $markAt === false ? '' : substr($nav, $markAt, 180);
+    assert_true(
+        str_contains($markTag, "panelBrandUrl('logo-mark.png')"),
+        'compact mark uses the existing logo-mark asset'
+    );
 }
 
 $auth = (string) file_get_contents($root . '/web/includes/panel_auth_ui.php');
