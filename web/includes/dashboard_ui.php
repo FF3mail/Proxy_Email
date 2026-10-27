@@ -445,11 +445,13 @@ function renderDashboardUi(): void
                             </li>
                         <?php endforeach; ?>
                     </ul>
-                    <p class="pm-dash-issues-link">
-                        <a class="pm-btn pm-btn-sm" href="/logs.php?source=daemon"><?= h(__('dashboard.open_daemon_log')) ?></a>
-                    </p>
                 <?php endif; ?>
             </div>
+            <?php if ($issues !== []): ?>
+                <p class="pm-dash-issues-link">
+                    <a class="pm-btn pm-btn-sm" href="/logs.php?source=daemon"><?= h(__('dashboard.open_daemon_log')) ?></a>
+                </p>
+            <?php endif; ?>
         </div>
 
         <!-- 4) Services -->

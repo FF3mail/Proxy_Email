@@ -96,10 +96,10 @@ function renderPanelSidebar(): void
     ?>
     <aside id="side" class="pm-side" aria-label="<?= h(__('nav.menu')) ?>">
         <div class="pm-brand">
-            <a href="/index.php?action=dashboard" class="pm-brand-link" title="<?= h(__('app.name')) ?>">
+            <a href="/index.php?action=dashboard" class="pm-brand-link" title="<?= h(__('app.name')) ?>" aria-label="<?= h(__('app.name')) ?>">
                 <span class="pm-brand-wordmarks">
-                    <img class="pm-brand-delta" src="<?= h(panelBrandUrl('wordmark-delta.png')) ?>" width="168" height="52" alt="Delta">
-                    <img class="pm-brand-transit" src="<?= h(panelBrandUrl('wordmark-transit.png')) ?>" width="90" height="20" alt="TRANSIT">
+                    <img class="pm-brand-delta" src="<?= h(panelBrandUrl('wordmark-delta.png')) ?>" width="168" height="52" alt="">
+                    <img class="pm-brand-transit" src="<?= h(panelBrandUrl('wordmark-transit.png')) ?>" width="90" height="20" alt="">
                 </span>
                 <span class="pm-brand-text pm-brand-fallback"><?= h(__('app.name')) ?></span>
             </a>

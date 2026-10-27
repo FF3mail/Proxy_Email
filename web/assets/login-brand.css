@@ -67,13 +67,6 @@
 
 .login-wordmark-transit { max-width: 140px; margin-left: 2px; }
 
-.login-card h2 {
-    margin: 0 0 16px;
-    font-size: 1rem;
-    font-weight: 600;
-    color: #475569;
-}
-
 .login-card label {
     display: block;
     font-size: 0.875rem;
