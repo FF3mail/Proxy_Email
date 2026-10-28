@@ -123,6 +123,7 @@ return [
     'auth.login_success' => 'Logged in successfully',
     'auth.logout_success' => 'You have been logged out',
     'auth.invalid_credentials' => 'Invalid credentials or too many attempts',
+    'auth.login_locked' => 'Too many failed sign-in attempts. Try again later.',
     'auth.login_unavailable' => 'Login is temporarily unavailable. Configure the master account via the installer.',
     'auth.setup_table_missing' => 'The panel_admins table is missing. Run the installer or wait for automatic schema migration.',
     'auth.setup_master_inactive' => 'The master account is deactivated. Reactivate via SQL or the installer.',

@@ -85,30 +85,45 @@ function handleLoginSubmit(): void
         redirectTo('login');
     }
 
-    if (!panelLoginThrottleAllow()) {
-        writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
-        setFlash('error', __('auth.invalid_credentials'));
+    if (!panelLoginThrottleBegin($username, $ip)) {
+        writeLog("Panel login rejected ip={$ip} reason=throttle_lock");
+        setFlash('error', __('auth.login_unavailable'));
         redirectTo('login');
     }
 
-    $row = fetchPanelAdminByUsername($username);
-    $ok = $row !== null
-        && (int)$row['active'] === 1
-        && password_verify($password, (string)$row['password_hash']);
+    try {
+        if (!panelLoginThrottleAllow($username, $ip)) {
+            panelLoginThrottleRegisterBlocked($username, $ip);
+            writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
+            setFlash('error', __('auth.login_locked'));
+            panelLoginThrottleEnd($username, $ip);
+            redirectTo('login');
+        }
 
-    $password = '';
+        $row = fetchPanelAdminByUsername($username);
+        $ok = $row !== null
+            && (int)$row['active'] === 1
+            && password_verify($password, (string)$row['password_hash']);
 
-    if (!$ok) {
-        panelLoginThrottleRegisterFailure();
-        writeLog("Panel login failed for user='{$username}' ip={$ip}");
-        setFlash('error', __('auth.invalid_credentials'));
-        redirectTo('login');
+        $password = '';
+
+        if (!$ok) {
+            panelLoginThrottleRegisterFailure($username, $ip);
+            writeLog("Panel login failed for user='{$username}' ip={$ip}");
+            setFlash('error', __('auth.invalid_credentials'));
+            panelLoginThrottleEnd($username, $ip);
+            redirectTo('login');
+        }
+
+        panelLoginThrottleClear($username, $ip);
+        panelLoginThrottleEnd($username, $ip);
+        establishPanelSession($row);
+        writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");
+        setFlash('success', __('auth.login_success'));
+        redirectTo('dashboard');
+    } finally {
+        panelLoginThrottleEnd($username, $ip);
     }
-
-    establishPanelSession($row);
-    writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");
-    setFlash('success', __('auth.login_success'));
-    redirectTo('dashboard');
 }
 
 function handleLogout(): void

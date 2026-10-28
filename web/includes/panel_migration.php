@@ -8,6 +8,8 @@ declare(strict_types=1);
  * that could destroy data. Safe to call on every web request (guarded).
  */
 
+require_once __DIR__ . '/panel_login_lockout.php';
+
 const PANEL_ADMINS_DDL = <<<'SQL'
 CREATE TABLE IF NOT EXISTS panel_admins (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -33,6 +35,7 @@ function bootstrapPanelAuth(): void
     $done = true;
 
     ensurePanelAdminsSchema();
+    ensurePanelLoginAttemptsSchema();
     validatePanelAuthStartup();
 }
 
