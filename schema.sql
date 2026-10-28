@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS panel_admins (
     password_hash VARCHAR(255) NOT NULL,
     role ENUM('master','admin') NOT NULL DEFAULT 'admin',
     active TINYINT(1) NOT NULL DEFAULT 1,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_panel_admins_username (username)

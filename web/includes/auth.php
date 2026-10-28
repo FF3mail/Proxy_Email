@@ -103,7 +103,7 @@ function requireMasterAdmin(): void
 }
 
 /**
- * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string}|null
+ * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string,must_change_password?:int|string}|null
  */
 function fetchPanelAdminById(int $id): ?array
 {
@@ -113,7 +113,7 @@ function fetchPanelAdminById(int $id): ?array
 
     try {
         $stmt = getPdo()->prepare(
-            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE id = ? LIMIT 1'
+            'SELECT id, username, password_hash, role, active, must_change_password FROM panel_admins WHERE id = ? LIMIT 1'
         );
         $stmt->execute([$id]);
         $row = $stmt->fetch();
@@ -125,13 +125,13 @@ function fetchPanelAdminById(int $id): ?array
 }
 
 /**
- * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string}|null
+ * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string,must_change_password?:int|string}|null
  */
 function fetchPanelAdminByUsername(string $username): ?array
 {
     try {
         $stmt = getPdo()->prepare(
-            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE username = ? LIMIT 1'
+            'SELECT id, username, password_hash, role, active, must_change_password FROM panel_admins WHERE username = ? LIMIT 1'
         );
         $stmt->execute([$username]);
         $row = $stmt->fetch();

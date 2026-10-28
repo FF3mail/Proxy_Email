@@ -9,6 +9,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/panel_login_lockout.php';
+require_once __DIR__ . '/panel_operator_password.php';
 
 const PANEL_ADMINS_DDL = <<<'SQL'
 CREATE TABLE IF NOT EXISTS panel_admins (
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS panel_admins (
     password_hash VARCHAR(255) NOT NULL,
     role ENUM('master','admin') NOT NULL DEFAULT 'admin',
     active TINYINT(1) NOT NULL DEFAULT 1,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_panel_admins_username (username)
@@ -35,6 +37,7 @@ function bootstrapPanelAuth(): void
     $done = true;
 
     ensurePanelAdminsSchema();
+    ensurePanelAdminsMustChangePasswordColumn();
     ensurePanelLoginAttemptsSchema();
     validatePanelAuthStartup();
 }

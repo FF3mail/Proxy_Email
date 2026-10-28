@@ -26,6 +26,7 @@ function panelNavItems(): array
     $isProviders = in_array($a, ['provider_list', 'provider_form', 'providers'], true);
     $isJournal = $script === 'relationship-status.php';
     $isOperators = in_array($a, ['operator_list'], true);
+    $isPassword = $a === 'password_change';
     $isLogs = $script === 'logs.php';
     $isDashboard = ($script === 'index.php' || $script === '') && ($a === 'dashboard' || $a === '');
 
@@ -78,6 +79,12 @@ function panelNavItems(): array
             'active' => $isOperators,
             'icon' => '☺',
             'master_only' => true,
+        ],
+        [
+            'href' => '/index.php?action=password_change',
+            'label' => __('nav.change_password'),
+            'active' => $isPassword,
+            'icon' => '⛭',
         ],
         [
             'href' => '/logs.php',

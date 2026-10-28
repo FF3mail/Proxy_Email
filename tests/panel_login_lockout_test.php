@@ -88,7 +88,8 @@ function plaInitSchema(PDO $pdo): void
             username TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
-            active INTEGER NOT NULL
+            active INTEGER NOT NULL,
+            must_change_password INTEGER NOT NULL DEFAULT 0
         )'
     );
 }
