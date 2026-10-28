@@ -36,7 +36,6 @@ function renderLoginForm(): void
         <img class="login-wordmark-delta" src="<?= h(panelBrandUrl('wordmark-delta.png')) ?>" width="335" height="105" alt="Delta">
         <img class="login-wordmark-transit" src="<?= h(panelBrandUrl('wordmark-transit.png')) ?>" width="113" height="26" alt="TRANSIT">
     </div>
-    <h2><?= h(__('auth.login_heading')) ?></h2>
     <?php if ($flash): ?>
         <div class="login-flash <?= $flash['type'] === 'success' ? 'login-flash-ok' : 'login-flash-err' ?>">
             <?= h((string)$flash['message']) ?>
