@@ -40,6 +40,7 @@ def get_client_ip(server: dict[str, str]) -> str:
 
 @dataclass
 class Attempt:
+    row_id: int
     login: str
     ip: str
     ts: int
@@ -51,6 +52,7 @@ class LoginLockoutStore:
 
     def __init__(self) -> None:
         self.rows: list[Attempt] = []
+        self._next_id = 1
 
     def purge(self, now: int) -> None:
         cutoff = now - MAX_AGE
@@ -60,11 +62,16 @@ class LoginLockoutStore:
         self.rows = [r for r in self.rows if id(r) not in drop]
 
     def record(self, login: str, ip: str, result: str, now: int) -> None:
-        self.rows.append(Attempt(login, ip, now, result))
+        self.rows.append(Attempt(self._next_id, login, ip, now, result))
+        self._next_id += 1
 
     def _cluster_after_success(self, login: str, ip: str) -> list[Attempt]:
-        last_success = max(
-            (r.ts for r in self.rows if r.login == login and r.ip == ip and r.result == "success"),
+        last_success_id = max(
+            (
+                r.row_id
+                for r in self.rows
+                if r.login == login and r.ip == ip and r.result == "success"
+            ),
             default=0,
         )
         fails = [
@@ -73,7 +80,7 @@ class LoginLockoutStore:
             if r.login == login
             and r.ip == ip
             and r.result == "failure"
-            and r.ts > last_success
+            and r.row_id > last_success_id
         ]
         if not fails:
             return []
@@ -202,6 +209,23 @@ class LoginLockoutTests(unittest.TestCase):
         self.assertEqual(n_a, 5)
         self.assertEqual(n_b, 1)
 
+    def test_same_second_success_clears_failures(self) -> None:
+        store = LoginLockoutStore()
+        t0 = 1_700_000_000
+        for _ in range(MAX_FAILURES):
+            store.register_failure("master", "10.0.0.8", t0)
+        store.register_success("master", "10.0.0.8", t0)
+        self.assertTrue(store.allow("master", "10.0.0.8", t0))
+
+    def test_same_second_failure_after_success_counts(self) -> None:
+        store = LoginLockoutStore()
+        t0 = 1_700_000_000
+        store.register_success("master", "10.0.0.8", t0)
+        for _ in range(MAX_FAILURES):
+            self.assertTrue(store.allow("master", "10.0.0.8", t0))
+            store.register_failure("master", "10.0.0.8", t0)
+        self.assertFalse(store.allow("master", "10.0.0.8", t0))
+
 
 class SourceContractTests(unittest.TestCase):
     def test_php_lockout_is_database_not_session(self) -> None:
@@ -217,6 +241,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("$_SESSION['login_fail_count']", lockout)
         self.assertNotIn("login_fail_count", ui)
         self.assertIn("panelLoginThrottleAllow($username, $ip)", ui)
+        self.assertIn("panelLoginThrottleClear($username, $ip)", ui)
+        self.assertIn("panelLoginThrottleBegin($username, $ip)", ui)
+        handle_fn = ui[ui.find("function handleLoginSubmit") : ui.find("function handleLogout")]
+        self.assertIn("panelLoginThrottleClear($username, $ip)", handle_fn)
+        self.assertIn("AND id > COALESCE", lockout)
         self.assertIn("getClientIp()", ui)
         self.assertIn("auth.login_locked", ui)
         self.assertIn("panel_login_lockout.php", auth)

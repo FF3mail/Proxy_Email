@@ -34,13 +34,49 @@ function panelLoginAttemptUtc(int $now): string
 function panelLoginAttemptsTableExists(): bool
 {
     try {
-        $stmt = getPdo()->query("SHOW TABLES LIKE 'panel_login_attempts'");
-        if ($stmt === false) {
-            return false;
-        }
-        return $stmt->fetch() !== false;
+        $stmt = getPdo()->query('SELECT 1 FROM panel_login_attempts LIMIT 1');
+        return $stmt !== false;
     } catch (Throwable) {
         return false;
+    }
+}
+
+function panelLoginThrottleLockName(string $login, string $ip): string
+{
+    return 'pla_' . substr(hash('sha256', $login . "\0" . $ip), 0, 56);
+}
+
+function panelLoginThrottleBegin(string $login, string $ip): bool
+{
+    if (!panelLoginAttemptsTableExists()) {
+        return false;
+    }
+    try {
+        $pdo = getPdo();
+        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            return true;
+        }
+        $stmt = $pdo->prepare('SELECT GET_LOCK(?, 5)');
+        $stmt->execute([panelLoginThrottleLockName($login, $ip)]);
+        $got = $stmt->fetchColumn();
+        return $got !== false && (int) $got === 1;
+    } catch (Throwable $e) {
+        writeLog('Panel login throttle lock failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+function panelLoginThrottleEnd(string $login, string $ip): void
+{
+    try {
+        $pdo = getPdo();
+        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+            return;
+        }
+        $stmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
+        $stmt->execute([panelLoginThrottleLockName($login, $ip)]);
+    } catch (Throwable $e) {
+        writeLog('Panel login throttle unlock failed: ' . $e->getMessage());
     }
 }
 
@@ -97,10 +133,10 @@ FROM panel_login_attempts
 WHERE login = ?
   AND ip = ?
   AND result = 'failure'
-  AND attempted_at > COALESCE(
-        (SELECT MAX(attempted_at) FROM panel_login_attempts
+  AND id > COALESCE(
+        (SELECT MAX(id) FROM panel_login_attempts
          WHERE login = ? AND ip = ? AND result = 'success'),
-        '1970-01-01 00:00:00'
+        0
       )
 SQL;
     $stmt = $pdo->prepare($afterSuccessSql);
@@ -122,10 +158,10 @@ WHERE login = ?
   AND result = 'failure'
   AND attempted_at >= ?
   AND attempted_at <= ?
-  AND attempted_at > COALESCE(
-        (SELECT MAX(attempted_at) FROM panel_login_attempts
+  AND id > COALESCE(
+        (SELECT MAX(id) FROM panel_login_attempts
          WHERE login = ? AND ip = ? AND result = 'success'),
-        '1970-01-01 00:00:00'
+        0
       )
 SQL;
     $countStmt = $pdo->prepare($countSql);

@@ -85,8 +85,15 @@ function handleLoginSubmit(): void
         redirectTo('login');
     }
 
+    if (!panelLoginThrottleBegin($username, $ip)) {
+        writeLog("Panel login rejected ip={$ip} reason=throttle_lock");
+        setFlash('error', __('auth.login_unavailable'));
+        redirectTo('login');
+    }
+
     if (!panelLoginThrottleAllow($username, $ip)) {
         panelLoginThrottleRegisterBlocked($username, $ip);
+        panelLoginThrottleEnd($username, $ip);
         writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
         setFlash('error', __('auth.login_locked'));
         redirectTo('login');
@@ -101,11 +108,14 @@ function handleLoginSubmit(): void
 
     if (!$ok) {
         panelLoginThrottleRegisterFailure($username, $ip);
+        panelLoginThrottleEnd($username, $ip);
         writeLog("Panel login failed for user='{$username}' ip={$ip}");
         setFlash('error', __('auth.invalid_credentials'));
         redirectTo('login');
     }
 
+    panelLoginThrottleClear($username, $ip);
+    panelLoginThrottleEnd($username, $ip);
     establishPanelSession($row);
     writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");
     setFlash('success', __('auth.login_success'));
