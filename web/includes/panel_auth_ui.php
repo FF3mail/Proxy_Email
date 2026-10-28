@@ -85,9 +85,10 @@ function handleLoginSubmit(): void
         redirectTo('login');
     }
 
-    if (!panelLoginThrottleAllow()) {
+    if (!panelLoginThrottleAllow($username, $ip)) {
+        panelLoginThrottleRegisterBlocked($username, $ip);
         writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
-        setFlash('error', __('auth.invalid_credentials'));
+        setFlash('error', __('auth.login_locked'));
         redirectTo('login');
     }
 
@@ -99,7 +100,7 @@ function handleLoginSubmit(): void
     $password = '';
 
     if (!$ok) {
-        panelLoginThrottleRegisterFailure();
+        panelLoginThrottleRegisterFailure($username, $ip);
         writeLog("Panel login failed for user='{$username}' ip={$ip}");
         setFlash('error', __('auth.invalid_credentials'));
         redirectTo('login');

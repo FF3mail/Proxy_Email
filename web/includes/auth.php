@@ -9,8 +9,7 @@ declare(strict_types=1);
  * second master via raw SQL is an accepted limitation (no DB trigger).
  */
 
-const PANEL_LOGIN_MAX_FAILURES = 5;
-const PANEL_LOGIN_WINDOW_SECONDS = 900; // 15 minutes
+require_once __DIR__ . '/panel_login_lockout.php';
 
 /**
  * Normalize or discard pre-PROMPT-24 / malformed session auth keys.
@@ -149,38 +148,6 @@ function redirectToLogin(): void
     exit();
 }
 
-function panelLoginThrottleAllow(): bool
-{
-    $now = time();
-    $windowStart = (int)($_SESSION['login_fail_window_start'] ?? 0);
-    $count = (int)($_SESSION['login_fail_count'] ?? 0);
-
-    if ($windowStart <= 0 || ($now - $windowStart) >= PANEL_LOGIN_WINDOW_SECONDS) {
-        $_SESSION['login_fail_window_start'] = $now;
-        $_SESSION['login_fail_count'] = 0;
-        return true;
-    }
-
-    return $count < PANEL_LOGIN_MAX_FAILURES;
-}
-
-function panelLoginThrottleRegisterFailure(): void
-{
-    $now = time();
-    $windowStart = (int)($_SESSION['login_fail_window_start'] ?? 0);
-    if ($windowStart <= 0 || ($now - $windowStart) >= PANEL_LOGIN_WINDOW_SECONDS) {
-        $_SESSION['login_fail_window_start'] = $now;
-        $_SESSION['login_fail_count'] = 1;
-        return;
-    }
-    $_SESSION['login_fail_count'] = (int)($_SESSION['login_fail_count'] ?? 0) + 1;
-}
-
-function panelLoginThrottleClear(): void
-{
-    unset($_SESSION['login_fail_window_start'], $_SESSION['login_fail_count']);
-}
-
 /**
  * Establish panel session after successful password_verify().
  */
@@ -190,7 +157,8 @@ function establishPanelSession(array $adminRow): void
     $_SESSION['admin_id'] = (int)$adminRow['id'];
     $_SESSION['admin_role_display'] = (string)$adminRow['role'];
     $_SESSION['admin_username_display'] = (string)$adminRow['username'];
-    panelLoginThrottleClear();
+    unset($_SESSION['login_fail_window_start'], $_SESSION['login_fail_count']);
+    panelLoginThrottleClear((string)$adminRow['username'], getClientIp());
 }
 
 function clearPanelSession(): void
