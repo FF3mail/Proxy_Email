@@ -158,7 +158,6 @@ function establishPanelSession(array $adminRow): void
     $_SESSION['admin_role_display'] = (string)$adminRow['role'];
     $_SESSION['admin_username_display'] = (string)$adminRow['username'];
     unset($_SESSION['login_fail_window_start'], $_SESSION['login_fail_count']);
-    panelLoginThrottleClear((string)$adminRow['username'], getClientIp());
 }
 
 function clearPanelSession(): void

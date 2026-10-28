@@ -5,6 +5,7 @@ declare(strict_types=1);
 /**
  * Issue #136 — PHP control-flow tests for panel login lockout.
  * Uses in-memory SQLite as the PDO seam (no live MySQL).
+ * SQLite does not exercise MySQL GET_LOCK / RELEASE_LOCK.
  */
 
 $failures = 0;
@@ -169,21 +170,51 @@ $dest = runLoginSubmit('master', 'CorrectHorse1!');
 assert_true($dest === 'dashboard', 'handleLoginSubmit success redirects to dashboard');
 $results = plaResults();
 $successRows = array_values(array_filter($results, static fn (array $r): bool => $r['result'] === 'success'));
-assert_true($successRows !== [], 'handleLoginSubmit records result=success');
+assert_true(count($successRows) === 1, 'handleLoginSubmit records exactly one success row');
 assert_true($successRows[0]['login'] === 'master' && $successRows[0]['ip'] === '10.0.0.8', 'success row uses login+IP pair');
 assert_true(isset($_SESSION['admin_id']), 'establishPanelSession ran after clear');
+
+$dest = runLoginSubmit('master', 'wrong-password');
+assert_true($dest === 'login', 'failure after success redirects to login');
+assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.invalid_credentials', 'failure after success is generic');
+$afterSuccess = plaResults();
+$successAfterFail = array_values(array_filter($afterSuccess, static fn (array $r): bool => $r['result'] === 'success'));
+assert_true(count($successAfterFail) === 1, 'later failure does not add a second success');
+assert_true(panelLoginThrottleAllow('master', '10.0.0.8'), 'one failure after success does not lock');
+for ($i = 0; $i < 4; $i++) {
+    runLoginSubmit('master', 'wrong-password');
+}
+assert_true(!panelLoginThrottleAllow('master', '10.0.0.8'), 'five failures after success lock the pair');
+$dest = runLoginSubmit('master', 'CorrectHorse1!');
+assert_true($dest === 'login', 'correct password rejected while locked after post-success failures');
+assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_locked', 'locked uses login_locked flash');
 
 plaReset($pdo);
 $pdo->prepare('INSERT INTO panel_admins (username, password_hash, role, active) VALUES (?, ?, ?, 1)')
     ->execute(['master', $hash, 'master']);
 for ($i = 0; $i < 5; $i++) {
-    runLoginSubmit('master', 'wrong-password');
+    $dest = runLoginSubmit('master', 'wrong-password');
+    assert_true($dest === 'login', "lockout path failed login ({$i})");
+    assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.invalid_credentials', "lockout path generic error ({$i})");
 }
 $dest = runLoginSubmit('master', 'CorrectHorse1!');
 assert_true($dest === 'login', 'correct password rejected while locked');
-assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_locked', 'locked uses login_locked flash');
+assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_locked', 'fresh lockout uses login_locked flash');
 $blocked = array_values(array_filter(plaResults(), static fn (array $r): bool => $r['result'] === 'blocked'));
 assert_true($blocked !== [], 'locked attempt records blocked');
+assert_true(panelLoginThrottleBegin('master', '10.0.0.8'), 'sqlite skips GET_LOCK and still begins');
+panelLoginThrottleEnd('master', '10.0.0.8');
+
+$pdo->exec('DROP TABLE panel_login_attempts');
+assert_true(!panelLoginAttemptsTableExists(), 'missing table is not visible');
+assert_true(!panelLoginThrottleBegin('master', '10.0.0.8'), 'begin fail-closed when table missing');
+assert_true(!panelLoginThrottleAllow('master', '10.0.0.8'), 'allow fail-closed when table missing');
+plaInitSchema($pdo);
+$pdo->prepare('INSERT INTO panel_admins (username, password_hash, role, active) VALUES (?, ?, ?, 1)')
+    ->execute(['master', $hash, 'master']);
+$dest = runLoginSubmit('master', 'CorrectHorse1!');
+assert_true($dest === 'dashboard', 'login works after table restored');
+assert_true(count(array_filter(plaResults(), static fn (array $r): bool => $r['result'] === 'success')) === 1, 'restored table still one success');
 
 echo "\nSummary: failures={$failures}\n";
 exit($failures > 0 ? 1 : 0);

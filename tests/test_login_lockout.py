@@ -245,6 +245,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("panelLoginThrottleBegin($username, $ip)", ui)
         handle_fn = ui[ui.find("function handleLoginSubmit") : ui.find("function handleLogout")]
         self.assertIn("panelLoginThrottleClear($username, $ip)", handle_fn)
+        self.assertIn("try {", handle_fn)
+        self.assertIn("} finally {", handle_fn)
+        self.assertIn("panelLoginThrottleEnd($username, $ip)", handle_fn)
+        session_fn = auth[auth.find("function establishPanelSession") : auth.find("function clearPanelSession")]
+        self.assertNotIn("panelLoginThrottleClear", session_fn)
         self.assertIn("AND id > COALESCE", lockout)
         self.assertIn("getClientIp()", ui)
         self.assertIn("auth.login_locked", ui)
