@@ -15,7 +15,7 @@ require_once __DIR__ . '/includes/panel_nav.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
-requirePanelAdmin();
+requirePanelAdminWithPasswordGate();
 
 $tab = normalizePanelTab(isset($_GET['tab']) ? (string)$_GET['tab'] : PANEL_TAB_PASSAGE);
 $limit = normalizePanelPassageJournalLimit((int)($_GET['limit'] ?? PANEL_PASSAGE_JOURNAL_LIMIT_DEFAULT));

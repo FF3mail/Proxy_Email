@@ -4,6 +4,7 @@ declare(strict_types=1);
 // Panel auth / operators UI handlers (PROMPT 24). Loaded from index.php.
 
 require_once __DIR__ . '/panel_brand.php';
+require_once __DIR__ . '/panel_operator_password.php';
 
 function renderLoginForm(): void
 {
@@ -119,6 +120,10 @@ function handleLoginSubmit(): void
         panelLoginThrottleEnd($username, $ip);
         establishPanelSession($row);
         writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");
+        if (panelAdminMustChangePassword($row)) {
+            setFlash('success', __('auth.login_success'));
+            redirectTo('password_change');
+        }
         setFlash('success', __('auth.login_success'));
         redirectTo('dashboard');
     } finally {
@@ -200,6 +205,11 @@ function renderOperatorList(): void
                                     <?= h(__('operator.master_protected')) ?>
                                 </span>
                             <?php elseif ($isActive): ?>
+                                <button type="button" class="pm-btn pm-btn-sm"
+                                        data-op-reset="<?= (int) $r['id'] ?>"
+                                        data-op-name="<?= h((string) $r['username']) ?>">
+                                    <?= h(__('operator.reset_password')) ?>
+                                </button>
                                 <button type="button" class="pm-btn pm-btn-sm pm-btn-danger"
                                         data-op-deactivate="<?= (int) $r['id'] ?>"
                                         data-op-name="<?= h((string) $r['username']) ?>">
@@ -243,6 +253,31 @@ function renderOperatorList(): void
         </form>
     </dialog>
 
+    <dialog class="pm-dialog" id="dlg-operator-reset" aria-modal="true">
+        <form method="post" action="/index.php" id="form-operator-reset">
+            <div class="pm-mh">
+                <h2><?= h(__('operator.reset_title')) ?></h2>
+                <button type="button" class="pm-x" data-pm-close aria-label="<?= h(__('common.cancel')) ?>">×</button>
+            </div>
+            <div class="pm-mb"><div class="pm-fg">
+                <p style="margin:0 0 12px" id="op-reset-text"><?= h(__('operator.reset_intro')) ?></p>
+                <input type="hidden" name="action" value="operator_reset_password">
+                <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
+                <input type="hidden" name="id" id="op_reset_id" value="">
+                <div class="pm-f pm-full">
+                    <label for="op_reset_password"><?= h(__('operator.reset_new_password')) ?></label>
+                    <input type="password" id="op_reset_password" name="password" required minlength="8"
+                           autocomplete="new-password">
+                    <span class="pm-help"><?= h(__('operator.reset_hint')) ?></span>
+                </div>
+            </div></div>
+            <div class="pm-mf"><span></span><div class="pm-r">
+                <button type="button" class="pm-btn" data-pm-close><?= h(__('common.cancel')) ?></button>
+                <button type="submit" class="pm-btn pm-btn-primary" data-pm-focus><?= h(__('operator.reset_submit')) ?></button>
+            </div></div>
+        </form>
+    </dialog>
+
     <dialog class="pm-dialog" id="dlg-operator-deactivate" aria-modal="true" data-pm-nodirty="1">
         <form method="post" action="/index.php" id="form-operator-deactivate">
             <div class="pm-mh">
@@ -264,7 +299,8 @@ function renderOperatorList(): void
 
     <script>
     (function () {
-      var tpl = <?= json_encode(__('operator.deactivate_body'), JSON_UNESCAPED_UNICODE) ?>;
+      var tplDeactivate = <?= json_encode(__('operator.deactivate_body'), JSON_UNESCAPED_UNICODE) ?>;
+      var tplReset = <?= json_encode(__('operator.reset_body'), JSON_UNESCAPED_UNICODE) ?>;
       document.querySelectorAll('[data-op-deactivate]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
           e.preventDefault();
@@ -273,8 +309,21 @@ function renderOperatorList(): void
           var name = btn.getAttribute('data-op-name') || '';
           document.getElementById('op_deactivate_id').value = id;
           document.getElementById('op-deactivate-text').textContent =
-            (tpl || '').replace('{name}', name || '—');
+            (tplDeactivate || '').replace('{name}', name || '—');
           if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-operator-deactivate'));
+        });
+      });
+      document.querySelectorAll('[data-op-reset]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var id = btn.getAttribute('data-op-reset') || '';
+          var name = btn.getAttribute('data-op-name') || '';
+          document.getElementById('op_reset_id').value = id;
+          document.getElementById('op_reset_password').value = '';
+          document.getElementById('op-reset-text').textContent =
+            (tplReset || '').replace('{name}', name || '—');
+          if (window.PanelModal) window.PanelModal.open(document.getElementById('dlg-operator-reset'));
         });
       });
     })();

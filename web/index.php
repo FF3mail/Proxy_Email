@@ -63,6 +63,8 @@ $postActionsRequiringCsrf = [
     'oauth_initiate',
     'operator_create',
     'operator_deactivate',
+    'operator_reset_password',
+    'password_change_submit',
     'relationship_save',
     'relationship_delete',
 ];
@@ -79,7 +81,15 @@ if (!in_array($action, $preAuthActions, true)) {
     requirePanelAdmin();
 }
 
-if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate'], true)) {
+$passwordChangeExemptActions = ['password_change', 'password_change_submit', 'logout'];
+if (
+    !in_array($action, $preAuthActions, true)
+    && !in_array($action, $passwordChangeExemptActions, true)
+) {
+    enforcePanelPasswordChangeRequired();
+}
+
+if (in_array($action, ['operator_list', 'operator_create', 'operator_deactivate', 'operator_reset_password'], true)) {
     requireMasterAdmin();
 }
 
@@ -91,14 +101,6 @@ function redirectTo(string $action, array $params = []): void
     $params['action'] = $action;
     header('Location: index.php?' . http_build_query($params));
     exit();
-}
-
-function setFlash(string $type, string $message): void
-{
-    $_SESSION['flash'] = [
-        'type' => $type,
-        'message' => $message,
-    ];
 }
 
 function renderHeader(string $title): void
@@ -169,6 +171,18 @@ switch ($action) {
 
     case 'operator_deactivate':
         handleOperatorDeactivate();
+        break;
+
+    case 'operator_reset_password':
+        handleOperatorResetPassword();
+        break;
+
+    case 'password_change':
+        renderPasswordChangeForm();
+        break;
+
+    case 'password_change_submit':
+        handlePasswordChangeSubmit();
         break;
 
     case 'dashboard':

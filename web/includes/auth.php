@@ -102,8 +102,25 @@ function requireMasterAdmin(): void
     }
 }
 
+function panelAuthLogMissingMustChangeColumnOnce(PDOException $e): void
+{
+    static $logged = false;
+    if ($logged) {
+        return;
+    }
+    $sqlState = (string) $e->getCode();
+    if ($sqlState !== '42S22' && !str_contains($e->getMessage(), '1054')) {
+        return;
+    }
+    $logged = true;
+    writeLog(
+        'Panel auth DB schema incomplete: panel_admins.must_change_password column missing '
+        . '(apply migrations/008_panel_admins_must_change_password.sql or re-run installer Database phase)'
+    );
+}
+
 /**
- * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string}|null
+ * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string,must_change_password?:int|string}|null
  */
 function fetchPanelAdminById(int $id): ?array
 {
@@ -113,32 +130,61 @@ function fetchPanelAdminById(int $id): ?array
 
     try {
         $stmt = getPdo()->prepare(
-            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE id = ? LIMIT 1'
+            'SELECT id, username, password_hash, role, active, must_change_password FROM panel_admins WHERE id = ? LIMIT 1'
         );
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row === false ? null : $row;
-    } catch (PDOException) {
+    } catch (PDOException $e) {
+        panelAuthLogMissingMustChangeColumnOnce($e);
+        if ((string) $e->getCode() === '42S22' || str_contains($e->getMessage(), '1054')) {
+            return null;
+        }
         writeLog('Panel auth DB lookup failed for admin_id=' . $id . ' (panel_admins may be missing)');
         return null;
     }
 }
 
 /**
- * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string}|null
+ * @return array{id:int|string,username:string,password_hash:string,role:string,active:int|string,must_change_password?:int|string}|null
  */
 function fetchPanelAdminByUsername(string $username): ?array
 {
     try {
         $stmt = getPdo()->prepare(
-            'SELECT id, username, password_hash, role, active FROM panel_admins WHERE username = ? LIMIT 1'
+            'SELECT id, username, password_hash, role, active, must_change_password FROM panel_admins WHERE username = ? LIMIT 1'
         );
         $stmt->execute([$username]);
         $row = $stmt->fetch();
         return $row === false ? null : $row;
-    } catch (PDOException) {
+    } catch (PDOException $e) {
+        panelAuthLogMissingMustChangeColumnOnce($e);
+        if ((string) $e->getCode() === '42S22' || str_contains($e->getMessage(), '1054')) {
+            return null;
+        }
         writeLog("Panel auth DB lookup failed for username='{$username}' (panel_admins may be missing)");
         return null;
+    }
+}
+
+if (!function_exists('redirectToPanelAction')) {
+    function redirectToPanelAction(string $action): void
+    {
+        header('Location: /index.php?' . http_build_query(['action' => $action]));
+        exit();
+    }
+}
+
+if (!function_exists('setFlash')) {
+    /**
+     * Session flash for panel UI (standalone pages and index.php).
+     */
+    function setFlash(string $type, string $message): void
+    {
+        $_SESSION['flash'] = [
+            'type' => $type,
+            'message' => $message,
+        ];
     }
 }
 

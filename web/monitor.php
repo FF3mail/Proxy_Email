@@ -23,7 +23,7 @@ require_once __DIR__ . '/includes/panel_daemon_status.php';
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
 
-requirePanelAdmin();
+requirePanelAdminWithPasswordGate();
 
 // ============================================================
 // Константы страницы мониторинга

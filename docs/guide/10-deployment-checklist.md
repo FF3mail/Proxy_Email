@@ -186,6 +186,16 @@ mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
 ./scripts/verify-install-regression.sh
 ```
 
+## 13b. Обязательная смена пароля оператора (DAT-9 / SEC-11)
+
+- [ ] Столбец `panel_admins.must_change_password` существует
+- [ ] После обновления панели без установщика — применён `migrations/008_panel_admins_must_change_password.sql` или прогон установщика (Database)
+
+```bash
+mysql -u mail_proxy -p mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
+./scripts/verify-install-regression.sh
+```
+
 ---
 
 ## 13. /var/vmail (PROMPT-34)
