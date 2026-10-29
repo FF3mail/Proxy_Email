@@ -27,7 +27,7 @@ Failed panel logins are stored in `panel_login_attempts` (login, IP, UTC time, r
 mysql mail_proxy < migrations/007_panel_login_attempts.sql
 ```
 
-Idempotent. No DROP. Fresh installs also get the table from `schema.sql`. Bootstrap `ensurePanelLoginAttemptsSchema()` creates the table if missing.
+Idempotent. No DROP. Fresh installs also get the table from `schema.sql`. Re-run installer Database phase applies `migrations/007_panel_login_attempts.sql` as MariaDB root (issue #140). Bootstrap `ensurePanelLoginAttemptsSchema()` creates the table if missing and the panel DB user has `CREATE`.
 
 ## Out of scope
 

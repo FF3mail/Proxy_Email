@@ -71,7 +71,7 @@ chmod +x delta-transit-install.sh configure_limits.sh
 |------|------------|
 | Preflight | Проверка файлов, запрос URL и паролей |
 | Packages | apt-пакеты, пользователь `vmail`, каталоги |
-| Database | Создание БД, импорт `schema.sql`, `db.conf` |
+| Database | Создание БД, импорт `schema.sql` (только пустая БД), idempotent-миграции `panel_admins` и `panel_login_attempts` (`migrations/007_panel_login_attempts.sql` от root), `db.conf` |
 | UsersGroups | Группы `mail-proxy-crypto`, `mail-proxy-logs`, права на `/var/vmail` |
 | Python | venv, `pip install -r requirements.txt`, копирование демона |
 | Web | rsync `web/` → `/var/www/mail-proxy`, `APP_BASE_URL` в config.php |
@@ -217,7 +217,35 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 
 ---
 
-## 3.8. Режимы только валидации
+## 3.8. Обновление уже установленного хоста (in-place)
+
+Повторный запуск `./delta-transit-install.sh` на сервере с существующей БД `mail_proxy`:
+
+| Компонент | Поведение |
+|-----------|-----------|
+| `schema.sql` | **Не импортируется**, если в БД уже есть таблицы (`schema_already_installed`) |
+| `panel_admins` | `CREATE TABLE IF NOT EXISTS` от учётной записи приложения в фазе Database |
+| `panel_login_attempts` (DAT-18 / SEC-10) | Файл `migrations/007_panel_login_attempts.sql` применяется **от root MariaDB** в фазе Database (idempotent, только `CREATE TABLE IF NOT EXISTS`) |
+| Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007` безопасно |
+
+Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. Тогда либо выполните полный прогон установщика (фаза Database), либо вручную:
+
+```bash
+mysql mail_proxy < migrations/007_panel_login_attempts.sql
+```
+
+Учётная запись панели по DAT-20 **не обязана** иметь `CREATE TABLE`; без таблицы вход в панель **fail-closed** (блокировка по SEC-10 не работает, логин отклоняется). Резервный путь в PHP (`ensurePanelLoginAttemptsSchema()`) пытается `CREATE IF NOT EXISTS`, если у пользователя БД есть право; иначе — сообщение в `web_admin.log` и отказ входа.
+
+Проверка после обновления:
+
+```bash
+mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+./scripts/verify-install-regression.sh
+```
+
+---
+
+## 3.9. Режимы только валидации
 
 Для повторной проверки без переустановки:
 
@@ -231,7 +259,7 @@ DELTA_VALIDATION_LOG_ONLY=1 ./delta-transit-install.sh
 
 ---
 
-## 3.9. Следующие шаги
+## 3.10. Следующие шаги
 
 1. Настройте референтов в панели — [05-web-panel.md](05-web-panel.md)
 2. Пройдите чек-лист — [10-deployment-checklist.md](10-deployment-checklist.md)

@@ -92,9 +92,20 @@ function ensurePanelLoginAttemptsSchema(): void
         return;
     }
 
+    writeLog(
+        'Panel auth migration: panel_login_attempts table missing, attempting idempotent CREATE IF NOT EXISTS'
+    );
+
     try {
         getPdo()->exec(PANEL_LOGIN_ATTEMPTS_DDL);
-        writeLog('Panel auth migration: created panel_login_attempts table (idempotent CREATE IF NOT EXISTS)');
+        if (panelLoginAttemptsTableExists()) {
+            writeLog('Panel auth migration: created panel_login_attempts table (idempotent CREATE IF NOT EXISTS)');
+            return;
+        }
+        writeLog(
+            'Panel auth migration: panel_login_attempts still missing after CREATE attempt — '
+            . 'apply migrations/007_panel_login_attempts.sql or re-run installer Database phase'
+        );
     } catch (Throwable $e) {
         writeLog(
             'Panel auth migration failed: could not create panel_login_attempts — '
@@ -198,7 +209,10 @@ function panelLoginThrottleAllow(string $login, string $ip, ?int $now = null): b
     purgePanelLoginAttempts($now);
 
     if (!panelLoginAttemptsTableExists()) {
-        writeLog('Panel login throttle denied: panel_login_attempts table missing');
+        writeLog(
+            'Panel login throttle denied: panel_login_attempts table missing '
+            . '(login path does not CREATE; fail-closed)'
+        );
         return false;
     }
 
