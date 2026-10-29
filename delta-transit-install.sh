@@ -466,6 +466,7 @@ ensure_panel_admins_must_change_password_column() {
     mysql \
         -u root \
         ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
+        "${DB_NAME}" \
         < "$migration_file"
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }

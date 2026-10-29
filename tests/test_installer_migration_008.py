@@ -57,7 +57,17 @@ class InstallerMigration008Tests(unittest.TestCase):
         self.assertIn("./migrations/008_panel_admins_must_change_password.sql", body)
         self.assertIn("-u root", body)
         self.assertIn("MYSQL_ROOT_PASSWORD", body)
+        self.assertIn('"${DB_NAME}"', body)
         self.assertNotIn('-u "${DB_USER}"', body)
+
+    def test_migration_sql_has_no_hardcoded_database(self) -> None:
+        migration = (ROOT / "migrations/008_panel_admins_must_change_password.sql").read_text(
+            encoding="utf-8"
+        )
+        upper = migration.upper()
+        self.assertNotIn("USE MAIL_PROXY", upper)
+        self.assertNotIn("USE `MAIL_PROXY`", upper)
+        self.assertNotRegex(migration, r"(?i)\bmail_proxy\b")
 
     def test_validate_panel_auth_checks_column(self) -> None:
         body = _named_function_body(_read_installer(), "validate_panel_auth")
