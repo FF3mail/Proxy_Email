@@ -115,6 +115,7 @@ REQUIRED_FILES=(
     "./logrotate-mail-proxy"
     "./tmpfiles.d-mail-proxy.conf"
     "./schema.sql"
+    "./migrations/007_panel_login_attempts.sql"
     "./requirements.txt"
 )
 
@@ -443,6 +444,33 @@ CREATE TABLE IF NOT EXISTS panel_admins (
 SQL
 }
 
+# Idempotent DAT-18 / SEC-10 upgrade path (issue #140): applies migrations/007 as root.
+ensure_panel_login_attempts_table() {
+    local migration_file="./migrations/007_panel_login_attempts.sql"
+    require_file "$migration_file"
+    log_info "Ensuring panel_login_attempts table exists (migration 007, idempotent)"
+    mysql \
+        -u root \
+        ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
+        < "$migration_file"
+    log_ok "panel_login_attempts migration applied (CREATE TABLE IF NOT EXISTS only)"
+}
+
+panel_login_attempts_table_exists() {
+    local count db_pass
+    db_pass="$(resolve_db_pass)"
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${db_pass}" \
+            "${DB_NAME}" \
+            -N -e "SHOW TABLES LIKE 'panel_login_attempts';" \
+            2>/dev/null \
+            || true
+    )"
+    [[ -n "${count}" ]]
+}
+
 panel_master_exists() {
     local count db_pass
     db_pass="$(resolve_db_pass)"
@@ -541,6 +569,7 @@ preflight_panel_master_readiness() {
 migrate_panel_auth() {
     log_info "Panel auth migration (idempotent)"
     ensure_panel_admins_table
+    ensure_panel_login_attempts_table
     seed_panel_master
 }
 
@@ -607,6 +636,13 @@ seed_panel_master() {
 validate_panel_auth() {
     log_info "Validating panel authentication (upgrade safety)"
     ensure_panel_admins_table
+
+    if panel_login_attempts_table_exists
+    then
+        log_ok "Panel auth: panel_login_attempts table present (DAT-18)"
+    else
+        log_warn "Panel auth: panel_login_attempts table missing — login throttle is fail-closed until migration 007 is applied"
+    fi
 
     if panel_active_master_exists
     then
