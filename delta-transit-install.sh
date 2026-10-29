@@ -472,13 +472,9 @@ ensure_panel_admins_must_change_password_column() {
 }
 
 panel_admins_must_change_password_column_exists() {
-    local count db_pass
-    db_pass="$(resolve_db_pass)"
+    local count
     count="$(
-        mysql \
-            -u "${DB_USER}" \
-            -p"${db_pass}" \
-            "${DB_NAME}" \
+        mysql_mail_proxy_client \
             -N -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';" \
             2>/dev/null \
             || true
@@ -1068,6 +1064,42 @@ resolve_db_pass() {
         return 0
     fi
     read_db_pass_from_conf
+}
+
+# mail_proxy mysql CLI without -p on argv (password in chmod-600 option file only).
+mysql_mail_proxy_client() {
+    local cnf
+    cnf="$(mktemp)"
+    register_tmpfile "$cnf"
+    chmod 600 "$cnf"
+    MYSQL_CLIENT_CNF_USER="${DB_USER}" \
+    MYSQL_CLIENT_CNF_PASS="$(resolve_db_pass)" \
+    python3 - "$cnf" <<'PY'
+import os
+import re
+import sys
+
+cnf_path = sys.argv[1]
+user = os.environ["MYSQL_CLIENT_CNF_USER"]
+password = os.environ["MYSQL_CLIENT_CNF_PASS"]
+
+
+def cnf_value(value: str) -> str:
+    if re.search(r'[\s#"\\]', value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+with open(cnf_path, "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cnf_value(user)}\n")
+    f.write(f"password={cnf_value(password)}\n")
+PY
+    mysql \
+        --defaults-extra-file="${cnf}" \
+        "${DB_NAME}" \
+        "$@"
 }
 
 validate_db_connectivity() {

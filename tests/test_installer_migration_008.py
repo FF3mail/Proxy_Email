@@ -73,6 +73,17 @@ class InstallerMigration008Tests(unittest.TestCase):
         body = _named_function_body(_read_installer(), "validate_panel_auth")
         self.assertIn("panel_admins_must_change_password_column_exists", body)
 
+    def test_column_exists_probe_avoids_mysql_password_argv(self) -> None:
+        body = _named_function_body(
+            _read_installer(), "panel_admins_must_change_password_column_exists"
+        )
+        self.assertIn(
+            "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';", body
+        )
+        self.assertIn("mysql_mail_proxy_client", body)
+        self.assertNotIn('-p"${db_pass}"', body)
+        self.assertNotIn("-p${", body)
+
     def test_migration_file_is_idempotent_add_column_only(self) -> None:
         migration = (ROOT / "migrations/008_panel_admins_must_change_password.sql").read_text(
             encoding="utf-8"
