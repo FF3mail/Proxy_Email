@@ -75,6 +75,11 @@ function redirectTo(string $action, array $params = []): void
     throw new PanelPasswordTestRedirect($action);
 }
 
+function redirectToPanelAction(string $action): void
+{
+    throw new PanelPasswordTestRedirect($action);
+}
+
 function panelAdminsTableExists(): bool
 {
     try {
@@ -119,11 +124,21 @@ function renderPanelSidebar(): void
 {
 }
 
+require_once $root . '/web/includes/panel_login_lockout.php';
 require_once $root . '/web/includes/panel_operator_password.php';
 require_once $root . '/web/includes/auth.php';
 
 function pwInitSchema(PDO $pdo): void
 {
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS panel_login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            attempted_at TEXT NOT NULL,
+            result TEXT NOT NULL
+        )'
+    );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS panel_admins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +154,7 @@ function pwInitSchema(PDO $pdo): void
 function pwReset(PDO $pdo): void
 {
     $pdo->exec('DELETE FROM panel_admins');
+    $pdo->exec('DELETE FROM panel_login_attempts');
     $GLOBALS['test_logs'] = [];
     $GLOBALS['test_flash'] = null;
 }
@@ -189,6 +205,8 @@ pwInitSchema($pdo);
 
 assert_true(panelOperatorPasswordLengthValid('1234567') === false, '7 chars rejected');
 assert_true(panelOperatorPasswordLengthValid('12345678'), '8 chars accepted');
+$seventyThree = str_repeat('a', 73);
+assert_true(panelOperatorPasswordLengthValid($seventyThree) === false, '73 bytes rejected');
 
 pwReset($pdo);
 $adminId = pwInsertAdmin($pdo, 'admin1', 'StartPass1!', 'admin');
@@ -199,6 +217,23 @@ $_SESSION['admin_role_display'] = 'admin';
 $dest = pwRunChange('WrongOld1!', 'SecretNew9!');
 assert_true($dest === 'password_change', 'bad current stays on password form');
 assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'password.bad_current', 'bad current flash key');
+
+for ($i = 0; $i < 4; $i++) {
+    pwRunChange('WrongOld1!', 'SecretNew9!');
+}
+$dest = pwRunChange('WrongOld1!', 'SecretNew9!');
+assert_true($dest === 'password_change', 'fifth bad current still on form');
+$dest = pwRunChange('WrongOld1!', 'SecretNew9!');
+assert_true(
+    ($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_locked',
+    'sixth bad current triggers lockout flash'
+);
+
+pwReset($pdo);
+$adminId = pwInsertAdmin($pdo, 'admin1', 'StartPass1!', 'admin');
+$_SESSION['admin_id'] = $adminId;
+$_SESSION['admin_username_display'] = 'admin1';
+$_SESSION['admin_role_display'] = 'admin';
 
 $dest = pwRunChange('StartPass1!', 'short');
 assert_true($dest === 'password_change', 'short new rejected');

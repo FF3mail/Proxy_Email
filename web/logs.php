@@ -15,7 +15,7 @@ require_once __DIR__ . '/includes/panel_nav.php';
 
 sanitizeLegacyPanelSession();
 bootstrapPanelAuth();
-requirePanelAdmin();
+requirePanelAdminWithPasswordGate();
 
 /**
  * Highlight common log level tokens with shared panel chips (markup only).

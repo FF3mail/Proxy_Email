@@ -116,6 +116,7 @@ REQUIRED_FILES=(
     "./tmpfiles.d-mail-proxy.conf"
     "./schema.sql"
     "./migrations/007_panel_login_attempts.sql"
+    "./migrations/008_panel_admins_must_change_password.sql"
     "./requirements.txt"
 )
 
@@ -457,6 +458,33 @@ ensure_panel_login_attempts_table() {
     log_ok "panel_login_attempts migration applied (CREATE TABLE IF NOT EXISTS only)"
 }
 
+# Idempotent DAT-9 / SEC-11 upgrade path (issue #138): applies migrations/008 as root.
+ensure_panel_admins_must_change_password_column() {
+    local migration_file="./migrations/008_panel_admins_must_change_password.sql"
+    require_file "$migration_file"
+    log_info "Ensuring panel_admins.must_change_password column exists (migration 008, idempotent)"
+    mysql \
+        -u root \
+        ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
+        < "$migration_file"
+    log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
+}
+
+panel_admins_must_change_password_column_exists() {
+    local count db_pass
+    db_pass="$(resolve_db_pass)"
+    count="$(
+        mysql \
+            -u "${DB_USER}" \
+            -p"${db_pass}" \
+            "${DB_NAME}" \
+            -N -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';" \
+            2>/dev/null \
+            || true
+    )"
+    [[ -n "${count}" ]]
+}
+
 panel_login_attempts_table_exists() {
     local count db_pass
     db_pass="$(resolve_db_pass)"
@@ -571,6 +599,7 @@ migrate_panel_auth() {
     log_info "Panel auth migration (idempotent)"
     ensure_panel_admins_table
     ensure_panel_login_attempts_table
+    ensure_panel_admins_must_change_password_column
     seed_panel_master
 }
 
@@ -643,6 +672,13 @@ validate_panel_auth() {
         log_ok "Panel auth: panel_login_attempts table present (DAT-18)"
     else
         log_warn "Panel auth: panel_login_attempts table missing — login throttle is fail-closed until migration 007 is applied"
+    fi
+
+    if panel_admins_must_change_password_column_exists
+    then
+        log_ok "Panel auth: panel_admins.must_change_password column present (DAT-9)"
+    else
+        log_warn "Panel auth: panel_admins.must_change_password column missing — password-change gate is fail-closed until migration 008 is applied"
     fi
 
     if panel_active_master_exists

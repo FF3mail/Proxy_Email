@@ -5,9 +5,11 @@ declare(strict_types=1);
  * Operator password change and master reset (SEC-11 / DAT-9 / issue #138).
  */
 
+require_once __DIR__ . '/panel_login_lockout.php';
+
 function panelOperatorPasswordLengthValid(string $password): bool
 {
-    return $password !== '' && strlen($password) >= 8;
+    return $password !== '' && strlen($password) >= 8 && strlen($password) <= 72;
 }
 
 function panelAdminsHasMustChangePasswordColumn(): bool
@@ -40,7 +42,7 @@ function ensurePanelAdminsMustChangePasswordColumn(): void
 
     try {
         getPdo()->exec(
-            'ALTER TABLE panel_admins ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0 AFTER active'
+            'ALTER TABLE panel_admins ADD COLUMN IF NOT EXISTS must_change_password TINYINT(1) NOT NULL DEFAULT 0 AFTER active'
         );
         writeLog('Panel auth migration: added panel_admins.must_change_password column');
     } catch (Throwable $e) {
@@ -69,7 +71,16 @@ function enforcePanelPasswordChangeRequired(): void
     }
 
     setFlash('error', __('password.must_change_required'));
-    redirectTo('password_change');
+    redirectToPanelAction('password_change');
+}
+
+/**
+ * Standalone panel pages (logs.php, monitor.php, …) must use this instead of requirePanelAdmin() alone.
+ */
+function requirePanelAdminWithPasswordGate(): void
+{
+    requirePanelAdmin();
+    enforcePanelPasswordChangeRequired();
 }
 
 function renderPasswordChangeForm(): void
@@ -144,19 +155,42 @@ function handlePasswordChangeSubmit(): void
     $new = (string) ($_POST['new_password'] ?? '');
 
     if ($current === '' || !panelOperatorPasswordLengthValid($new)) {
+        $tooLong = $new !== '' && strlen($new) > 72;
         $current = '';
         $new = '';
         writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=invalid_input");
-        setFlash('error', __('password.invalid'));
+        setFlash('error', $tooLong ? __('password.too_long') : __('password.invalid'));
         redirectTo('password_change');
     }
 
-    if (!password_verify($current, (string) $row['password_hash'])) {
-        $current = '';
-        $new = '';
-        writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=bad_current");
-        setFlash('error', __('password.bad_current'));
+    if (!panelLoginThrottleBegin($user, $ip)) {
+        writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=throttle_lock");
+        setFlash('error', __('auth.login_unavailable'));
         redirectTo('password_change');
+    }
+
+    try {
+        if (!panelLoginThrottleAllow($user, $ip)) {
+            panelLoginThrottleRegisterBlocked($user, $ip);
+            writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=throttled");
+            setFlash('error', __('auth.login_locked'));
+            panelLoginThrottleEnd($user, $ip);
+            redirectTo('password_change');
+        }
+
+        if (!password_verify($current, (string) $row['password_hash'])) {
+            $current = '';
+            $new = '';
+            panelLoginThrottleRegisterFailure($user, $ip);
+            writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=bad_current");
+            setFlash('error', __('password.bad_current'));
+            panelLoginThrottleEnd($user, $ip);
+            redirectTo('password_change');
+        }
+
+        panelLoginThrottleClear($user, $ip);
+    } finally {
+        panelLoginThrottleEnd($user, $ip);
     }
 
     $current = '';
@@ -176,6 +210,7 @@ function handlePasswordChangeSubmit(): void
     );
     $stmt->execute([$hash, $adminId]);
 
+    session_regenerate_id(true);
     writeLog("Panel password_change success for user='{$user}' ip={$ip}");
     setFlash('success', __('password.changed'));
     redirectTo('dashboard');
@@ -183,14 +218,17 @@ function handlePasswordChangeSubmit(): void
 
 function handleOperatorResetPassword(): void
 {
+    requireMasterAdmin();
+
     $id = (int) ($_POST['id'] ?? 0);
     $new = (string) ($_POST['password'] ?? '');
     $masterUser = (string) ($_SESSION['admin_username_display'] ?? '');
     $ip = getClientIp();
 
     if ($id <= 0 || !panelOperatorPasswordLengthValid($new)) {
+        $tooLong = $new !== '' && strlen($new) > 72;
         $new = '';
-        setFlash('error', __('operator.invalid_credentials'));
+        setFlash('error', $tooLong ? __('password.too_long') : __('operator.invalid_credentials'));
         redirectTo('operator_list');
     }
 

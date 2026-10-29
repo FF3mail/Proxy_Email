@@ -476,6 +476,7 @@ return [
     'password.new' => 'New password',
     'password.submit' => 'Save password',
     'password.invalid' => 'Enter the current password and a new password of at least 8 characters.',
+    'password.too_long' => 'New password must be at most 72 bytes.',
     'password.bad_current' => 'Current password is incorrect.',
     'password.same_as_current' => 'New password must differ from the current password.',
     'password.changed' => 'Password updated',

@@ -201,6 +201,50 @@ PY
     else
         fail "panel_login_attempts table missing — apply migrations/007 or re-run installer Database phase"
     fi
+
+    if python3 - "$DB_CONF" <<'PY'
+import configparser
+import subprocess
+import sys
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+user = cfg.get("db", "db_user")
+password = cfg.get("db", "db_pass")
+name = cfg.get("db", "db_name")
+host = cfg.get("db", "db_host", fallback="127.0.0.1")
+port = cfg.get("db", "db_port", fallback="3306")
+cmd = [
+    "mysql",
+    f"-h{host}",
+    f"-P{port}",
+    f"-u{user}",
+    f"-p{password}",
+    name,
+    "-N",
+    "-e",
+    "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';",
+]
+try:
+    out = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+except FileNotFoundError:
+    raise SystemExit("mysql client missing")
+if out.returncode != 0:
+    raise SystemExit(out.stderr.strip() or "mysql failed")
+if not out.stdout.strip():
+    raise SystemExit("panel_admins.must_change_password column missing")
+PY
+    then
+        pass "panel_admins.must_change_password column present (DAT-9 / SEC-11)"
+    else
+        fail "panel_admins.must_change_password missing — apply migrations/008 or re-run installer Database phase"
+    fi
 fi
 
 echo "=== Summary: ${FAILURES} failure(s) ==="

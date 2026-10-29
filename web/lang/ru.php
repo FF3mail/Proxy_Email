@@ -476,6 +476,7 @@ return [
     'password.new' => 'Новый пароль',
     'password.submit' => 'Сохранить пароль',
     'password.invalid' => 'Укажите текущий пароль и новый пароль не короче 8 символов.',
+    'password.too_long' => 'Новый пароль должен быть не длиннее 72 байт.',
     'password.bad_current' => 'Неверный текущий пароль.',
     'password.same_as_current' => 'Новый пароль должен отличаться от текущего.',
     'password.changed' => 'Пароль изменён',

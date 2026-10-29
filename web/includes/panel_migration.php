@@ -2,10 +2,11 @@
 declare(strict_types=1);
 
 /**
- * Panel auth schema migration and startup validation (PROMPT 25).
+ * Panel auth schema migration and startup validation (PROMPT 25 / issue #138).
  *
- * Idempotent: CREATE TABLE IF NOT EXISTS only — no DROP, TRUNCATE, or ALTER
- * that could destroy data. Safe to call on every web request (guarded).
+ * Idempotent: CREATE TABLE IF NOT EXISTS; additive ALTER ADD COLUMN IF NOT EXISTS
+ * for panel_admins.must_change_password (DAT-9). No DROP, TRUNCATE, or destructive ALTER.
+ * Safe to call on every web request (guarded).
  */
 
 require_once __DIR__ . '/panel_login_lockout.php';

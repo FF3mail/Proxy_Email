@@ -226,20 +226,23 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 | `schema.sql` | **Не импортируется**, если в БД уже есть таблицы (`schema_already_installed`) |
 | `panel_admins` | `CREATE TABLE IF NOT EXISTS` от учётной записи приложения в фазе Database |
 | `panel_login_attempts` (DAT-18 / SEC-10) | Файл `migrations/007_panel_login_attempts.sql` применяется **от root MariaDB** в фазе Database (idempotent, только `CREATE TABLE IF NOT EXISTS`) |
+| `panel_admins.must_change_password` (DAT-9 / SEC-11) | Файл `migrations/008_panel_admins_must_change_password.sql` применяется **от root MariaDB** в фазе Database (idempotent, `ADD COLUMN IF NOT EXISTS`) |
 | Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007` безопасно |
 
 Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. Тогда либо выполните полный прогон установщика (фаза Database), либо вручную:
 
 ```bash
 mysql mail_proxy < migrations/007_panel_login_attempts.sql
+mysql mail_proxy < migrations/008_panel_admins_must_change_password.sql
 ```
 
-Учётная запись панели по DAT-20 **не обязана** иметь `CREATE TABLE`; без таблицы вход в панель **fail-closed** (блокировка по SEC-10 не работает, логин отклоняется). Резервный путь в PHP (`ensurePanelLoginAttemptsSchema()`) пытается `CREATE IF NOT EXISTS`, если у пользователя БД есть право; иначе — сообщение в `web_admin.log` и отказ входа.
+Учётная запись панели по DAT-20 **не обязана** иметь `CREATE TABLE` / `ALTER`; без таблицы `panel_login_attempts` вход **fail-closed** по SEC-10; без столбца `must_change_password` авторизационные запросы к `panel_admins` **fail-closed** (DAT-9). Резервный путь в PHP (`ensurePanelLoginAttemptsSchema()`, `ensurePanelAdminsMustChangePasswordColumn()`) пытается создать объект, если у пользователя БД есть право; иначе — сообщение в `web_admin.log` и отказ.
 
 Проверка после обновления:
 
 ```bash
 mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+mysql -u mail_proxy -p mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
 ./scripts/verify-install-regression.sh
 ```
 
