@@ -175,6 +175,19 @@ if (!function_exists('redirectToPanelAction')) {
     }
 }
 
+if (!function_exists('setFlash')) {
+    /**
+     * Session flash for panel UI (standalone pages and index.php).
+     */
+    function setFlash(string $type, string $message): void
+    {
+        $_SESSION['flash'] = [
+            'type' => $type,
+            'message' => $message,
+        ];
+    }
+}
+
 function redirectToLogin(): void
 {
     header('Location: /index.php?action=login');

@@ -103,14 +103,6 @@ function redirectTo(string $action, array $params = []): void
     exit();
 }
 
-function setFlash(string $type, string $message): void
-{
-    $_SESSION['flash'] = [
-        'type' => $type,
-        'message' => $message,
-    ];
-}
-
 function renderHeader(string $title): void
 {
     global $flash, $action;

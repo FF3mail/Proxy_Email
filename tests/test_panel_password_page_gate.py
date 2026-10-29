@@ -123,6 +123,11 @@ class PanelPasswordPageGateTests(unittest.TestCase):
         self.assertIn("redirectToPanelAction('password_change')", text)
         self.assertIn("function requirePanelAdminWithPasswordGate", text)
 
+    def test_auth_provides_set_flash_for_standalone_gate(self) -> None:
+        auth = (ROOT / "web/includes/auth.php").read_text(encoding="utf-8")
+        self.assertIn("function setFlash", auth)
+        self.assertIn("$_SESSION['flash']", auth)
+
     def test_reset_handler_requires_master(self) -> None:
         text = (ROOT / "web/includes/panel_operator_password.php").read_text(encoding="utf-8")
         body = text.split("function handleOperatorResetPassword", 1)[1].split("function ", 1)[0]
