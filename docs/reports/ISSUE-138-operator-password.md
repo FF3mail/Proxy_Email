@@ -12,10 +12,10 @@ Implements DEV-24 closure items for operator self-service password change, maste
 | Installer `ensure_panel_admins_must_change_password_column()` | Applies `008` as MariaDB **root** to **`DB_NAME`** in `migrate_panel_auth()` (same pattern as `007`) |
 | PHP `ensurePanelAdminsMustChangePasswordColumn()` | Runtime fallback when DB user has `ALTER`; otherwise fail-closed |
 
-Manual upgrade (panel-only rsync). Use the database name from `/etc/mail-proxy/db.conf` (`[db]` → `name`); the installer applies the file to **`DB_NAME`** (default `mail_proxy`):
+Manual upgrade (panel-only rsync). Use the database name from `/etc/mail-proxy/db.conf` (`[db]` → `db_name`); the installer applies the file to **`DB_NAME`** (default `mail_proxy`):
 
 ```bash
-DB_NAME="$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/mail-proxy/db.conf'); print(c['db']['name'])")"
+DB_NAME="$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/mail-proxy/db.conf'); print(c['db']['db_name'])")"
 mysql -u root -p "${DB_NAME}" < migrations/008_panel_admins_must_change_password.sql
 ```
 

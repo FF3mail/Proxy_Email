@@ -229,10 +229,10 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 | `panel_admins.must_change_password` (DAT-9 / SEC-11) | Файл `migrations/008_panel_admins_must_change_password.sql` применяется **от root MariaDB** в фазе Database к **`DB_NAME`** (idempotent, `ADD COLUMN IF NOT EXISTS`; в SQL нет `USE …`) |
 | Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007` безопасно |
 
-Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. Тогда либо выполните полный прогон установщика (фаза Database), либо вручную (имя БД — как в `/etc/mail-proxy/db.conf`, ключ `name`; по умолчанию установщик использует `DB_NAME=mail_proxy`):
+Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. Тогда либо выполните полный прогон установщика (фаза Database), либо вручную (имя БД — как в `/etc/mail-proxy/db.conf`, ключ `db_name`; по умолчанию установщик использует `DB_NAME=mail_proxy`):
 
 ```bash
-DB_NAME="$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/mail-proxy/db.conf'); print(c['db']['name'])")"
+DB_NAME="$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/mail-proxy/db.conf'); print(c['db']['db_name'])")"
 mysql -u root -p "${DB_NAME}" < migrations/007_panel_login_attempts.sql
 mysql -u root -p "${DB_NAME}" < migrations/008_panel_admins_must_change_password.sql
 ```
