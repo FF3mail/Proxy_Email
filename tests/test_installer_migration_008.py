@@ -59,6 +59,9 @@ class InstallerMigration008Tests(unittest.TestCase):
         self.assertIn("MYSQL_ROOT_PASSWORD", body)
         self.assertIn('"${DB_NAME}"', body)
         self.assertNotIn('-u "${DB_USER}"', body)
+        self.assertIn("--defaults-extra-file=", body)
+        self.assertNotIn("-p${MYSQL_ROOT_PASSWORD}", body)
+        self.assertNotIn("-p${", body)
 
     def test_migration_sql_has_no_hardcoded_database(self) -> None:
         migration = (ROOT / "migrations/008_panel_admins_must_change_password.sql").read_text(

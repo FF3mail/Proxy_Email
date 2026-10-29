@@ -463,11 +463,43 @@ ensure_panel_admins_must_change_password_column() {
     local migration_file="./migrations/008_panel_admins_must_change_password.sql"
     require_file "$migration_file"
     log_info "Ensuring panel_admins.must_change_password column exists (migration 008, idempotent)"
-    mysql \
-        -u root \
-        ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
-        "${DB_NAME}" \
-        < "$migration_file"
+    if mysql -u root -e "SELECT 1" >/dev/null 2>&1
+    then
+        mysql -u root "${DB_NAME}" < "$migration_file"
+    else
+        local cnf
+        cnf="$(mktemp)"
+        register_tmpfile "$cnf"
+        chmod 600 "$cnf"
+        MYSQL_CLIENT_CNF_USER="root" \
+        MYSQL_CLIENT_CNF_PASS="${MYSQL_ROOT_PASSWORD}" \
+        python3 - "$cnf" <<'PY'
+import os
+import re
+import sys
+
+cnf_path = sys.argv[1]
+user = os.environ["MYSQL_CLIENT_CNF_USER"]
+password = os.environ["MYSQL_CLIENT_CNF_PASS"]
+
+
+def cnf_value(value: str) -> str:
+    if re.search(r'[\s#"\\]', value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+with open(cnf_path, "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cnf_value(user)}\n")
+    f.write(f"password={cnf_value(password)}\n")
+PY
+        mysql \
+            --defaults-extra-file="${cnf}" \
+            "${DB_NAME}" \
+            < "$migration_file"
+    fi
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }
 
