@@ -157,5 +157,51 @@ if [[ -d /var/vmail ]]; then
     fi
 fi
 
+if [[ -f "$DB_CONF" ]]; then
+    if python3 - "$DB_CONF" <<'PY'
+import configparser
+import subprocess
+import sys
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+user = cfg.get("db", "db_user")
+password = cfg.get("db", "db_pass")
+name = cfg.get("db", "db_name")
+host = cfg.get("db", "db_host", fallback="127.0.0.1")
+port = cfg.get("db", "db_port", fallback="3306")
+cmd = [
+    "mysql",
+    f"-h{host}",
+    f"-P{port}",
+    f"-u{user}",
+    f"-p{password}",
+    name,
+    "-N",
+    "-e",
+    "SHOW TABLES LIKE 'panel_login_attempts';",
+]
+try:
+    out = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+except FileNotFoundError:
+    raise SystemExit("mysql client missing")
+if out.returncode != 0:
+    raise SystemExit(out.stderr.strip() or "mysql failed")
+if not out.stdout.strip():
+    raise SystemExit("panel_login_attempts table missing")
+PY
+    then
+        pass "panel_login_attempts table present (DAT-18 / SEC-10 lockout)"
+    else
+        fail "panel_login_attempts table missing — apply migrations/007 or re-run installer Database phase"
+    fi
+fi
+
 echo "=== Summary: ${FAILURES} failure(s) ==="
 exit "$FAILURES"

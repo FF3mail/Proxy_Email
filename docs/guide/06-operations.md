@@ -107,6 +107,8 @@ systemctl reload php*-fpm nginx
 
 Не перезаписывайте `config.php` без бэкапа — в нём `APP_BASE_URL`.
 
+После деплоя lockout (PR #137 / issue #136) на хосте **без** повторного установщика убедитесь, что таблица `panel_login_attempts` существует (см. [03-installation.md](03-installation.md) §3.8). Иначе вход в панель fail-closed.
+
 ---
 
 ## 6.6. Добавление нового референта в production

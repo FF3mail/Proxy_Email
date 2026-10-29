@@ -176,6 +176,18 @@ grep -E "IMAP size skip|Invalid (auth_type|imap_encryption)" /var/log/mail-proxy
 
 ---
 
+## 13a. Блокировка входа в панель (DAT-18 / SEC-10)
+
+- [ ] Таблица `panel_login_attempts` существует в `mail_proxy`
+- [ ] После обновления панели без установщика — применён `migrations/007_panel_login_attempts.sql` или прогон установщика (Database)
+
+```bash
+mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+./scripts/verify-install-regression.sh
+```
+
+---
+
 ## 13. /var/vmail (PROMPT-34)
 
 - [ ] Владелец `/var/vmail` согласован с Dovecot (`doveconf mail_uid`)
