@@ -42,6 +42,10 @@ Before requesting review:
 
 - PHP panel static tests (when panel or panel contract docs change; PHP CLI required): run each `tests/panel_*_test.php` (**10** files on current `master`).
 
+## Checks (CI)
+
+Every pull request and every push to `master` run the workflow `.github/workflows/ci.yml`: Python unit tests (`python-tests`), `php -l` on `web/` (`php-lint`), `shellcheck` on repository shell scripts (`shellcheck`), and SPEC structure validation (`spec-format`). The `php-tests` job runs a portable subset of `tests/panel_*_test.php` and is informational (`continue-on-error: true`). See `tests/README.md` for environment-coupled tests.
+
 ## Repository hygiene rules
 
 - The repository is public: never commit real lab domains, IP addresses, mailbox names, SSH user@host notes, credential-file paths, passwords, tokens, or keys. Use documentation placeholders: lab-a.example.test / lab-b.example.test, 203.0.113.0/24 and 192.0.2.0/24 (TEST-NET), user-a / user-b / referent-a / client-a, <ssh-user>@<lab-vps>, /etc/mail-proxy/<test-credentials-env>.

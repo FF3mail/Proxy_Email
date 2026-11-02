@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Prepare spool and log directories
+        run: |
+          sudo mkdir -p /var/spool/mail-proxy/tmp /var/log/mail-proxy
+          sudo chmod -R a+rwx /var/spool/mail-proxy /var/log/mail-proxy
+      - name: Run Python unit tests
+        run: python3 -m unittest discover -s tests -p "test_*.py"
+
+  php-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install PHP CLI
+        run: sudo apt-get update && sudo apt-get install -y php-cli php-sqlite3
+      - name: php -l on panel sources
+        run: |
+          find web -name '*.php' -print0 | xargs -0 -n1 php -l
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run shellcheck
+        run: |
+          shellcheck delta-transit-install.sh configure_limits.sh \
+            scripts/*.sh tests/*.sh docs/build_admin_guide.sh
+
+  spec-format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Check SPEC structure
+        run: python3 scripts/check_spec_format.py
+
+  php-tests:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install PHP CLI
+        run: sudo apt-get update && sudo apt-get install -y php-cli php-sqlite3
+      - name: Run portable panel PHP tests
+        run: |
+          set +e
+          fail=0
+          for t in tests/panel_login_lockout_test.php \
+                   tests/panel_operator_password_test.php \
+                   tests/panel_referent_activation_test.php \
+                   tests/panel_modal_dirty_test.php \
+                   tests/panel_dashboard_world_clocks_test.php \
+                   tests/panel_external_accounts_list_test.php \
+                   tests/panel_internet_status_test.php \
+                   tests/panel_issue82_layout_regression_test.php \
+                   tests/panel_journal_logs_style_test.php \
+                   tests/panel_mail_presets_test.php \
+                   tests/panel_relationship_path_guard_test.php \
+                   tests/panel_relationship_routing_test.php \
+                   tests/panel_routing_test.php \
+                   tests/panel_standalone_password_gate_test.php \
+                   tests/panel_system_info_test.php \
+                   tests/panel_web_fpm_static_test.php \
+                   tests/panel_whitelist_runner_test.php; do
+            echo "=== $t ==="
+            php "$t" || fail=1
+          done
+          exit "$fail"
