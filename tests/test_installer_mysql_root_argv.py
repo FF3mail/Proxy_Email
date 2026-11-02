@@ -258,6 +258,89 @@ mysql_root_client -e "SELECT 1"
         self.assertNotIn("--no-defaults", text)
         self.assertNotIn("--defaults-extra-file=", text)
 
+    def test_mysql_client_with_defaults_file_ignores_home_my_cnf(self) -> None:
+        """--defaults-file alone must not merge with $HOME/.my.cnf (issue #145)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            (home / ".my.cnf").write_text(
+                "[client]\nuser=wrong\npassword=wrong\n",
+                encoding="utf-8",
+            )
+            argv_log = tmp_path / "argv.log"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
+            }
+            script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+cnf="$(mktemp)"
+chmod 600 "$cnf"
+mysql_write_client_option_file "$cnf" root "good-secret"
+mysql_client_with_defaults_file "$cnf" -e "SELECT 1"
+rm -f "$cnf"
+"""
+            subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            joined = argv_log.read_text(encoding="utf-8")
+            self.assertIn("--defaults-file=", joined)
+            self.assertNotIn("-p", joined)
+            self.assertNotIn("wrong", joined)
+
+    def test_import_schema_runs_mysql_root_client_without_p(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            argv_log = tmp_path / "argv.log"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
+            }
+            script = f"""
+set -euo pipefail
+cd "{ROOT}"
+source "./delta-transit-install.sh"
+DB_NAME="mail_proxy_test_import"
+MYSQL_ROOT_PASSWORD="import-test-secret"
+schema_already_installed() {{ return 1; }}
+mysql_root_can_use_socket() {{ return 1; }}
+import_schema
+"""
+            subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            joined = argv_log.read_text(encoding="utf-8")
+            self.assertIn("--defaults-file=", joined)
+            self.assertNotIn("-p", joined)
+
 
 if __name__ == "__main__":
     unittest.main()
