@@ -53,11 +53,11 @@ class InstallerMigration007Tests(unittest.TestCase):
             body.find("seed_panel_master"),
         )
 
-    def test_007_applied_as_root_from_sql_file(self) -> None:
+    def test_007_applied_via_mysql_root_client(self) -> None:
         body = _ensure_007_body(_read_installer())
         self.assertIn("./migrations/007_panel_login_attempts.sql", body)
-        self.assertIn("-u root", body)
-        self.assertIn("MYSQL_ROOT_PASSWORD", body)
+        self.assertIn("mysql_root_client", body)
+        self.assertNotIn("-p${", body)
         self.assertNotIn("-u \"${DB_USER}\"", body)
 
     def test_validate_panel_auth_checks_table(self) -> None:

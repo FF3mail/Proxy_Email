@@ -194,6 +194,7 @@ try:
         f.write(f"port={_cnf_value(port)}\n")
     cmd = [
         "mysql",
+        "--no-defaults",
         f"--defaults-extra-file={cnf_path}",
         name,
         "-N",
@@ -259,6 +260,7 @@ try:
         f.write(f"port={_cnf_value(port)}\n")
     cmd = [
         "mysql",
+        "--no-defaults",
         f"--defaults-extra-file={cnf_path}",
         name,
         "-N",
