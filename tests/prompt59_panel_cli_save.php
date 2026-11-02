@@ -2,7 +2,8 @@
 <?php
 declare(strict_types=1);
 $mode = $argv[1] ?? '';
-$webRoot = '/var/www/mail-proxy';
+require_once __DIR__ . '/panel_bootstrap.php';
+$webRoot = panel_test_web_root();
 chdir($webRoot);
 require_once $webRoot . '/includes/helpers.php';
 require_once $webRoot . '/includes/i18n.php';

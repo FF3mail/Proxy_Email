@@ -6,7 +6,8 @@
  */
 declare(strict_types=1);
 
-$webRoot = getenv('PANEL_WEB_ROOT') ?: '/var/www/mail-proxy';
+require_once __DIR__ . '/panel_bootstrap.php';
+$webRoot = panel_test_web_root();
 $failures = 0;
 
 function assert_true(bool $cond, string $msg): void
