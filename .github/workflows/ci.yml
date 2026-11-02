@@ -48,7 +48,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run shellcheck
         run: |
-          shellcheck delta-transit-install.sh configure_limits.sh \
+          shellcheck --severity=error delta-transit-install.sh configure_limits.sh \
             scripts/*.sh tests/*.sh docs/build_admin_guide.sh
 
   spec-format:
