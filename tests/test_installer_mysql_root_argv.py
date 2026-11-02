@@ -63,6 +63,83 @@ class InstallerMysqlRootArgvTests(unittest.TestCase):
         self.assertNotIn("--no-defaults", verify)
         self.assertIn("mysql_client_with_defaults_file", installer)
 
+    def test_mysql_root_client_socket_only_when_password_empty(self) -> None:
+        body = _named_function_body(_read_installer(), "mysql_root_client")
+        self.assertIn('[[ -z "${MYSQL_ROOT_PASSWORD}" ]]', body)
+        self.assertRegex(
+            body,
+            r'\[\[ -z "\$\{MYSQL_ROOT_PASSWORD\}" \]\] && mysql_root_can_use_socket',
+        )
+
+    def test_mysql_root_client_with_password_uses_defaults_file_not_socket(
+        self,
+    ) -> None:
+        """Non-empty MYSQL_ROOT_PASSWORD must not use passwordless mysql -u root."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            argv_log = tmp_path / "argv.log"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tmp}:{os.environ.get('PATH', '')}"}
+            script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+MYSQL_ROOT_PASSWORD="$1"
+mysql_root_can_use_socket() {{ return 0; }}
+mysql_root_client -e "SELECT 1"
+"""
+            subprocess.run(
+                ["bash", "-c", script, "bash", "throwaway-secret"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            joined = argv_log.read_text(encoding="utf-8")
+            self.assertIn("--defaults-file=", joined)
+            lines = joined.splitlines()
+            self.assertNotIn("-u", lines)
+            self.assertNotIn("root", lines)
+
+    def test_mysql_root_client_empty_password_may_use_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            argv_log = tmp_path / "argv.log"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tmp}:{os.environ.get('PATH', '')}"}
+            script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+MYSQL_ROOT_PASSWORD=""
+mysql_root_can_use_socket() {{ return 0; }}
+mysql_root_client -e "SELECT 1"
+"""
+            subprocess.run(
+                ["bash", "-c", script, "bash"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            joined = argv_log.read_text(encoding="utf-8")
+            self.assertNotIn("--defaults-file=", joined)
+            lines = joined.splitlines()
+            self.assertIn("-u", lines)
+            self.assertIn("root", lines)
+
     def test_mysql_root_exec_delegates_to_mysql_root_client(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_root_exec")
         self.assertIn("mysql_root_client", body)

@@ -395,7 +395,7 @@ mysql_client_with_defaults_file() {
 # Root mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_root_client() {
     local cnf rc
-    if mysql_root_can_use_socket
+    if [[ -z "${MYSQL_ROOT_PASSWORD}" ]] && mysql_root_can_use_socket
     then
         mysql -u root "$@"
         return $?
