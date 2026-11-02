@@ -195,7 +195,6 @@ try:
     cmd = [
         "mysql",
         f"--defaults-file={cnf_path}",
-        "--no-defaults",
         name,
         "-N",
         "-e",
@@ -261,7 +260,6 @@ try:
     cmd = [
         "mysql",
         f"--defaults-file={cnf_path}",
-        "--no-defaults",
         name,
         "-N",
         "-e",

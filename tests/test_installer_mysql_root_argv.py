@@ -50,14 +50,18 @@ class InstallerMysqlRootArgvTests(unittest.TestCase):
         self.assertIn("mysql_write_client_option_file", body)
         self.assertNotIn("-p", body)
 
-    def test_mysql_client_with_defaults_file_order(self) -> None:
+    def test_mysql_client_with_defaults_file_uses_defaults_file_only(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_client_with_defaults_file")
-        defaults_idx = body.find("--defaults-file=")
-        no_defaults_idx = body.find("--no-defaults")
-        self.assertNotEqual(defaults_idx, -1)
-        self.assertNotEqual(no_defaults_idx, -1)
-        self.assertLess(defaults_idx, no_defaults_idx)
+        self.assertIn("--defaults-file=", body)
+        self.assertNotIn("--no-defaults", body)
         self.assertNotIn("--defaults-extra-file=", body)
+
+    def test_installer_and_verify_no_no_defaults_with_defaults_file(self) -> None:
+        installer = _read_installer()
+        verify = VERIFY_SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("--no-defaults", installer)
+        self.assertNotIn("--no-defaults", verify)
+        self.assertIn("mysql_client_with_defaults_file", installer)
 
     def test_mysql_root_exec_delegates_to_mysql_root_client(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_root_exec")
@@ -169,17 +173,13 @@ mysql_root_client -e "SELECT 1"
             joined = " ".join(lines)
             self.assertNotIn("-p", joined)
             self.assertIn("--defaults-file=", joined)
-            self.assertIn("--no-defaults", joined)
+            self.assertNotIn("--no-defaults", joined)
 
-    def test_verify_regression_mysql_uses_defaults_file_before_no_defaults(self) -> None:
+    def test_verify_regression_mysql_uses_defaults_file_only(self) -> None:
         text = VERIFY_SCRIPT.read_text(encoding="utf-8")
-        self.assertEqual(text.count('"--no-defaults"'), 2)
         self.assertEqual(text.count('f"--defaults-file={cnf_path}"'), 2)
+        self.assertNotIn("--no-defaults", text)
         self.assertNotIn("--defaults-extra-file=", text)
-        self.assertRegex(
-            text,
-            r'f"--defaults-file=\{cnf_path\}",\n        "--no-defaults",',
-        )
 
 
 if __name__ == "__main__":

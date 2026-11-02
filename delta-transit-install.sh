@@ -383,13 +383,12 @@ with open(cnf_path, "w", encoding="utf-8") as f:
 PY
 }
 
-# Run mysql using only the given option file (ignore ~/.my.cnf and other defaults).
+# Run mysql using only the given option file (--defaults-file alone; no ~/.my.cnf).
 mysql_client_with_defaults_file() {
     local cnf="$1"
     shift
     mysql \
         --defaults-file="${cnf}" \
-        --no-defaults \
         "$@"
 }
 
