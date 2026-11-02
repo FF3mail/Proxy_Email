@@ -357,14 +357,18 @@ mysql_root_can_use_socket() {
 mysql_write_client_option_file() {
     local cnf="$1"
     local user="$2"
+    local pass="$3"
     touch "$cnf"
     chmod 600 "$cnf"
-    python3 - "$cnf" "$user" "$3" <<'PY'
+    if ! MYSQL_CNF_PASS="$pass" python3 - "$cnf" "$user" <<'PY'
+import os
 import sys
 
 cnf_path = sys.argv[1]
 user = sys.argv[2]
-password = sys.argv[3]
+password = os.environ.pop("MYSQL_CNF_PASS", "")
+if "\0" in password or "\n" in password or "\r" in password:
+    sys.exit(2)
 
 
 def cnf_value(value: str) -> str:
@@ -381,6 +385,10 @@ with open(cnf_path, "w", encoding="utf-8") as f:
     f.write(f"user={cnf_value(user)}\n")
     f.write(f"password={cnf_value(password)}\n")
 PY
+    then
+        rm -f "$cnf"
+        fatal "MariaDB password rejected (must not contain newline or NUL)"
+    fi
 }
 
 # Run mysql using only the given option file (--defaults-file alone; no ~/.my.cnf).
