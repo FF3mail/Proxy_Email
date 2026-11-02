@@ -40,11 +40,11 @@ Before requesting review:
 
   Expected on current `master`: **171** tests run, **11** skipped (MySQL-dependent cases when no local test DB), **0** failures.
 
-- PHP panel static tests (when panel or panel contract docs change; PHP CLI required): run each `tests/panel_*_test.php` (**10** files on current `master`).
+- PHP panel static tests (when panel or panel contract docs change; PHP CLI required): portable subset is listed in `.github/workflows/ci.yml` job `php-tests` and documented in `tests/README.md` (not the full `tests/panel_*_test.php` set).
 
 ## Checks (CI)
 
-Every pull request and every push to `master` run the workflow `.github/workflows/ci.yml`: Python unit tests (`python-tests`), `php -l` on `web/` (`php-lint`), `shellcheck` on repository shell scripts (`shellcheck`), and SPEC structure validation (`spec-format`). The `php-tests` job runs a portable subset of `tests/panel_*_test.php` and is informational (`continue-on-error: true`). See `tests/README.md` for environment-coupled tests.
+Every pull request and every push to `master` run the workflow `.github/workflows/ci.yml`: Python unit tests (`python-tests`), `php -l` on `web/` (`php-lint`), `shellcheck` on repository shell scripts (`shellcheck`), SPEC structure validation (`spec-format`), and the portable panel PHP harness subset (`php-tests`). All five jobs are blocking. See `tests/README.md` for environment-coupled tests outside CI.
 
 ## Repository hygiene rules
 

@@ -1554,4 +1554,4 @@
 
 | Требование | Код / конфигурация | Тест / проверка |
 |---|---|---|
-| **NFR-20** | `.github/workflows/ci.yml` (задачи `python-tests`, `php-lint`, `shellcheck`, `spec-format`; задача `php-tests` — информационная) | `python3 -m unittest discover -s tests -p "test_*.py"`; `find web -name '*.php' \| xargs php -l`; `shellcheck` для скриптов установки и `scripts/`; `python3 scripts/check_spec_format.py`; сценарий ACC-118 |
+| **NFR-20** | `.github/workflows/ci.yml` (задачи `python-tests`, `php-lint`, `shellcheck`, `spec-format`, `php-tests`) | `python3 -m unittest discover -s tests -p "test_*.py"`; `find web -name '*.php' \| xargs php -l`; `shellcheck` для скриптов установки и `scripts/`; `python3 scripts/check_spec_format.py`; portable `tests/panel_*_test.php` (см. job `php-tests` в CI); сценарий ACC-118 |

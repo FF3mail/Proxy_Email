@@ -29,13 +29,11 @@ Default web root is `web/` in the repository (`tests/panel_bootstrap.php` / `PAN
 export PANEL_WEB_ROOT=/var/www/mail-proxy
 ```
 
-### Portable from a clean clone (no MySQL)
+### Portable from a clean clone (CI job `php-tests`, blocking)
 
-Examples: `panel_login_lockout_test.php`, `panel_operator_password_test.php`, `panel_referent_activation_test.php`, `panel_modal_dirty_test.php`, static/layout tests using `dirname(__DIR__)` only.
+The exact file list is in `.github/workflows/ci.yml` (17 `tests/panel_*_test.php` files). They run in CI with `php-cli` and `php-sqlite3` only.
 
-```bash
-php tests/panel_login_lockout_test.php
-```
+Examples:
 
 ### Requires live MySQL / installed panel
 
