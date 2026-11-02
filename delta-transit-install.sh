@@ -383,9 +383,19 @@ with open(cnf_path, "w", encoding="utf-8") as f:
 PY
 }
 
+# Run mysql using only the given option file (ignore ~/.my.cnf and other defaults).
+mysql_client_with_defaults_file() {
+    local cnf="$1"
+    shift
+    mysql \
+        --defaults-file="${cnf}" \
+        --no-defaults \
+        "$@"
+}
+
 # Root mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_root_client() {
-    local cnf
+    local cnf rc
     if mysql_root_can_use_socket
     then
         mysql -u root "$@"
@@ -394,10 +404,10 @@ mysql_root_client() {
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
     mysql_write_client_option_file "$cnf" root "$MYSQL_ROOT_PASSWORD"
-    mysql \
-        --no-defaults \
-        --defaults-extra-file="${cnf}" \
-        "$@"
+    mysql_client_with_defaults_file "${cnf}" "$@"
+    rc=$?
+    rm -f "$cnf"
+    return "$rc"
 }
 
 mysql_root_exec() {
@@ -415,7 +425,10 @@ ask_mysql_root_password() {
         abort_preflight_stdin_eof
     fi
     echo
-    mysql_root_client -e "SELECT 1" >/dev/null
+    if ! mysql_root_client -e "SELECT 1" >/dev/null
+    then
+        fatal "MariaDB root password validation failed"
+    fi
 }
 
 # Panel master account (PROMPT 24). Username + password are interactive only;
@@ -496,7 +509,10 @@ ensure_panel_login_attempts_table() {
     local migration_file="./migrations/007_panel_login_attempts.sql"
     require_file "$migration_file"
     log_info "Ensuring panel_login_attempts table exists (migration 007, idempotent)"
-    mysql_root_client < "$migration_file"
+    if ! mysql_root_client < "$migration_file"
+    then
+        fatal "panel_login_attempts migration failed (see mysql/mariadb errors above)"
+    fi
     log_ok "panel_login_attempts migration applied (CREATE TABLE IF NOT EXISTS only)"
 }
 
@@ -505,7 +521,10 @@ ensure_panel_admins_must_change_password_column() {
     local migration_file="./migrations/008_panel_admins_must_change_password.sql"
     require_file "$migration_file"
     log_info "Ensuring panel_admins.must_change_password column exists (migration 008, idempotent)"
-    mysql_root_client "${DB_NAME}" < "$migration_file"
+    if ! mysql_root_client "${DB_NAME}" < "$migration_file"
+    then
+        fatal "panel_admins.must_change_password migration failed (see mysql/mariadb errors above)"
+    fi
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }
 
@@ -965,7 +984,10 @@ import_schema() {
         return 0
     fi
     log_info "Importing schema.sql"
-    mysql_root_client "${DB_NAME}" < ./schema.sql
+    if ! mysql_root_client "${DB_NAME}" < ./schema.sql
+    then
+        fatal "schema.sql import failed (see mysql/mariadb errors above)"
+    fi
 }
 
 write_db_config() {
@@ -1102,16 +1124,15 @@ resolve_db_pass() {
 
 # mail_proxy mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_mail_proxy_client() {
-    local cnf db_pass
+    local cnf db_pass rc
     db_pass="$(resolve_db_pass)"
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
     mysql_write_client_option_file "$cnf" "${DB_USER}" "$db_pass"
-    mysql \
-        --no-defaults \
-        --defaults-extra-file="${cnf}" \
-        "${DB_NAME}" \
-        "$@"
+    mysql_client_with_defaults_file "${cnf}" "${DB_NAME}" "$@"
+    rc=$?
+    rm -f "$cnf"
+    return "$rc"
 }
 
 validate_db_connectivity() {

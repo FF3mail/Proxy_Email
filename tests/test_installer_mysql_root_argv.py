@@ -45,10 +45,19 @@ class InstallerMysqlRootArgvTests(unittest.TestCase):
 
     def test_mysql_root_client_uses_option_file_not_p_flag(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_root_client")
-        self.assertIn("--no-defaults", body)
-        self.assertIn("--defaults-extra-file=", body)
+        self.assertIn("mysql_client_with_defaults_file", body)
+        self.assertIn('rm -f "$cnf"', body)
         self.assertIn("mysql_write_client_option_file", body)
         self.assertNotIn("-p", body)
+
+    def test_mysql_client_with_defaults_file_order(self) -> None:
+        body = _named_function_body(_read_installer(), "mysql_client_with_defaults_file")
+        defaults_idx = body.find("--defaults-file=")
+        no_defaults_idx = body.find("--no-defaults")
+        self.assertNotEqual(defaults_idx, -1)
+        self.assertNotEqual(no_defaults_idx, -1)
+        self.assertLess(defaults_idx, no_defaults_idx)
+        self.assertNotIn("--defaults-extra-file=", body)
 
     def test_mysql_root_exec_delegates_to_mysql_root_client(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_root_exec")
@@ -58,7 +67,20 @@ class InstallerMysqlRootArgvTests(unittest.TestCase):
     def test_ask_mysql_root_password_validates_via_mysql_root_client(self) -> None:
         body = _named_function_body(_read_installer(), "ask_mysql_root_password")
         self.assertIn("mysql_root_client", body)
+        self.assertIn("if ! mysql_root_client", body)
+        self.assertIn("fatal", body)
         self.assertNotIn("-p", body)
+
+    def test_migration_helpers_abort_on_mysql_failure(self) -> None:
+        text = _read_installer()
+        for func in (
+            "ensure_panel_login_attempts_table",
+            "ensure_panel_admins_must_change_password_column",
+            "import_schema",
+        ):
+            body = _named_function_body(text, func)
+            self.assertIn("if ! mysql_root_client", body)
+            self.assertIn("fatal", body)
 
     def test_cnf_writer_preserves_dollar_sign_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,6 +101,40 @@ mysql_write_client_option_file "$cnf" root "$1"
             text = cnf.read_text(encoding="utf-8")
             self.assertIn("pa$HOMEword!", text)
             self.assertIn("password=", text)
+
+    def test_mysql_root_client_removes_cnf_after_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            argv_log = tmp_path / "argv.log"
+            cnf_seen = tmp_path / "cnf_seen"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                "for a in \"$@\"; do\n"
+                "  case \"$a\" in --defaults-file=*) echo \"${a#--defaults-file=}\" > "
+                f"\"{cnf_seen}\";; esac\n"
+                "done\n"
+                f'printf "%s\\n" "$@" >> "{argv_log}"\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tmp}:{os.environ.get('PATH', '')}"}
+            script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+MYSQL_ROOT_PASSWORD="$1"
+mysql_root_can_use_socket() {{ return 1; }}
+mysql_root_client -e "SELECT 1"
+test ! -f "$(cat {cnf_seen})"
+"""
+            subprocess.run(
+                ["bash", "-c", script, "bash", "secret"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
     def test_mysql_root_client_argv_shim(self) -> None:
         """Fake mysql in PATH: root client must not receive -p on argv."""
@@ -112,13 +168,18 @@ mysql_root_client -e "SELECT 1"
             self.assertTrue(lines, "shim mysql was not invoked")
             joined = " ".join(lines)
             self.assertNotIn("-p", joined)
+            self.assertIn("--defaults-file=", joined)
             self.assertIn("--no-defaults", joined)
-            self.assertIn("--defaults-extra-file=", joined)
 
-    def test_verify_regression_mysql_uses_no_defaults(self) -> None:
+    def test_verify_regression_mysql_uses_defaults_file_before_no_defaults(self) -> None:
         text = VERIFY_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(text.count('"--no-defaults"'), 2)
-        self.assertEqual(text.count("--defaults-extra-file="), 2)
+        self.assertEqual(text.count('f"--defaults-file={cnf_path}"'), 2)
+        self.assertNotIn("--defaults-extra-file=", text)
+        self.assertRegex(
+            text,
+            r'f"--defaults-file=\{cnf_path\}",\n        "--no-defaults",',
+        )
 
 
 if __name__ == "__main__":
