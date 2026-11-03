@@ -70,7 +70,7 @@ function handleLoginSubmit(): void
         redirectTo('login');
     }
 
-    $username = trim((string)($_POST['username'] ?? ''));
+    $username = panelLoginNormalizeLogin(trim((string)($_POST['username'] ?? '')));
     $password = (string)($_POST['password'] ?? '');
     $ip = getClientIp();
 
@@ -94,7 +94,12 @@ function handleLoginSubmit(): void
 
     try {
         if (!panelLoginThrottleAllow($username, $ip)) {
-            panelLoginThrottleRegisterBlocked($username, $ip);
+            if (!panelLoginThrottleRegisterBlocked($username, $ip)) {
+                writeLog("Panel login rejected ip={$ip} reason=failure_record");
+                setFlash('error', __('auth.login_unavailable'));
+                panelLoginThrottleEnd($username, $ip);
+                redirectTo('login');
+            }
             writeLog("Panel login failed for user='{$username}' ip={$ip} reason=throttled");
             setFlash('error', __('auth.login_locked'));
             panelLoginThrottleEnd($username, $ip);
@@ -109,14 +114,24 @@ function handleLoginSubmit(): void
         $password = '';
 
         if (!$ok) {
-            panelLoginThrottleRegisterFailure($username, $ip);
+            if (!panelLoginThrottleRegisterFailure($username, $ip)) {
+                writeLog("Panel login rejected ip={$ip} reason=failure_record");
+                setFlash('error', __('auth.login_unavailable'));
+                panelLoginThrottleEnd($username, $ip);
+                redirectTo('login');
+            }
             writeLog("Panel login failed for user='{$username}' ip={$ip}");
             setFlash('error', __('auth.invalid_credentials'));
             panelLoginThrottleEnd($username, $ip);
             redirectTo('login');
         }
 
-        panelLoginThrottleClear($username, $ip);
+        if (!panelLoginThrottleClear($username, $ip)) {
+            writeLog("Panel login rejected ip={$ip} reason=failure_record");
+            setFlash('error', __('auth.login_unavailable'));
+            panelLoginThrottleEnd($username, $ip);
+            redirectTo('login');
+        }
         panelLoginThrottleEnd($username, $ip);
         establishPanelSession($row);
         writeLog("Panel login success for user='{$username}' role={$row['role']} ip={$ip}");

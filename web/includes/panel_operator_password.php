@@ -163,6 +163,8 @@ function handlePasswordChangeSubmit(): void
         redirectTo('password_change');
     }
 
+    $user = panelLoginNormalizeLogin($user);
+
     if (!panelLoginThrottleBegin($user, $ip)) {
         writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=throttle_lock");
         setFlash('error', __('auth.login_unavailable'));
@@ -171,7 +173,12 @@ function handlePasswordChangeSubmit(): void
 
     try {
         if (!panelLoginThrottleAllow($user, $ip)) {
-            panelLoginThrottleRegisterBlocked($user, $ip);
+            if (!panelLoginThrottleRegisterBlocked($user, $ip)) {
+                writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=failure_record");
+                setFlash('error', __('auth.login_unavailable'));
+                panelLoginThrottleEnd($user, $ip);
+                redirectTo('password_change');
+            }
             writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=throttled");
             setFlash('error', __('auth.login_locked'));
             panelLoginThrottleEnd($user, $ip);
@@ -181,14 +188,24 @@ function handlePasswordChangeSubmit(): void
         if (!password_verify($current, (string) $row['password_hash'])) {
             $current = '';
             $new = '';
-            panelLoginThrottleRegisterFailure($user, $ip);
+            if (!panelLoginThrottleRegisterFailure($user, $ip)) {
+                writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=failure_record");
+                setFlash('error', __('auth.login_unavailable'));
+                panelLoginThrottleEnd($user, $ip);
+                redirectTo('password_change');
+            }
             writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=bad_current");
             setFlash('error', __('password.bad_current'));
             panelLoginThrottleEnd($user, $ip);
             redirectTo('password_change');
         }
 
-        panelLoginThrottleClear($user, $ip);
+        if (!panelLoginThrottleClear($user, $ip)) {
+            writeLog("Panel password_change rejected for user='{$user}' ip={$ip} reason=failure_record");
+            setFlash('error', __('auth.login_unavailable'));
+            panelLoginThrottleEnd($user, $ip);
+            redirectTo('password_change');
+        }
     } finally {
         panelLoginThrottleEnd($user, $ip);
     }
