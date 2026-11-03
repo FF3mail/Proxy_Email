@@ -126,6 +126,7 @@ REQUIRED_FILES=(
 
 declare -a TMP_FILES=()
 declare -A PHASE_STATUS
+_CLEANUP_DONE=0
 
 MYSQL_ROOT_PASSWORD=""
 PARAM_DB_PASS=""
@@ -161,6 +162,11 @@ register_tmpfile() {
 }
 
 cleanup() {
+    if [[ "${_CLEANUP_DONE}" -eq 1 ]]
+    then
+        return 0
+    fi
+    _CLEANUP_DONE=1
     local f
     for f in "${TMP_FILES[@]}"
     do
@@ -226,8 +232,8 @@ on_error() {
 
 install_traps() {
     trap cleanup EXIT
-    trap cleanup INT
-    trap cleanup TERM
+    trap 'cleanup; exit 130' INT
+    trap 'cleanup; exit 143' TERM
     trap 'on_error $LINENO' ERR
 }
 
@@ -374,12 +380,8 @@ if "\0" in password or "\n" in password or "\r" in password:
 
 
 def cnf_value(value: str) -> str:
-    import re
-
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 with open(cnf_path, "w", encoding="utf-8") as f:
@@ -405,6 +407,7 @@ mysql_client_with_defaults_file() {
 # Root mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_root_client() {
     local cnf rc
+    trap - RETURN
     if [[ -z "${MYSQL_ROOT_PASSWORD}" ]] && mysql_root_can_use_socket
     then
         mysql -u root "$@"
@@ -412,11 +415,12 @@ mysql_root_client() {
     fi
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
-    trap "rm -f '$cnf'" RETURN
+    trap "rm -f $(printf '%q' "$cnf")" RETURN
     mysql_write_client_option_file "$cnf" root "$MYSQL_ROOT_PASSWORD"
     mysql_client_with_defaults_file "${cnf}" "$@"
     rc=$?
     rm -f "$cnf"
+    trap - RETURN
     return "$rc"
 }
 
@@ -1136,14 +1140,16 @@ resolve_db_pass() {
 # mail_proxy mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_mail_proxy_client() {
     local cnf db_pass rc
+    trap - RETURN
     db_pass="$(resolve_db_pass)"
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
-    trap "rm -f '$cnf'" RETURN
+    trap "rm -f $(printf '%q' "$cnf")" RETURN
     mysql_write_client_option_file "$cnf" "${DB_USER}" "$db_pass"
     mysql_client_with_defaults_file "${cnf}" "${DB_NAME}" "$@"
     rc=$?
     rm -f "$cnf"
+    trap - RETURN
     return "$rc"
 }
 

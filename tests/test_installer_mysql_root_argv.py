@@ -344,8 +344,91 @@ import_schema
     def test_install_traps_cleans_up_on_int_and_term(self) -> None:
         body = _named_function_body(_read_installer(), "install_traps")
         self.assertIn("trap cleanup EXIT", body)
-        self.assertIn("trap cleanup INT", body)
-        self.assertIn("trap cleanup TERM", body)
+        self.assertIn("trap 'cleanup; exit 130' INT", body)
+        self.assertIn("trap 'cleanup; exit 143' TERM", body)
+
+    def test_cleanup_is_idempotent_and_removes_registered_temps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            f1 = tmp_path / "one"
+            f2 = tmp_path / "two"
+            f1.write_text("x", encoding="utf-8")
+            f2.write_text("y", encoding="utf-8")
+            script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+TMP_FILES=()
+_CLEANUP_DONE=0
+register_tmpfile "{f1}"
+register_tmpfile "{f2}"
+cleanup
+cleanup
+test ! -f "{f1}"
+test ! -f "{f2}"
+"""
+            subprocess.run(
+                ["bash", "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+    def test_install_traps_int_and_term_exit_codes(self) -> None:
+        for sig, code in (("INT", 130), ("TERM", 143)):
+            with self.subTest(signal=sig, code=code):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    marker = tmp_path / "tmpfile"
+                    marker.write_text("keep", encoding="utf-8")
+                    script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+TMP_FILES=()
+_CLEANUP_DONE=0
+register_tmpfile "{marker}"
+install_traps
+kill -s {sig} $$
+"""
+                    proc = subprocess.run(
+                        ["bash", "-c", script],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(proc.returncode, code)
+                    self.assertFalse(marker.exists())
+
+    def test_cnf_writer_always_double_quotes_values(self) -> None:
+        for password in ("plain", "sp ace", 'quote"double'):
+            with self.subTest(password=password):
+                with tempfile.TemporaryDirectory() as tmp:
+                    cnf = Path(tmp) / "client.cnf"
+                    script = f"""
+set -euo pipefail
+source "{INSTALLER}"
+mysql_write_client_option_file "{cnf}" "roundtrip_user" "$1"
+"""
+                    subprocess.run(
+                        ["bash", "-c", script, "bash", password],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    text = cnf.read_text(encoding="utf-8")
+                    self.assertIn('user="roundtrip_user"', text)
+                    self.assertRegex(text, r'(?m)^password=".*"$')
+
+    def test_verify_regression_cnf_writer_always_double_quotes(self) -> None:
+        text = VERIFY_SCRIPT.read_text(encoding="utf-8")
+        blocks = re.findall(
+            r"def _cnf_value\(value: str\) -> str:\n(.*?)\n\n",
+            text,
+            re.S,
+        )
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertIn('return f\'"{escaped}"\'', block)
+            self.assertNotIn("if re.search", block)
 
     def test_migrate_panel_auth_installs_traps_before_mysql_helpers(self) -> None:
         body = _named_function_body(_read_installer(), "migrate_panel_auth")
@@ -354,26 +437,34 @@ import_schema
 
     def test_mysql_root_client_return_trap_for_temp_cnf(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_root_client")
-        self.assertIn('trap "rm -f \'$cnf\'" RETURN', body)
+        self.assertIn("trap - RETURN", body)
+        self.assertRegex(body, r'trap "rm -f \$\(printf \'%q\' "\$cnf"\)" RETURN')
 
     def test_mysql_mail_proxy_client_return_trap_for_temp_cnf(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_mail_proxy_client")
-        self.assertIn('trap "rm -f \'$cnf\'" RETURN', body)
+        self.assertIn("trap - RETURN", body)
+        self.assertRegex(body, r'trap "rm -f \$\(printf \'%q\' "\$cnf"\)" RETURN')
 
     def test_installer_and_verify_never_mutate_root_my_cnf(self) -> None:
         """Issue #145 anomaly: operator /root/.my.cnf must never be touched by repo scripts."""
-        forbidden = (
-            re.compile(r"/root/\.my\.cnf"),
-            re.compile(r'[~"]/\.my\.cnf'),
+        mutate_line = re.compile(
+            r'(?i)(?:\brm\s+|\bmv\s+|\bcp\s+|\btruncate\b|\btouch\s+|\brename\b|>>|>)'
+            r"[^#\n]*\.my\.cnf"
         )
-        mutators = ("rm ", "mv ", "cp ", "truncate", ">>", ">", "touch ", "rename")
         for path in (INSTALLER, VERIFY_SCRIPT):
             text = path.read_text(encoding="utf-8")
             for line_no, line in enumerate(text.splitlines(), start=1):
-                if "/root/.my.cnf" not in line and ".my.cnf" not in line:
+                if ".my.cnf" not in line:
                     continue
-                if any(op in line for op in mutators):
+                if mutate_line.search(line):
                     self.fail(f"{path.name}:{line_no} may mutate .my.cnf: {line.strip()}")
+                if "/root/.my.cnf" in line and re.search(
+                    r'(?i)(?:\brm\s+|\bmv\s+|\bcp\s+|\btruncate\b|\btouch\s+|\brename\b|>>|>)',
+                    line,
+                ):
+                    self.fail(
+                        f"{path.name}:{line_no} may mutate /root/.my.cnf: {line.strip()}"
+                    )
 
 
 if __name__ == "__main__":

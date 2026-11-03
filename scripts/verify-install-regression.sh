@@ -176,10 +176,8 @@ port = cfg.get("db", "db_port", fallback="3306")
 
 
 def _cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
@@ -241,10 +239,8 @@ port = cfg.get("db", "db_port", fallback="3306")
 
 
 def _cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
