@@ -126,6 +126,7 @@ REQUIRED_FILES=(
 
 declare -a TMP_FILES=()
 declare -A PHASE_STATUS
+_CLEANUP_DONE=0
 
 MYSQL_ROOT_PASSWORD=""
 PARAM_DB_PASS=""
@@ -161,6 +162,11 @@ register_tmpfile() {
 }
 
 cleanup() {
+    if [[ "${_CLEANUP_DONE}" -eq 1 ]]
+    then
+        return 0
+    fi
+    _CLEANUP_DONE=1
     local f
     for f in "${TMP_FILES[@]}"
     do
@@ -226,6 +232,8 @@ on_error() {
 
 install_traps() {
     trap cleanup EXIT
+    trap 'cleanup; exit 130' INT
+    trap 'cleanup; exit 143' TERM
     trap 'on_error $LINENO' ERR
 }
 
@@ -350,18 +358,79 @@ ask_pip_mirror() {
 # MariaDB auth
 # -----------------------------------------------------------------------------
 
+mysql_root_can_use_socket() {
+    mysql -u root -e "SELECT 1" >/dev/null 2>&1
+}
+
+mysql_write_client_option_file() {
+    local cnf="$1"
+    local user="$2"
+    local pass="$3"
+    touch "$cnf"
+    chmod 600 "$cnf"
+    if ! MYSQL_CNF_PASS="$pass" python3 - "$cnf" "$user" <<'PY'
+import os
+import sys
+
+cnf_path = sys.argv[1]
+user = sys.argv[2]
+password = os.environ.pop("MYSQL_CNF_PASS", "")
+if "\0" in password or "\n" in password or "\r" in password:
+    sys.exit(2)
+
+
+def cnf_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+with open(cnf_path, "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cnf_value(user)}\n")
+    f.write(f"password={cnf_value(password)}\n")
+PY
+    then
+        rm -f "$cnf"
+        fatal "MariaDB password rejected (must not contain newline or NUL)"
+    fi
+}
+
+# Run mysql using only the given option file (--defaults-file alone; no ~/.my.cnf).
+mysql_client_with_defaults_file() {
+    local cnf="$1"
+    shift
+    mysql \
+        --defaults-file="${cnf}" \
+        "$@"
+}
+
+# Root mysql CLI without -p on argv (password in chmod-600 option file only).
+mysql_root_client() {
+    local cnf rc
+    trap - RETURN
+    if [[ -z "${MYSQL_ROOT_PASSWORD}" ]] && mysql_root_can_use_socket
+    then
+        mysql -u root "$@"
+        return $?
+    fi
+    cnf="$(mktemp)"
+    register_tmpfile "$cnf"
+    trap "rm -f $(printf '%q' "$cnf")" RETURN
+    mysql_write_client_option_file "$cnf" root "$MYSQL_ROOT_PASSWORD"
+    mysql_client_with_defaults_file "${cnf}" "$@"
+    rc=$?
+    rm -f "$cnf"
+    trap - RETURN
+    return "$rc"
+}
+
 mysql_root_exec() {
     local sql="$1"
-    if mysql -u root -e "SELECT 1" >/dev/null 2>&1
-    then
-        mysql -u root -e "$sql"
-        return 0
-    fi
-    mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "$sql"
+    mysql_root_client -e "$sql"
 }
 
 ask_mysql_root_password() {
-    if mysql -u root -e "SELECT 1" >/dev/null 2>&1
+    if mysql_root_can_use_socket
     then
         return 0
     fi
@@ -370,7 +439,10 @@ ask_mysql_root_password() {
         abort_preflight_stdin_eof
     fi
     echo
-    mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null
+    if ! mysql_root_client -e "SELECT 1" >/dev/null
+    then
+        fatal "MariaDB root password validation failed"
+    fi
 }
 
 # Panel master account (PROMPT 24). Username + password are interactive only;
@@ -451,10 +523,10 @@ ensure_panel_login_attempts_table() {
     local migration_file="./migrations/007_panel_login_attempts.sql"
     require_file "$migration_file"
     log_info "Ensuring panel_login_attempts table exists (migration 007, idempotent)"
-    mysql \
-        -u root \
-        ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
-        < "$migration_file"
+    if ! mysql_root_client < "$migration_file"
+    then
+        fatal "panel_login_attempts migration failed (see mysql/mariadb errors above)"
+    fi
     log_ok "panel_login_attempts migration applied (CREATE TABLE IF NOT EXISTS only)"
 }
 
@@ -463,42 +535,9 @@ ensure_panel_admins_must_change_password_column() {
     local migration_file="./migrations/008_panel_admins_must_change_password.sql"
     require_file "$migration_file"
     log_info "Ensuring panel_admins.must_change_password column exists (migration 008, idempotent)"
-    if mysql -u root -e "SELECT 1" >/dev/null 2>&1
+    if ! mysql_root_client "${DB_NAME}" < "$migration_file"
     then
-        mysql -u root "${DB_NAME}" < "$migration_file"
-    else
-        local cnf
-        cnf="$(mktemp)"
-        register_tmpfile "$cnf"
-        chmod 600 "$cnf"
-        MYSQL_CLIENT_CNF_USER="root" \
-        MYSQL_CLIENT_CNF_PASS="${MYSQL_ROOT_PASSWORD}" \
-        python3 - "$cnf" <<'PY'
-import os
-import re
-import sys
-
-cnf_path = sys.argv[1]
-user = os.environ["MYSQL_CLIENT_CNF_USER"]
-password = os.environ["MYSQL_CLIENT_CNF_PASS"]
-
-
-def cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
-
-
-with open(cnf_path, "w", encoding="utf-8") as f:
-    f.write("[client]\n")
-    f.write(f"user={cnf_value(user)}\n")
-    f.write(f"password={cnf_value(password)}\n")
-PY
-        mysql \
-            --defaults-extra-file="${cnf}" \
-            "${DB_NAME}" \
-            < "$migration_file"
+        fatal "panel_admins.must_change_password migration failed (see mysql/mariadb errors above)"
     fi
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }
@@ -625,6 +664,7 @@ preflight_panel_master_readiness() {
 
 # Idempotent panel-auth migration: schema + master seed (PROMPT 25 upgrade path).
 migrate_panel_auth() {
+    install_traps
     log_info "Panel auth migration (idempotent)"
     ensure_panel_admins_table
     ensure_panel_login_attempts_table
@@ -959,11 +999,10 @@ import_schema() {
         return 0
     fi
     log_info "Importing schema.sql"
-    mysql \
-        -u root \
-        ${MYSQL_ROOT_PASSWORD:+-p${MYSQL_ROOT_PASSWORD}} \
-        "${DB_NAME}" \
-        < ./schema.sql
+    if ! mysql_root_client "${DB_NAME}" < ./schema.sql
+    then
+        fatal "schema.sql import failed (see mysql/mariadb errors above)"
+    fi
 }
 
 write_db_config() {
@@ -1100,38 +1139,18 @@ resolve_db_pass() {
 
 # mail_proxy mysql CLI without -p on argv (password in chmod-600 option file only).
 mysql_mail_proxy_client() {
-    local cnf
+    local cnf db_pass rc
+    trap - RETURN
+    db_pass="$(resolve_db_pass)"
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
-    chmod 600 "$cnf"
-    MYSQL_CLIENT_CNF_USER="${DB_USER}" \
-    MYSQL_CLIENT_CNF_PASS="$(resolve_db_pass)" \
-    python3 - "$cnf" <<'PY'
-import os
-import re
-import sys
-
-cnf_path = sys.argv[1]
-user = os.environ["MYSQL_CLIENT_CNF_USER"]
-password = os.environ["MYSQL_CLIENT_CNF_PASS"]
-
-
-def cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
-
-
-with open(cnf_path, "w", encoding="utf-8") as f:
-    f.write("[client]\n")
-    f.write(f"user={cnf_value(user)}\n")
-    f.write(f"password={cnf_value(password)}\n")
-PY
-    mysql \
-        --defaults-extra-file="${cnf}" \
-        "${DB_NAME}" \
-        "$@"
+    trap "rm -f $(printf '%q' "$cnf")" RETURN
+    mysql_write_client_option_file "$cnf" "${DB_USER}" "$db_pass"
+    mysql_client_with_defaults_file "${cnf}" "${DB_NAME}" "$@"
+    rc=$?
+    rm -f "$cnf"
+    trap - RETURN
+    return "$rc"
 }
 
 validate_db_connectivity() {
@@ -3547,4 +3566,6 @@ main() {
     echo "SSL_KEY=${NGINX_SSL_KEY}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

@@ -52,14 +52,12 @@ class InstallerMigration008Tests(unittest.TestCase):
             body.find("seed_panel_master"),
         )
 
-    def test_008_applied_as_root_from_sql_file(self) -> None:
+    def test_008_applied_via_mysql_root_client(self) -> None:
         body = _ensure_008_body(_read_installer())
         self.assertIn("./migrations/008_panel_admins_must_change_password.sql", body)
-        self.assertIn("-u root", body)
-        self.assertIn("MYSQL_ROOT_PASSWORD", body)
+        self.assertIn("mysql_root_client", body)
         self.assertIn('"${DB_NAME}"', body)
         self.assertNotIn('-u "${DB_USER}"', body)
-        self.assertIn("--defaults-extra-file=", body)
         self.assertNotIn("-p${MYSQL_ROOT_PASSWORD}", body)
         self.assertNotIn("-p${", body)
 

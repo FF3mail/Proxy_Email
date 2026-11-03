@@ -176,10 +176,8 @@ port = cfg.get("db", "db_port", fallback="3306")
 
 
 def _cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
@@ -194,7 +192,7 @@ try:
         f.write(f"port={_cnf_value(port)}\n")
     cmd = [
         "mysql",
-        f"--defaults-extra-file={cnf_path}",
+        f"--defaults-file={cnf_path}",
         name,
         "-N",
         "-e",
@@ -241,10 +239,8 @@ port = cfg.get("db", "db_port", fallback="3306")
 
 
 def _cnf_value(value: str) -> str:
-    if re.search(r'[\s#"\\]', value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
@@ -259,7 +255,7 @@ try:
         f.write(f"port={_cnf_value(port)}\n")
     cmd = [
         "mysql",
-        f"--defaults-extra-file={cnf_path}",
+        f"--defaults-file={cnf_path}",
         name,
         "-N",
         "-e",

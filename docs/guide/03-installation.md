@@ -53,7 +53,7 @@ chmod +x delta-transit-install.sh configure_limits.sh
 Скрипт запросит:
 
 1. **Public URL** — HTTPS-адрес панели (не `https://mail-proxy.local`)
-2. **Пароль root MariaDB** — если ещё не задан
+2. **Пароль root MariaDB** — если `mysql -u root` без пароля (unix_socket) недоступен: скрытый запрос `MariaDB root password:`; проверка и все операции от root в фазе Database выполняются через временный файл параметров клиента (`chmod 600`, `mysql --defaults-file=…`), **без** `-p` в аргументах командной строки. Пароли с символами `$`, кавычками и обратным слэшем поддерживаются (значения `user` и `password` в файле всегда записываются в двойных кавычках через Python, не через небезопасное раскрытие в shell). Временные cnf удаляются после вызова и при прерывании установки (SIGINT/SIGTERM).
 3. **Зеркало pip** — Enter для стандартного PyPI
 4. **Учётная запись master панели** — если в БД ещё нет активного `panel_admins` с `role='master'`:
    - `Panel master username:` — имя оператора (до 100 символов)
@@ -157,6 +157,8 @@ chmod +x scripts/verify-install-regression.sh
 
 Ожидается вывод `[PASS]` по всем пунктам. При `[FAIL]` — см. [07-troubleshooting.md](07-troubleshooting.md).
 
+Проверки наличия `panel_login_attempts` и столбца `must_change_password` подключаются к MariaDB через **`mysql --defaults-file=<временный cnf>`** (учётные данные из `/etc/mail-proxy/db.conf`). Такой режим **не** подмешивает `/root/.my.cnf` оператора — переименовывать `.my.cnf` перед прогоном **не требуется**.
+
 ### Проверка панели
 
 Откройте в браузере с машины из локальной сети:
@@ -229,12 +231,18 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 | `panel_admins.must_change_password` (DAT-9 / SEC-11) | Файл `migrations/008_panel_admins_must_change_password.sql` применяется **от root MariaDB** в фазе Database к **`DB_NAME`** (idempotent, `ADD COLUMN IF NOT EXISTS`; в SQL нет `USE …`) |
 | Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007` безопасно |
 
-Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. Тогда либо выполните полный прогон установщика (фаза Database), либо вручную (имя БД — как в `/etc/mail-proxy/db.conf`, ключ `db_name`; по умолчанию установщик использует `DB_NAME=mail_proxy`):
+Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. **Предпочтительно:** повторный интерактивный прогон `./delta-transit-install.sh` (фаза Database применит `007`/`008` от root через тот же механизм `--defaults-file`, что и при установке).
+
+Ручной SQL — только если установщик запустить нельзя. Имя БД — как в `/etc/mail-proxy/db.conf`, ключ `db_name`. **Не** передавайте пароль root через `-p` в argv (виден в `ps`); используйте файл параметров клиента `0600`:
 
 ```bash
 DB_NAME="$(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('/etc/mail-proxy/db.conf'); print(c['db']['db_name'])")"
-mysql -u root -p "${DB_NAME}" < migrations/007_panel_login_attempts.sql
-mysql -u root -p "${DB_NAME}" < migrations/008_panel_admins_must_change_password.sql
+ROOT_CNF="$(mktemp)"
+chmod 600 "$ROOT_CNF"
+# Заполните [client] user=root и password=… (как в iRedMail/MariaDB), затем:
+mysql --defaults-file="$ROOT_CNF" < migrations/007_panel_login_attempts.sql
+mysql --defaults-file="$ROOT_CNF" "$DB_NAME" < migrations/008_panel_admins_must_change_password.sql
+rm -f "$ROOT_CNF"
 ```
 
 Учётная запись панели по DAT-20 **не обязана** иметь `CREATE TABLE` / `ALTER`; без таблицы `panel_login_attempts` вход **fail-closed** по SEC-10; без столбца `must_change_password` авторизационные запросы к `panel_admins` **fail-closed** (DAT-9). Резервный путь в PHP (`ensurePanelLoginAttemptsSchema()`, `ensurePanelAdminsMustChangePasswordColumn()`) пытается создать объект, если у пользователя БД есть право; иначе — сообщение в `web_admin.log` и отказ.

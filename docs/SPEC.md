@@ -1493,7 +1493,7 @@
 | DEV-39 | DAT-20 | Панель и демон работают под одной учётной записью БД с `ALL PRIVILEGES`. |
 | DEV-40 | DAT-19 | Таблицы `settings` и страницы «Настройки» нет; значений порогов N и M в системе нет. |
 | DEV-41 | LIM-3 | `configure_limits.sh` задаёт `imap_max_line_length` 65536, установщик — 262144. |
-| DEV-42 | INS-8 | Установщик передаёт пароль БД в аргументах командной строки (`mysql -p`); пароль виден в списке процессов. |
+| DEV-42 | INS-8 | Частично снято (#145): пароль **root** MariaDB в установщике и в `scripts/verify-install-regression.sh` не передаётся в аргументах `mysql`/`mariadb` (`mysql_root_client`, `mysql_root_exec`, `ask_mysql_root_password`, `ensure_panel_login_attempts_table`, `ensure_panel_admins_must_change_password_column`, `import_schema`). Остаётся: пароль учётной записи БД `mail_proxy` в аргументах (`-p`) в `ensure_panel_admins_table`, `panel_login_attempts_table_exists`, `panel_master_exists`, `panel_active_master_exists`, `try_detect_active_panel_master`, `seed_panel_master`, `schema_already_installed`, `validate_db_connectivity`, `audit_database_contents`; текст-пример для оператора `mysql -u mail_proxy -p` в `abort_panel_master_no_tty`; в `docs/guide/` — `03-installation.md` (253–254), `06-operations.md` (144), `07-troubleshooting.md` (155), `09-backup-restore.md` (112), `10-deployment-checklist.md` (185, 195). |
 | DEV-43 | INS-8 | При повторном запуске установщик меняет пароль учётной записи БД и перезаписывает файл параметров. |
 | DEV-44 | INS-2, INS-3, INS-4 | Два скрипта (`delta-transit-install.sh`, `configure_limits.sh`); режимов установки и выбора состава нет, есть только переменные окружения `DELTA_VALIDATION_ONLY` и `DELTA_VALIDATION_LOG_ONLY`. |
 | DEV-45 | INS-5, INS-6 | Установщик не делает резервную копию БД и конфигурации и не проверяет свободное место. |
@@ -1555,3 +1555,4 @@
 | Требование | Код / конфигурация | Тест / проверка |
 |---|---|---|
 | **NFR-20** | `.github/workflows/ci.yml` (задачи `python-tests`, `php-lint`, `shellcheck`, `spec-format`, `php-tests`) | `python3 -m unittest discover -s tests -p "test_*.py"`; `find web -name '*.php' \| xargs php -l`; `shellcheck` для скриптов установки и `scripts/`; `python3 scripts/check_spec_format.py`; portable `tests/panel_*_test.php` (см. job `php-tests` в CI); сценарий ACC-118 |
+| **INS-8** (пароль root MariaDB, часть #145) | `delta-transit-install.sh` (`mysql_root_client`, `mysql_root_exec`, `mysql_write_client_option_file`, `ask_mysql_root_password`, миграции 007/008, `import_schema`); `scripts/verify-install-regression.sh` | `tests/test_installer_mysql_root_operator_audit.py`; `tests/test_installer_mysql_root_argv.py`; `bash -n delta-transit-install.sh`; `bash -n scripts/verify-install-regression.sh` |

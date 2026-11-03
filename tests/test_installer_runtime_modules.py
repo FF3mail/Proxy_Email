@@ -15,6 +15,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "delta-transit-install.sh"
+_INSTALLER_ENTRY = 'if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then'
+
+
+def _installer_body_without_entrypoint(installer: str) -> str:
+    idx = installer.rfind(_INSTALLER_ENTRY)
+    if idx == -1:
+        raise AssertionError("installer entrypoint guard not found")
+    return installer[:idx]
 
 _ARRAY_RE = re.compile(
     r"(?m)^(?P<name>[A-Z_]+)=\(\n(?P<body>.*?)\n\)",
@@ -236,8 +244,7 @@ class InstallerRuntimeModuleListTests(unittest.TestCase):
 class StagedDaemonInstallTests(unittest.TestCase):
     def test_staged_install_resolves_local_imports_from_staged_directory(self) -> None:
         installer = _read_installer()
-        self.assertTrue(installer.rstrip().endswith('main "$@"'))
-        stripped = installer[: installer.rfind('main "$@"')]
+        stripped = _installer_body_without_entrypoint(installer)
         with tempfile.TemporaryDirectory(prefix="delta-issue-124-") as tmp:
             root = Path(tmp)
             dest = root / "usr" / "local" / "bin"
@@ -309,8 +316,7 @@ class StagedDaemonInstallTests(unittest.TestCase):
 
     def test_require_file_rejects_a_missing_runtime_module(self) -> None:
         installer = _read_installer()
-        self.assertTrue(installer.rstrip().endswith('main "$@"'))
-        stripped = installer[: installer.rfind('main "$@"')]
+        stripped = _installer_body_without_entrypoint(installer)
         runner = stripped + textwrap.dedent(
             """
             for module in "${DAEMON_RUNTIME_MODULES[@]}"
