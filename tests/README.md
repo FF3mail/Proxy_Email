@@ -31,7 +31,7 @@ export PANEL_WEB_ROOT=/var/www/mail-proxy
 
 ### Portable from a clean clone (CI job `php-tests`, blocking)
 
-The exact file list is in `.github/workflows/ci.yml` (17 `tests/panel_*_test.php` files). They run in CI with `php-cli` and `php-sqlite3` only.
+The exact file list is in `.github/workflows/ci.yml` (18 `tests/panel_*_test.php` files, including `panel_login_get_lock_test.php`). They run in CI with `php-cli` and `php-sqlite3` only.
 
 Examples:
 

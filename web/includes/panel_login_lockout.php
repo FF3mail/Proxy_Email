@@ -67,6 +67,25 @@ function panelLoginThrottleLockName(string $login, string $ip): string
     return 'pla_' . substr($digest, 0, 60);
 }
 
+/**
+ * MySQL GET_LOCK / RELEASE_LOCK query seam for unit tests only.
+ * Production: unset $GLOBALS['panel_login_mysql_lock_query_hook'].
+ *
+ * @return mixed fetchColumn() result for GET_LOCK / RELEASE_LOCK
+ */
+function panelLoginThrottleMysqlLockQuery(PDO $pdo, string $sql, array $params): mixed
+{
+    $hook = $GLOBALS['panel_login_mysql_lock_query_hook'] ?? null;
+    if (is_callable($hook)) {
+        return $hook($pdo, $sql, $params);
+    }
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+
+    return $stmt->fetchColumn();
+}
+
 function panelLoginThrottleBegin(string $login, string $ip): bool
 {
     if (!panelLoginAttemptsTableExists()) {
@@ -78,9 +97,11 @@ function panelLoginThrottleBegin(string $login, string $ip): bool
             return true;
         }
         $wait = (int) PANEL_LOGIN_THROTTLE_LOCK_WAIT_SECONDS;
-        $stmt = $pdo->prepare('SELECT GET_LOCK(?, ?)');
-        $stmt->execute([panelLoginThrottleLockName($login, $ip), $wait]);
-        $got = $stmt->fetchColumn();
+        $got = panelLoginThrottleMysqlLockQuery(
+            $pdo,
+            'SELECT GET_LOCK(?, ?)',
+            [panelLoginThrottleLockName($login, $ip), $wait]
+        );
         return $got !== false && (int) $got === 1;
     } catch (Throwable $e) {
         writeLog('Panel login throttle lock failed: ' . $e->getMessage());
@@ -95,8 +116,11 @@ function panelLoginThrottleEnd(string $login, string $ip): void
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
             return;
         }
-        $stmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
-        $stmt->execute([panelLoginThrottleLockName($login, $ip)]);
+        panelLoginThrottleMysqlLockQuery(
+            $pdo,
+            'SELECT RELEASE_LOCK(?)',
+            [panelLoginThrottleLockName($login, $ip)]
+        );
     } catch (Throwable $e) {
         writeLog('Panel login throttle unlock failed: ' . $e->getMessage());
     }
