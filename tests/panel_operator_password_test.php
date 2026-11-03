@@ -303,6 +303,33 @@ $adminId = pwInsertAdmin($pdo, 'admin1', 'StartPass1!', 'admin');
 $_SESSION['admin_id'] = $adminId;
 $_SESSION['admin_username_display'] = 'admin1';
 $_SESSION['admin_role_display'] = 'admin';
+$sessionAdminId = (int) $_SESSION['admin_id'];
+$pdo->exec(
+    'CREATE TRIGGER pw_insert_fail BEFORE INSERT ON panel_login_attempts
+     WHEN NEW.login = \'admin1\' BEGIN SELECT RAISE(ABORT, \'deny\'); END'
+);
+$dest = pwRunChange('WrongOld1!', 'SecretNew9!');
+assert_true($dest === 'password_change', 'INSERT fail stays on password form');
+assert_true(
+    ($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_unavailable',
+    'INSERT fail uses login_unavailable flash'
+);
+$failureRecordLogged = false;
+foreach ($GLOBALS['test_logs'] as $line) {
+    if (str_contains((string) $line, 'reason=failure_record')) {
+        $failureRecordLogged = true;
+        break;
+    }
+}
+assert_true($failureRecordLogged, 'INSERT fail logs reason=failure_record');
+assert_true((int) ($_SESSION['admin_id'] ?? 0) === $sessionAdminId, 'INSERT fail does not change session');
+$pdo->exec('DROP TRIGGER IF EXISTS pw_insert_fail');
+pwReset($pdo);
+
+$adminId = pwInsertAdmin($pdo, 'admin1', 'StartPass1!', 'admin');
+$_SESSION['admin_id'] = $adminId;
+$_SESSION['admin_username_display'] = 'admin1';
+$_SESSION['admin_role_display'] = 'admin';
 
 $dest = pwRunChange('StartPass1!', 'short');
 assert_true($dest === 'password_change', 'short new rejected');

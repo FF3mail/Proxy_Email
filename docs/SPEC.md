@@ -322,7 +322,7 @@
 
 **SEC-9** `[CODE]` Действия оператора пишутся в `/var/log/mail-proxy/web_admin.log`. Просмотры страниц не пишутся.
 
-**SEC-10** `[OP]` Защита от подбора пароля: счётчик неудачных входов хранится в БД по паре «логин + IP». После 5 неудач за 15 минут пара блокируется на 15 минут. Ограничение не привязано к сессии. `DEVIATION (DEV-23)`
+**SEC-10** `[OP]` Защита от подбора пароля: счётчик неудачных входов хранится в БД по паре «логин + IP». После 5 неудач за 15 минут пара блокируется на 15 минут. Ограничение не привязано к сессии. (D-107) `DEVIATION (DEV-23)`
 
 **SEC-11** `[OP]` Оператор сам меняет свой пароль, вводя текущий пароль. Если пароль утрачен, восстановление возможно только сбросом пароля мастером. После сброса оператор обязан сменить пароль при первом входе. Пароль оператора не короче 8 символов, в том числе при смене своего пароля и при сбросе мастером (D-105, INS-10). `DEVIATION (DEV-24)`
 
@@ -1350,7 +1350,7 @@
 - Известное расхождение: DEV-32.
 
 ## 13. Журнал решений, реестр расхождений, открытые пункты
-### 13.1 Журнал решений (владелец проекта, 2026-10-13; D-51 и далее — 2026-10-19; D-72 и далее — 2026-10-20; D-95 и далее — 2026-10-21; D-97 и далее — 2026-10-22; D-100 и далее — 2026-10-23; D-104 и далее — 2026-10-26; D-105 и далее — 2026-10-26)
+### 13.1 Журнал решений (владелец проекта, 2026-10-13; D-51 и далее — 2026-10-19; D-72 и далее — 2026-10-20; D-95 и далее — 2026-10-21; D-97 и далее — 2026-10-22; D-100 и далее — 2026-10-23; D-104 и далее — 2026-10-26; D-105 и далее — 2026-10-26; D-107 — 2026-11-03)
 
 | ID | Решение |
 |---|---|
@@ -1448,6 +1448,7 @@
 | D-104 | Сводное уведомление референту по входящим письмам (NTF-7) отправляется по окончании интервала 10 минут, отсчитываемого от первого накопленного по связи письма; все письма, накопленные за интервал, указываются в одном уведомлении; следующий интервал начинается с первого письма, пришедшего после отправки уведомления (D-62). Уточняет NTF-7. |
 | D-105 | Логин и пароль внешнего аккаунта хранятся как введены, без обрезки пробелов; панель ограничений на набор символов не накладывает; верность реквизитов проверяет только проверка подключения (VAL-2 в, SEC-5). Пароль оператора не короче 8 символов, в том числе при смене своего пароля и при сбросе мастером (INS-10, SEC-11). Закрывает P-6. |
 | D-106 | Панель не показывает оператору текст исключений базы данных, только общее сообщение; подробности пишутся в лог без секретов (NFR-13). Закрывает P-15. |
+| D-107 | Упрочнение SEC-10 (DAT-18): при ошибке INSERT в `panel_login_attempts` вход в панель и смена пароля оператором отклоняются (fail-closed): оператор видит общее сообщение, в `web_admin.log` пишется `reason=failure_record`, сессия не создаётся и не меняется. Имя advisory-блокировки MySQL (`GET_LOCK`/`RELEASE_LOCK`) — префикс `pla_` и 60 hex SHA-256 от канонического логина (NFKC, снятие диакритики `\p{Mn}`, нижний регистр по основным весам `utf8mb4_unicode_ci`), обрезанного до 100 символов UTF-8, затем NUL и IP; в таблице логин и счётчик неудач хранятся как введены (с обрезкой по DAT-18). Варианты логина, эквивалентные при collation, делят одну блокировку — ожидаемое поведение, а не дефект. |
 ### 13.2 Реестр расхождений кода с документом (по состоянию master 5af44ca)
 
 | ID | Требование | Что делает код сейчас |
@@ -1556,4 +1557,4 @@
 |---|---|---|
 | **NFR-20** | `.github/workflows/ci.yml` (задачи `python-tests`, `php-lint`, `shellcheck`, `spec-format`, `php-tests`) | `python3 -m unittest discover -s tests -p "test_*.py"`; `find web -name '*.php' \| xargs php -l`; `shellcheck` для скриптов установки и `scripts/`; `python3 scripts/check_spec_format.py`; portable `tests/panel_*_test.php` (см. job `php-tests` в CI); сценарий ACC-118 |
 | **INS-8** (пароль root MariaDB, часть #145) | `delta-transit-install.sh` (`mysql_root_client`, `mysql_root_exec`, `mysql_write_client_option_file`, `ask_mysql_root_password`, миграции 007/008, `import_schema`); `scripts/verify-install-regression.sh` | `tests/test_installer_mysql_root_operator_audit.py`; `tests/test_installer_mysql_root_argv.py`; `bash -n delta-transit-install.sh`; `bash -n scripts/verify-install-regression.sh` |
-| **SEC-10** | `web/includes/panel_login_lockout.php` (счётчик в `panel_login_attempts` по паре логин+IP, `panelLoginNormalizeLogin`, `GET_LOCK`/`RELEASE_LOCK`, запись `failure`/`success`/`blocked`, отказ при ошибке INSERT); `web/includes/panel_auth_ui.php` (`handleLoginSubmit`); `web/includes/panel_operator_password.php` (неудачная проверка текущего пароля); `web/includes/panel_migration.php` (`ensurePanelLoginAttemptsSchema`); `schema.sql`, `migrations/007_panel_login_attempts.sql` | `tests/panel_login_lockout_test.php`; `tests/panel_login_get_lock_test.php`; `tests/test_login_lockout.py`; сценарий ACC-15 |
+| **SEC-10** | `web/includes/panel_login_lockout.php` (счётчик в `panel_login_attempts` по паре логин+IP, `panelLoginNormalizeLogin`, `panelLoginCanonicalLoginForThrottleLock`, `GET_LOCK`/`RELEASE_LOCK`, запись `failure`/`success`/`blocked`, отказ при ошибке INSERT); `web/includes/panel_auth_ui.php` (`handleLoginSubmit`); `web/includes/panel_operator_password.php` (неудачная проверка текущего пароля); `web/includes/panel_migration.php` (`ensurePanelLoginAttemptsSchema`); `schema.sql`, `migrations/007_panel_login_attempts.sql` | `tests/panel_login_lockout_test.php`; `tests/panel_login_get_lock_test.php`; `tests/panel_login_lock_name_test.php`; `tests/test_login_lockout.py`; сценарий ACC-15 |

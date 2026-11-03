@@ -60,9 +60,77 @@ function panelLoginAttemptsTableExists(): bool
     }
 }
 
+/**
+ * Test seam: force mb_convert_kana fallback (no intl accent folding) when set true.
+ *
+ * @see panelLoginCanonicalLoginForThrottleLock
+ */
+function panelLoginIntlAvailableForLockCanonical(): bool
+{
+    if (!empty($GLOBALS['panel_login_lock_canonical_force_mb_fallback'])) {
+        return false;
+    }
+
+    return class_exists('Normalizer')
+        && defined('Normalizer::FORM_KC')
+        && defined('Normalizer::FORM_D');
+}
+
+function panelLoginTruncateForLockCanonical(string $login): string
+{
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($login, 'UTF-8') <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+            return $login;
+        }
+
+        return mb_substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH, 'UTF-8');
+    }
+
+    if (strlen($login) <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+        return $login;
+    }
+
+    return substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH);
+}
+
+/**
+ * Canonical login for GET_LOCK name only (approximates utf8mb4_unicode_ci primary weights).
+ * Stored login and SQL counter predicates use the raw normalized login unchanged.
+ */
+function panelLoginCanonicalLoginForThrottleLock(string $login): string
+{
+    if (panelLoginIntlAvailableForLockCanonical()) {
+        $normalized = Normalizer::normalize($login, Normalizer::FORM_KC);
+        if ($normalized !== false) {
+            $login = $normalized;
+        }
+        $decomposed = Normalizer::normalize($login, Normalizer::FORM_D);
+        if ($decomposed !== false) {
+            $stripped = preg_replace('/\p{Mn}/u', '', $decomposed);
+            if ($stripped !== null) {
+                $login = $stripped;
+            }
+        }
+        if (function_exists('mb_strtolower')) {
+            $login = mb_strtolower($login, 'UTF-8');
+        } else {
+            $login = strtolower($login);
+        }
+    } elseif (function_exists('mb_convert_kana') && function_exists('mb_strtolower')) {
+        $login = mb_strtolower(mb_convert_kana($login, 'a'), 'UTF-8');
+    } elseif (function_exists('mb_strtolower')) {
+        $login = mb_strtolower($login, 'UTF-8');
+    } else {
+        $login = strtolower($login);
+    }
+
+    return panelLoginTruncateForLockCanonical($login);
+}
+
 function panelLoginThrottleLockName(string $login, string $ip): string
 {
-    $digest = hash('sha256', $login . "\0" . $ip);
+    $canonicalLogin = panelLoginCanonicalLoginForThrottleLock($login);
+    $digest = hash('sha256', $canonicalLogin . "\0" . $ip);
 
     return 'pla_' . substr($digest, 0, 60);
 }
