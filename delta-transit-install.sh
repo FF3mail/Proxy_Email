@@ -226,6 +226,8 @@ on_error() {
 
 install_traps() {
     trap cleanup EXIT
+    trap cleanup INT
+    trap cleanup TERM
     trap 'on_error $LINENO' ERR
 }
 
@@ -410,6 +412,7 @@ mysql_root_client() {
     fi
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
+    trap "rm -f '$cnf'" RETURN
     mysql_write_client_option_file "$cnf" root "$MYSQL_ROOT_PASSWORD"
     mysql_client_with_defaults_file "${cnf}" "$@"
     rc=$?
@@ -657,6 +660,7 @@ preflight_panel_master_readiness() {
 
 # Idempotent panel-auth migration: schema + master seed (PROMPT 25 upgrade path).
 migrate_panel_auth() {
+    install_traps
     log_info "Panel auth migration (idempotent)"
     ensure_panel_admins_table
     ensure_panel_login_attempts_table
@@ -1135,6 +1139,7 @@ mysql_mail_proxy_client() {
     db_pass="$(resolve_db_pass)"
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
+    trap "rm -f '$cnf'" RETURN
     mysql_write_client_option_file "$cnf" "${DB_USER}" "$db_pass"
     mysql_client_with_defaults_file "${cnf}" "${DB_NAME}" "$@"
     rc=$?

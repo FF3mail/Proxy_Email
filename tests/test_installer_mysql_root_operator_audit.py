@@ -429,6 +429,66 @@ class OperatorAuditC(unittest.TestCase):
             for p in cnf_paths:
                 self.assertFalse(Path(p).exists(), f"cnf should be gone after SIGTERM: {p}")
 
+    def test_audit_c_defaults_file_removed_on_sigint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cnf_list = tmp_path / "cnfs.txt"
+            shim = tmp_path / "mysql"
+            shim.write_text(
+                "#!/usr/bin/env bash\n"
+                f'for a in "$@"; do case "$a" in --defaults-file=*) '
+                f'echo "${{a#--defaults-file=}}" >> "{cnf_list}";; esac; done\n'
+                "sleep 2\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
+            }
+            script = textwrap.dedent(
+                f"""
+                set +o histexpand
+            set -euo pipefail
+                source "{INSTALLER}"
+                install_traps
+                MYSQL_ROOT_PASSWORD="audit-c-int"
+                mysql_root_can_use_socket() {{ return 1; }}
+                mysql_root_client -e "SELECT 1"
+                """
+            )
+            proc = subprocess.Popen(
+                ["bash", "-c", script],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                for _ in range(50):
+                    if cnf_list.is_file() and cnf_list.read_text(encoding="utf-8").strip():
+                        break
+                    if proc.poll() is not None:
+                        break
+                    subprocess.run(["sleep", "0.1"], check=False)
+                proc.send_signal(signal.SIGINT)
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+            cnf_paths = [
+                p.strip()
+                for p in cnf_list.read_text(encoding="utf-8").splitlines()
+                if p.strip()
+            ]
+            self.assertTrue(cnf_paths)
+            for p in cnf_paths:
+                self.assertFalse(Path(p).exists(), f"cnf should be gone after SIGINT: {p}")
+
 
 class OperatorAuditD(unittest.TestCase):
     """Audit (d): newline/NUL rejected; stderr must not contain password."""

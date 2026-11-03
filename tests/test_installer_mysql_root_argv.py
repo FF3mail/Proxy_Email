@@ -341,6 +341,40 @@ import_schema
             self.assertIn("--defaults-file=", joined)
             self.assertNotIn("-p", joined)
 
+    def test_install_traps_cleans_up_on_int_and_term(self) -> None:
+        body = _named_function_body(_read_installer(), "install_traps")
+        self.assertIn("trap cleanup EXIT", body)
+        self.assertIn("trap cleanup INT", body)
+        self.assertIn("trap cleanup TERM", body)
+
+    def test_migrate_panel_auth_installs_traps_before_mysql_helpers(self) -> None:
+        body = _named_function_body(_read_installer(), "migrate_panel_auth")
+        self.assertIn("install_traps", body)
+        self.assertLess(body.find("install_traps"), body.find("ensure_panel_admins_table"))
+
+    def test_mysql_root_client_return_trap_for_temp_cnf(self) -> None:
+        body = _named_function_body(_read_installer(), "mysql_root_client")
+        self.assertIn('trap "rm -f \'$cnf\'" RETURN', body)
+
+    def test_mysql_mail_proxy_client_return_trap_for_temp_cnf(self) -> None:
+        body = _named_function_body(_read_installer(), "mysql_mail_proxy_client")
+        self.assertIn('trap "rm -f \'$cnf\'" RETURN', body)
+
+    def test_installer_and_verify_never_mutate_root_my_cnf(self) -> None:
+        """Issue #145 anomaly: operator /root/.my.cnf must never be touched by repo scripts."""
+        forbidden = (
+            re.compile(r"/root/\.my\.cnf"),
+            re.compile(r'[~"]/\.my\.cnf'),
+        )
+        mutators = ("rm ", "mv ", "cp ", "truncate", ">>", ">", "touch ", "rename")
+        for path in (INSTALLER, VERIFY_SCRIPT):
+            text = path.read_text(encoding="utf-8")
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if "/root/.my.cnf" not in line and ".my.cnf" not in line:
+                    continue
+                if any(op in line for op in mutators):
+                    self.fail(f"{path.name}:{line_no} may mutate .my.cnf: {line.strip()}")
+
 
 if __name__ == "__main__":
     unittest.main()
