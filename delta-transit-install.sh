@@ -2876,8 +2876,6 @@ server {
 
     location ~ \.php\$ {
 
-        limit_req zone=panel_login_submit burst=5 nodelay;
-
         include snippets/fastcgi-php.conf;
 
         fastcgi_pass ${fastcgi_pass_value};
@@ -2958,18 +2956,9 @@ install_nginx_delta_profile() {
 # =============================================================================
 # DELTA-Транзит
 # Увеличение допустимого размера загружаемых файлов
-# Ограничение частоты POST login_submit (SEC-10 / issue #142)
 # =============================================================================
 
 client_max_body_size 210M;
-
-map $arg_action$request_method $panel_login_submit_limit_key {
-    default "";
-    "login_submitPOST" $binary_remote_addr;
-}
-
-limit_req_zone $panel_login_submit_limit_key zone=panel_login_submit:10m rate=10r/m;
-limit_req_status 429;
 EOF
 
     chmod 0644 "$NGINX_INCLUDE_CONF"
@@ -3320,14 +3309,6 @@ validate_upload_limit() {
         || fatal "Validation failed: upload limit missing in virtual host"
 
     log_info "Upload limit configured"
-
-    grep -q 'limit_req_zone $panel_login_submit_limit_key zone=panel_login_submit:10m rate=10r/m;' \
-        "$NGINX_INCLUDE_CONF" \
-        || fatal "Validation failed: panel login_submit limit_req zone missing"
-
-    grep -q 'limit_req zone=panel_login_submit burst=5 nodelay;' \
-        "$NGINX_SITE_AVAILABLE" \
-        || fatal "Validation failed: panel login_submit limit_req missing in virtual host"
 
     grep -q 'fastcgi_param HTTP_X_REAL_IP' "$NGINX_SITE_AVAILABLE" \
         || fatal "Validation failed: HTTP_X_REAL_IP fastcgi param missing in virtual host"

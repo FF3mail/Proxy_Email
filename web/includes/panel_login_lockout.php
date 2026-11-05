@@ -376,7 +376,7 @@ function panelLoginBlockedRecentlyRecorded(PDO $pdo, string $login, string $ip, 
     $stmt = $pdo->prepare(
         'SELECT 1 FROM panel_login_attempts
          WHERE login = ? AND ip = ? AND result = ?
-           AND attempted_at >= ?
+           AND attempted_at > ?
          LIMIT 1'
     );
     $stmt->execute([$login, $ip, 'blocked', $after]);
