@@ -326,7 +326,7 @@
 
 **SEC-11** `[OP]` Оператор сам меняет свой пароль, вводя текущий пароль. Если пароль утрачен, восстановление возможно только сбросом пароля мастером. После сброса оператор обязан сменить пароль при первом входе. Пароль оператора не короче 8 символов, в том числе при смене своего пароля и при сбросе мастером (D-105, INS-10).
 
-**SEC-12** `[OP]` Для панели nginx отдаёт заголовки `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` и `Referrer-Policy: same-origin`. Заголовок `Strict-Transport-Security` включается настройкой и только при действующем сертификате.
+**SEC-12** `[OP]` Для панели nginx отдаёт заголовки `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` и `Referrer-Policy: same-origin`. Заголовок `Strict-Transport-Security` включается настройкой и только при действующем сертификате. `DEVIATION (DEV-25)`
 
 **SEC-13** `[OP]` Страница возврата OAuth подчиняется проверке по IP, как остальные страницы панели. `DEVIATION (DEV-26)`
 
@@ -1118,6 +1118,7 @@
 - Предусловия: пройден ACC-12.
 - Шаги: 1) открыть страницу входа, главную страницу после входа и карточку референта; 2) для администратора: вывести заголовки ответов этих страниц; 3) изменить имя референта и сохранить.
 - Ожидаемый результат: на каждой из этих страниц есть заголовки `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` и `Referrer-Policy: same-origin`; панель открывается и сохранение выполняется (SEC-12); включение заголовка `Strict-Transport-Security` вручную этим сценарием не проверяется (SEC-12).
+- Известное расхождение: DEV-25.
 
 **ACC-86** `[обязательный]` Пароль внешнего аккаунта зашифрован и не виден.
 
@@ -1471,9 +1472,9 @@
 | DEV-20 | REB-5 | В пересобранном исходящем письме тело содержит пустую текстовую часть `text/plain` UTF-8 (`MIMEText('', 'plain', 'utf-8')` в `_build_rebuilt_message`). |
 | DEV-21 | JRN-3 | Скрипт `scripts/purge_mail_passage_journal.py` есть в репозитории, но `delta-transit-install.sh` не создаёт задание cron или systemd timer; пример расписания указан только в комментарии к скрипту и в `docs/guide/`. |
 | DEV-22 | INB-6, INB-10, INB-11, STO-1…STO-5 | Хранилища отклонённых входящих писем нет; письма больше лимита после 3 пропусков получают `\Seen` и остаются в ящике; при частичном извлечении допустимые вложения доставляются, пропущенные пишутся в журнал, письмо получает `\Seen` и не удаляется; нестандартные письма удаляются из ящика без сохранения. |
-| DEV-23 | — | Номер не используется: расхождение снято (#137, #144, #141, #150, #153). |
+| DEV-23 | — | Номер не используется: расхождение снято (#137, #144, #150, #153). |
 | DEV-24 | — | Номер не используется: расхождение снято (#139). |
-| DEV-25 | — | Номер не используется: расхождение снято (#135). |
+| DEV-25 | SEC-12 | В шаблоне vhost панели три обязательных заголовка SEC-12 есть (#135); настраиваемый HSTS при действующем сертификате не реализован (нет директивы nginx и выбора оператора по INS-15). |
 | DEV-26 | SEC-13 | Страница `oauth_callback` пропускает проверку по IP (причина не установлена). |
 | DEV-27 | SEC-14 | Функция `writeLog()` (`web/includes/helpers.php`) не добавляет логин оператора и IP автоматически; часть записей `web_admin.log` их содержит (например, запись об успешном входе), часть не содержит (например, «Referent updated: ID 12»). |
 | DEV-28 | PNL-6 | Часть русских строк прописана прямо в PHP, а не в файлах языков `web/lang/ru.php` и `web/lang/en.php`. |
@@ -1555,6 +1556,5 @@
 | **NFR-20** | `.github/workflows/ci.yml` (задачи `python-tests`, `php-lint`, `shellcheck`, `spec-format`, `php-tests`) | `python3 -m unittest discover -s tests -p "test_*.py"`; `find web -name '*.php' \| xargs php -l`; `shellcheck` для скриптов установки и `scripts/`; `python3 scripts/check_spec_format.py`; portable `tests/panel_*_test.php` (см. job `php-tests` в CI); сценарий ACC-118 |
 | **INS-8** (пароль root MariaDB, часть #145) | `delta-transit-install.sh` (`mysql_root_client`, `mysql_root_exec`, `mysql_write_client_option_file`, `ask_mysql_root_password`, миграции 007/008, `import_schema`); `scripts/verify-install-regression.sh` | `tests/test_installer_mysql_root_operator_audit.py`; `tests/test_installer_mysql_root_argv.py`; `bash -n delta-transit-install.sh`; `bash -n scripts/verify-install-regression.sh` |
 | **SEC-10** | `web/includes/panel_login_lockout.php` (счётчик в `panel_login_attempts` по паре логин+IP, `panelLoginNormalizeLogin`, `panelLoginCanonicalLoginForThrottleLock`, `GET_LOCK`/`RELEASE_LOCK`, запись `failure`/`success`/`blocked`, сжатие записей `blocked` не чаще одной на пару за 60 с, отказ при ошибке INSERT); `web/includes/panel_auth_ui.php` (`handleLoginSubmit`); `web/includes/panel_operator_password.php` (неудачная проверка текущего пароля и fail-closed при ошибке INSERT на смене пароля); `web/includes/panel_migration.php` (`ensurePanelLoginAttemptsSchema`); `delta-transit-install.sh` (пакет `php-intl`, проверка intl для CLI и FPM, vhost: `fastcgi_param HTTP_X_REAL_IP` / `HTTP_X_FORWARDED_FOR` для `getClientIp()`); `web/includes/helpers.php` (`getClientIp()`); `schema.sql`, `migrations/007_panel_login_attempts.sql` | `tests/panel_login_lockout_test.php`; `tests/panel_login_blocked_coalesce_test.php`; `tests/panel_login_get_lock_test.php`; `tests/panel_login_lock_name_test.php`; `tests/panel_login_lock_order_test.php`; `tests/test_nginx_panel_client_ip.py`; `tests/test_installer_php_intl.py`; `tests/test_login_lockout.py`; сценарий ACC-15 |
-| **SEC-11** | `web/includes/panel_operator_password.php`; `web/includes/panel_auth_ui.php` (смена пароля, сброс мастером); `migrations/008_panel_admins_must_change_password.sql`; `delta-transit-install.sh` (`ensure_panel_admins_must_change_password_column`) | `tests/panel_operator_password_test.php`; `tests/test_panel_password_page_gate.py`; `tests/panel_standalone_password_gate_test.php`; сценарий ACC-17 |
-| **SEC-12** | `delta-transit-install.sh` (блок `add_header` в vhost панели, строки 2865–2867) | `tests/test_nginx_security_headers.py`; сценарий ACC-85 |
+| **SEC-11** | `web/includes/panel_operator_password.php`; `web/includes/panel_auth_ui.php` (смена пароля, сброс мастером); `migrations/008_panel_admins_must_change_password.sql`; `delta-transit-install.sh` (`ensure_panel_admins_must_change_password_column`) | `tests/panel_operator_password_test.php`; `tests/test_panel_password_page_gate.py`; `tests/panel_standalone_password_gate_test.py`; сценарий ACC-17 |
 | **INS-16** (модули демона, DEV-66) | `delta-transit-install.sh` (`DAEMON_RUNTIME_MODULES`, `REQUIRED_FILES`, копирование модулей при установке) | `tests/test_installer_runtime_modules.py` |
