@@ -269,6 +269,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("DROP TABLE", migration)
         installer = (ROOT / "delta-transit-install.sh").read_text(encoding="utf-8")
         self.assertIn("ensure_panel_login_attempts_table", installer)
+        self.assertIn("php-intl", installer)
         self.assertIn("./migrations/007_panel_login_attempts.sql", installer)
         lockout = (ROOT / "web/includes/panel_login_lockout.php").read_text(encoding="utf-8")
         self.assertIn("login path does not CREATE", lockout)

@@ -45,7 +45,7 @@ function lockNameReset(): void
 lockNameReset();
 
 $ip = '10.0.0.42';
-$variants = ['admin', 'ADMIN', 'Admin', 'admín', 'ａｄｍｉｎ'];
+$variants = ['admin', 'ADMIN', 'Admin', 'admín', 'ａｄｍｉｎ', 'Admín'];
 $expected = null;
 foreach ($variants as $variant) {
     $name = panelLoginThrottleLockName($variant, $ip);
@@ -94,6 +94,23 @@ $nameAccent = panelLoginThrottleLockName('admín', $ip);
 assert_true(
     $nameLower !== $nameAccent,
     'mb fallback: admín does not share lock name with admin (no accent folding)'
+);
+lockNameReset();
+
+$GLOBALS['panel_login_lock_canonical_force_mb_fallback'] = true;
+panelLoginCanonicalLoginForThrottleLock('admin');
+$intlLogs = array_filter(
+    $GLOBALS['test_logs'],
+    static fn (string $line): bool => str_contains($line, 'Normalizer unavailable (accent folding disabled)')
+);
+assert_true(count($intlLogs) === 1, 'missing intl logs once per process when canonical runs');
+panelLoginCanonicalLoginForThrottleLock('admin');
+assert_true(
+    count(array_filter(
+        $GLOBALS['test_logs'],
+        static fn (string $line): bool => str_contains($line, 'Normalizer unavailable (accent folding disabled)')
+    )) === 1,
+    'second canonical call does not duplicate intl missing log'
 );
 lockNameReset();
 

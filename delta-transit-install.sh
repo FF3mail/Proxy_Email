@@ -83,6 +83,7 @@ APT_PACKAGES=(
     curl
     php-cli
     php-fpm
+    php-intl
 )
 
 # -----------------------------------------------------------------------------
@@ -910,6 +911,7 @@ phase_packages() {
     log_info "Phase: Packages"
 
     ensure_packages
+    validate_php_intl_extensions
     verify_installed_binaries
     ensure_vmail_user_exists
     ensure_group "$GROUP_LOGS"
@@ -2144,6 +2146,31 @@ restart_php_fpm() {
     systemctl restart "$PHP_FPM_SERVICE"
 }
 
+validate_php_intl_extensions() {
+    if ! command -v php >/dev/null 2>&1
+    then
+        fatal "PHP CLI missing — install php-cli and php-intl before continuing"
+    fi
+
+    if ! php -m 2>/dev/null | grep -qx intl
+    then
+        fatal "PHP CLI intl extension missing — install package php-intl (Normalizer required for panel login throttle)"
+    fi
+
+    detect_php_fpm_environment || fatal "PHP-FPM not detected — cannot verify php-intl for FPM SAPI"
+
+    local fpm_php="php${PHP_FPM_VERSION}"
+    if ! command -v "$fpm_php" >/dev/null 2>&1
+    then
+        fatal "PHP binary ${fpm_php} not found — install php-intl for PHP ${PHP_FPM_VERSION}"
+    fi
+
+    if ! "$fpm_php" -m 2>/dev/null | grep -qx intl
+    then
+        fatal "PHP-FPM (${fpm_php}) intl extension missing — install php-intl before panel login throttle can run safely"
+    fi
+}
+
 verify_php_limit() {
     local file="$1" key="$2" expected="$3"
     grep -Eq "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*${expected}" "$file" \
@@ -2151,6 +2178,8 @@ verify_php_limit() {
 }
 
 verify_php_configuration() {
+    validate_php_intl_extensions
+
     local file
     while IFS= read -r file
     do
@@ -3349,6 +3378,7 @@ phase_validation() {
     verify_log_exists
     verify_database_login
     validate_panel_auth
+    validate_php_intl_extensions
     verify_no_change_me
     verify_no_placeholder_url
     verify_runtime_log

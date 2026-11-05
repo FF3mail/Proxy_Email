@@ -76,6 +76,16 @@ function panelLoginIntlAvailableForLockCanonical(): bool
         && defined('Normalizer::FORM_D');
 }
 
+function panelLoginLogIntlMissingOnce(): void
+{
+    static $logged = false;
+    if ($logged || panelLoginIntlAvailableForLockCanonical()) {
+        return;
+    }
+    $logged = true;
+    writeLog('Panel login throttle: php-intl Normalizer unavailable (accent folding disabled)');
+}
+
 function panelLoginTruncateForLockCanonical(string $login): string
 {
     if (function_exists('mb_strlen') && function_exists('mb_substr')) {
@@ -116,12 +126,15 @@ function panelLoginCanonicalLoginForThrottleLock(string $login): string
         } else {
             $login = strtolower($login);
         }
-    } elseif (function_exists('mb_convert_kana') && function_exists('mb_strtolower')) {
-        $login = mb_strtolower(mb_convert_kana($login, 'a'), 'UTF-8');
-    } elseif (function_exists('mb_strtolower')) {
-        $login = mb_strtolower($login, 'UTF-8');
     } else {
-        $login = strtolower($login);
+        panelLoginLogIntlMissingOnce();
+        if (function_exists('mb_convert_kana') && function_exists('mb_strtolower')) {
+            $login = mb_strtolower(mb_convert_kana($login, 'a'), 'UTF-8');
+        } elseif (function_exists('mb_strtolower')) {
+            $login = mb_strtolower($login, 'UTF-8');
+        } else {
+            $login = strtolower($login);
+        }
     }
 
     return panelLoginTruncateForLockCanonical($login);

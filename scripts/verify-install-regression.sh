@@ -14,6 +14,27 @@ fail() { echo "[FAIL] $*"; FAILURES=$((FAILURES + 1)); }
 
 echo "=== PROMPT 22.1 regression checks ==="
 
+if php -m 2>/dev/null | grep -qx intl; then
+    pass "PHP CLI intl extension loaded"
+else
+    fail "PHP CLI intl extension missing (install php-intl)"
+fi
+
+fpm_php=""
+for candidate in php8.3 php8.2 php8.1 php; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -m 2>/dev/null | grep -qx intl; then
+        if [[ -d "/etc/php/${candidate#php}/fpm" ]] || [[ "$candidate" == "php" ]]; then
+            fpm_php="$candidate"
+            break
+        fi
+    fi
+done
+if [[ -n "$fpm_php" ]] && "$fpm_php" -m 2>/dev/null | grep -qx intl; then
+    pass "PHP FPM SAPI intl extension loaded (${fpm_php})"
+else
+    fail "PHP FPM intl extension missing — install php-intl for the active PHP-FPM version"
+fi
+
 if systemctl is-active --quiet mail-proxy.service; then
     pass "mail-proxy.service is active (running)"
 else
