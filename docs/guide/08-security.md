@@ -9,7 +9,8 @@ DELTA-transit хранит **зашифрованные** пароли и OAuth-
 | Компрометация веб-панели | IP allow-list **и** вход оператора (`panel_admins`); CSRF; www-data ∉ vmail |
 | Утечка crypto.key | Права 0640, группа mail-proxy-crypto |
 | SSRF через OAuth URL | `assertSafeOAuthEndpoint()` (PHP) + `validate_oauth_endpoint()` (Python) |
-| Подмена IP клиента | `getClientIp()` доверяет X-Forwarded-* только от localhost |
+| Подмена IP клиента | `getClientIp()` доверяет X-Forwarded-* только от localhost; установщик передаёт `HTTP_X_REAL_IP` / `HTTP_X_FORWARDED_FOR` из `$remote_addr` в PHP-FPM (см. комментарий в `web/includes/helpers.php`) |
+| Обход lockout с подменой IP | За nginx только доверенный reverse proxy на loopback; иначе заголовки не принимаются |
 | Эскалация через демон | systemd hardening, User=vmail, CapabilityBoundingSet= пусто |
 | Перехват трафика | TLS на панели; IMAP ssl / SMTP tls |
 

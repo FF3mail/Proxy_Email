@@ -2883,6 +2883,9 @@ server {
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
 
         include fastcgi_params;
+
+        fastcgi_param HTTP_X_REAL_IP \$remote_addr;
+        fastcgi_param HTTP_X_FORWARDED_FOR \$proxy_add_x_forwarded_for;
     }
 
     location ~ /\. {
@@ -3306,6 +3309,9 @@ validate_upload_limit() {
         || fatal "Validation failed: upload limit missing in virtual host"
 
     log_info "Upload limit configured"
+
+    grep -q 'fastcgi_param HTTP_X_REAL_IP' "$NGINX_SITE_AVAILABLE" \
+        || fatal "Validation failed: HTTP_X_REAL_IP fastcgi param missing in virtual host"
 }
 
 # -----------------------------------------------------------------------------

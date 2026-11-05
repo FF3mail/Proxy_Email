@@ -14,6 +14,7 @@ const PANEL_LOGIN_ATTEMPT_MAX_AGE_SECONDS = 86400; // DAT-18: rows older than on
 const PANEL_LOGIN_PURGE_BATCH = 500;
 const PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH = 100;
 const PANEL_LOGIN_THROTTLE_LOCK_WAIT_SECONDS = 1;
+const PANEL_LOGIN_BLOCKED_COALESCE_SECONDS = 60;
 
 const PANEL_LOGIN_ATTEMPTS_DDL = <<<'SQL'
 CREATE TABLE IF NOT EXISTS panel_login_attempts (
@@ -369,6 +370,20 @@ function panelLoginThrottleRegisterFailure(string $login, string $ip, ?int $now 
     return recordPanelLoginAttempt(getPdo(), $login, $ip, 'failure', $now);
 }
 
+function panelLoginBlockedRecentlyRecorded(PDO $pdo, string $login, string $ip, int $now): bool
+{
+    $after = panelLoginAttemptUtc($now - PANEL_LOGIN_BLOCKED_COALESCE_SECONDS);
+    $stmt = $pdo->prepare(
+        'SELECT 1 FROM panel_login_attempts
+         WHERE login = ? AND ip = ? AND result = ?
+           AND attempted_at > ?
+         LIMIT 1'
+    );
+    $stmt->execute([$login, $ip, 'blocked', $after]);
+
+    return $stmt->fetchColumn() !== false;
+}
+
 function panelLoginThrottleRegisterBlocked(string $login, string $ip, ?int $now = null): bool
 {
     $now = $now ?? time();
@@ -376,7 +391,18 @@ function panelLoginThrottleRegisterBlocked(string $login, string $ip, ?int $now 
         return false;
     }
 
-    return recordPanelLoginAttempt(getPdo(), $login, $ip, 'blocked', $now);
+    try {
+        $pdo = getPdo();
+        if (panelLoginBlockedRecentlyRecorded($pdo, $login, $ip, $now)) {
+            return true;
+        }
+
+        return recordPanelLoginAttempt($pdo, $login, $ip, 'blocked', $now);
+    } catch (Throwable $e) {
+        writeLog('Panel login blocked record lookup failed: ' . $e->getMessage());
+
+        return false;
+    }
 }
 
 function panelLoginThrottleClear(string $login, string $ip, ?int $now = null): bool
