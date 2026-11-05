@@ -71,12 +71,15 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install PHP CLI
-        run: sudo apt-get update && sudo apt-get install -y php-cli php-sqlite3
+        run: sudo apt-get update && sudo apt-get install -y php-cli php-sqlite3 php-intl php-mbstring
       - name: Run portable panel PHP tests
         run: |
           set +e
           fail=0
           for t in tests/panel_login_lockout_test.php \
+                   tests/panel_login_get_lock_test.php \
+                   tests/panel_login_lock_name_test.php \
+                   tests/panel_login_lock_order_test.php \
                    tests/panel_operator_password_test.php \
                    tests/panel_referent_activation_test.php \
                    tests/panel_modal_dirty_test.php \

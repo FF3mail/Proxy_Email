@@ -128,6 +128,25 @@ plaInitSchema($pdo);
 assert_true(panelLoginAttemptsTableExists(), 'sqlite table is visible via SELECT 1');
 
 $now = 1_700_000_000;
+
+$storedMax = PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH;
+$longLogin = str_repeat('x', $storedMax + 20);
+$normalizedLong = panelLoginNormalizeLogin($longLogin);
+assert_true(
+    function_exists('mb_strlen')
+        ? mb_strlen($normalizedLong, 'UTF-8') === $storedMax
+        : strlen($normalizedLong) === $storedMax,
+    'panelLoginNormalizeLogin truncates to stored login max'
+);
+assert_true(
+    panelLoginNormalizeLogin($longLogin) === panelLoginNormalizeLogin(str_repeat('x', $storedMax) . 'suffix'),
+    'overlong login variants normalize to the same key'
+);
+
+$lockName = panelLoginThrottleLockName('master', '10.0.0.8');
+assert_true(strlen($lockName) <= 64, 'GET_LOCK name length is at most 64');
+assert_true(str_starts_with($lockName, 'pla_'), 'GET_LOCK name uses pla_ prefix');
+
 for ($i = 0; $i < 4; $i++) {
     assert_true(panelLoginThrottleAllow('master', '10.0.0.8', $now + $i), "allow before fail {$i}");
     panelLoginThrottleRegisterFailure('master', '10.0.0.8', $now + $i);
@@ -206,6 +225,19 @@ assert_true($blocked !== [], 'locked attempt records blocked');
 assert_true(panelLoginThrottleBegin('master', '10.0.0.8'), 'sqlite skips GET_LOCK and still begins');
 panelLoginThrottleEnd('master', '10.0.0.8');
 
+plaReset($pdo);
+$login100 = str_repeat('a', $storedMax);
+$overlongLogin = $login100 . 'overflow-suffix';
+$pdo->prepare('INSERT INTO panel_admins (username, password_hash, role, active) VALUES (?, ?, ?, 1)')
+    ->execute([$login100, $hash, 'master']);
+for ($i = 0; $i < 5; $i++) {
+    $dest = runLoginSubmit($overlongLogin, 'wrong-password');
+    assert_true($dest === 'login', "overlong username failed login ({$i})");
+}
+$dest = runLoginSubmit($overlongLogin, 'CorrectHorse1!');
+assert_true($dest === 'login', 'correct password rejected for overlong username while locked');
+assert_true(($GLOBALS['test_flash']['message'] ?? '') === 'auth.login_locked', 'overlong username lockout uses login_locked');
+
 $pdo->exec('DROP TABLE panel_login_attempts');
 assert_true(!panelLoginAttemptsTableExists(), 'missing table is not visible');
 assert_true(!panelLoginThrottleBegin('master', '10.0.0.8'), 'begin fail-closed when table missing');
@@ -216,6 +248,21 @@ $pdo->prepare('INSERT INTO panel_admins (username, password_hash, role, active) 
 $dest = runLoginSubmit('master', 'CorrectHorse1!');
 assert_true($dest === 'dashboard', 'login works after table restored');
 assert_true(count(array_filter(plaResults(), static fn (array $r): bool => $r['result'] === 'success')) === 1, 'restored table still one success');
+
+plaReset($pdo);
+plaInitSchema($pdo);
+$pdo->exec(
+    'CREATE TRIGGER pla_insert_fail BEFORE INSERT ON panel_login_attempts
+     WHEN NEW.login = \'fail-insert\' BEGIN SELECT RAISE(ABORT, \'deny\'); END'
+);
+assert_true(!panelLoginThrottleRegisterFailure('fail-insert', '10.0.0.8', $now), 'INSERT failure returns false');
+$recordLogs = array_filter(
+    $GLOBALS['test_logs'],
+    static fn (string $line): bool => str_contains($line, 'Panel login attempt record failed:')
+);
+assert_true($recordLogs !== [], 'INSERT failure is logged');
+$pdo->exec('DROP TRIGGER IF EXISTS pla_insert_fail');
+plaReset($pdo);
 
 echo "\nSummary: failures={$failures}\n";
 exit($failures > 0 ? 1 : 0);

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Panel login lockout (SEC-10 / DAT-18 / issue #136).
+ * Panel login lockout (SEC-10 / DAT-18 / issue #136, hardened #141).
  * Source of truth: table panel_login_attempts keyed by login + client IP.
  * Not bound to the PHP session.
  */
@@ -12,6 +12,8 @@ const PANEL_LOGIN_WINDOW_SECONDS = 900; // 15 minutes
 const PANEL_LOGIN_LOCK_SECONDS = 900; // 15 minutes
 const PANEL_LOGIN_ATTEMPT_MAX_AGE_SECONDS = 86400; // DAT-18: rows older than one day
 const PANEL_LOGIN_PURGE_BATCH = 500;
+const PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH = 100;
+const PANEL_LOGIN_THROTTLE_LOCK_WAIT_SECONDS = 1;
 
 const PANEL_LOGIN_ATTEMPTS_DDL = <<<'SQL'
 CREATE TABLE IF NOT EXISTS panel_login_attempts (
@@ -31,6 +33,23 @@ function panelLoginAttemptUtc(int $now): string
     return gmdate('Y-m-d H:i:s', $now);
 }
 
+function panelLoginNormalizeLogin(string $login): string
+{
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($login, 'UTF-8') <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+            return $login;
+        }
+
+        return mb_substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH, 'UTF-8');
+    }
+
+    if (strlen($login) <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+        return $login;
+    }
+
+    return substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH);
+}
+
 function panelLoginAttemptsTableExists(): bool
 {
     try {
@@ -41,9 +60,111 @@ function panelLoginAttemptsTableExists(): bool
     }
 }
 
+/**
+ * Test seam: force mb_convert_kana fallback (no intl accent folding) when set true.
+ *
+ * @see panelLoginCanonicalLoginForThrottleLock
+ */
+function panelLoginIntlAvailableForLockCanonical(): bool
+{
+    if (!empty($GLOBALS['panel_login_lock_canonical_force_mb_fallback'])) {
+        return false;
+    }
+
+    return class_exists('Normalizer')
+        && defined('Normalizer::FORM_KC')
+        && defined('Normalizer::FORM_D');
+}
+
+function panelLoginLogIntlMissingOnce(): void
+{
+    static $logged = false;
+    if ($logged || panelLoginIntlAvailableForLockCanonical()) {
+        return;
+    }
+    $logged = true;
+    writeLog('Panel login throttle: php-intl Normalizer unavailable (accent folding disabled)');
+}
+
+function panelLoginTruncateForLockCanonical(string $login): string
+{
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($login, 'UTF-8') <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+            return $login;
+        }
+
+        return mb_substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH, 'UTF-8');
+    }
+
+    if (strlen($login) <= PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH) {
+        return $login;
+    }
+
+    return substr($login, 0, PANEL_LOGIN_STORED_LOGIN_MAX_LENGTH);
+}
+
+/**
+ * Canonical login for GET_LOCK name only (approximates utf8mb4_unicode_ci primary weights).
+ * Stored login and SQL counter predicates use the raw normalized login unchanged.
+ */
+function panelLoginCanonicalLoginForThrottleLock(string $login): string
+{
+    if (panelLoginIntlAvailableForLockCanonical()) {
+        $normalized = Normalizer::normalize($login, Normalizer::FORM_KC);
+        if ($normalized !== false) {
+            $login = $normalized;
+        }
+        $decomposed = Normalizer::normalize($login, Normalizer::FORM_D);
+        if ($decomposed !== false) {
+            $stripped = preg_replace('/\p{Mn}/u', '', $decomposed);
+            if ($stripped !== null) {
+                $login = $stripped;
+            }
+        }
+        if (function_exists('mb_strtolower')) {
+            $login = mb_strtolower($login, 'UTF-8');
+        } else {
+            $login = strtolower($login);
+        }
+    } else {
+        panelLoginLogIntlMissingOnce();
+        if (function_exists('mb_convert_kana') && function_exists('mb_strtolower')) {
+            $login = mb_strtolower(mb_convert_kana($login, 'a'), 'UTF-8');
+        } elseif (function_exists('mb_strtolower')) {
+            $login = mb_strtolower($login, 'UTF-8');
+        } else {
+            $login = strtolower($login);
+        }
+    }
+
+    return panelLoginTruncateForLockCanonical($login);
+}
+
 function panelLoginThrottleLockName(string $login, string $ip): string
 {
-    return 'pla_' . substr(hash('sha256', $login . "\0" . $ip), 0, 56);
+    $canonicalLogin = panelLoginCanonicalLoginForThrottleLock($login);
+    $digest = hash('sha256', $canonicalLogin . "\0" . $ip);
+
+    return 'pla_' . substr($digest, 0, 60);
+}
+
+/**
+ * MySQL GET_LOCK / RELEASE_LOCK query seam for unit tests only.
+ * Production: unset $GLOBALS['panel_login_mysql_lock_query_hook'].
+ *
+ * @return mixed fetchColumn() result for GET_LOCK / RELEASE_LOCK
+ */
+function panelLoginThrottleMysqlLockQuery(PDO $pdo, string $sql, array $params): mixed
+{
+    $hook = $GLOBALS['panel_login_mysql_lock_query_hook'] ?? null;
+    if (is_callable($hook)) {
+        return $hook($pdo, $sql, $params);
+    }
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+
+    return $stmt->fetchColumn();
 }
 
 function panelLoginThrottleBegin(string $login, string $ip): bool
@@ -56,9 +177,12 @@ function panelLoginThrottleBegin(string $login, string $ip): bool
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
             return true;
         }
-        $stmt = $pdo->prepare('SELECT GET_LOCK(?, 5)');
-        $stmt->execute([panelLoginThrottleLockName($login, $ip)]);
-        $got = $stmt->fetchColumn();
+        $wait = (int) PANEL_LOGIN_THROTTLE_LOCK_WAIT_SECONDS;
+        $got = panelLoginThrottleMysqlLockQuery(
+            $pdo,
+            'SELECT GET_LOCK(?, ?)',
+            [panelLoginThrottleLockName($login, $ip), $wait]
+        );
         return $got !== false && (int) $got === 1;
     } catch (Throwable $e) {
         writeLog('Panel login throttle lock failed: ' . $e->getMessage());
@@ -73,8 +197,11 @@ function panelLoginThrottleEnd(string $login, string $ip): void
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
             return;
         }
-        $stmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
-        $stmt->execute([panelLoginThrottleLockName($login, $ip)]);
+        panelLoginThrottleMysqlLockQuery(
+            $pdo,
+            'SELECT RELEASE_LOCK(?)',
+            [panelLoginThrottleLockName($login, $ip)]
+        );
     } catch (Throwable $e) {
         writeLog('Panel login throttle unlock failed: ' . $e->getMessage());
     }
@@ -195,12 +322,20 @@ function panelLoginPairLockedFor(PDO $pdo, string $login, string $ip, int $now):
     return ($now - $stats['last_failure_ts']) < PANEL_LOGIN_LOCK_SECONDS;
 }
 
-function recordPanelLoginAttempt(PDO $pdo, string $login, string $ip, string $result, int $now): void
+function recordPanelLoginAttempt(PDO $pdo, string $login, string $ip, string $result, int $now): bool
 {
-    $stmt = $pdo->prepare(
-        'INSERT INTO panel_login_attempts (login, ip, attempted_at, result) VALUES (?, ?, ?, ?)'
-    );
-    $stmt->execute([$login, $ip, panelLoginAttemptUtc($now), $result]);
+    try {
+        $stmt = $pdo->prepare(
+            'INSERT INTO panel_login_attempts (login, ip, attempted_at, result) VALUES (?, ?, ?, ?)'
+        );
+        $stmt->execute([$login, $ip, panelLoginAttemptUtc($now), $result]);
+
+        return true;
+    } catch (Throwable $e) {
+        writeLog('Panel login attempt record failed: ' . $e->getMessage());
+
+        return false;
+    }
 }
 
 function panelLoginThrottleAllow(string $login, string $ip, ?int $now = null): bool
@@ -224,41 +359,32 @@ function panelLoginThrottleAllow(string $login, string $ip, ?int $now = null): b
     }
 }
 
-function panelLoginThrottleRegisterFailure(string $login, string $ip, ?int $now = null): void
+function panelLoginThrottleRegisterFailure(string $login, string $ip, ?int $now = null): bool
 {
     $now = $now ?? time();
     if (!panelLoginAttemptsTableExists()) {
-        return;
+        return false;
     }
-    try {
-        recordPanelLoginAttempt(getPdo(), $login, $ip, 'failure', $now);
-    } catch (Throwable $e) {
-        writeLog('Panel login failure record failed: ' . $e->getMessage());
-    }
+
+    return recordPanelLoginAttempt(getPdo(), $login, $ip, 'failure', $now);
 }
 
-function panelLoginThrottleRegisterBlocked(string $login, string $ip, ?int $now = null): void
+function panelLoginThrottleRegisterBlocked(string $login, string $ip, ?int $now = null): bool
 {
     $now = $now ?? time();
     if (!panelLoginAttemptsTableExists()) {
-        return;
+        return false;
     }
-    try {
-        recordPanelLoginAttempt(getPdo(), $login, $ip, 'blocked', $now);
-    } catch (Throwable $e) {
-        writeLog('Panel login blocked record failed: ' . $e->getMessage());
-    }
+
+    return recordPanelLoginAttempt(getPdo(), $login, $ip, 'blocked', $now);
 }
 
-function panelLoginThrottleClear(string $login, string $ip, ?int $now = null): void
+function panelLoginThrottleClear(string $login, string $ip, ?int $now = null): bool
 {
     $now = $now ?? time();
     if (!panelLoginAttemptsTableExists()) {
-        return;
+        return false;
     }
-    try {
-        recordPanelLoginAttempt(getPdo(), $login, $ip, 'success', $now);
-    } catch (Throwable $e) {
-        writeLog('Panel login success record failed: ' . $e->getMessage());
-    }
+
+    return recordPanelLoginAttempt(getPdo(), $login, $ip, 'success', $now);
 }

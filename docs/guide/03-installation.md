@@ -77,7 +77,7 @@ chmod +x delta-transit-install.sh configure_limits.sh
 | Web | rsync `web/` → `/var/www/mail-proxy`, `APP_BASE_URL` в config.php |
 | Postfix | Базовые настройки для локальной доставки |
 | Dovecot | Проверка/настройка Maildir |
-| PHP | Лимиты upload, FPM pool |
+| PHP | Лимиты upload, FPM pool; для панели нужен модуль **php-intl** (устанавливается вместе с `php-cli` / `php-fpm`) |
 | Nginx | Виртуальный хост; интерактивный выбор TLS: self-signed (по умолчанию), существующие файлы сертификата или certbot/Let's Encrypt (если hostname панели резолвится в публичный IPv4) |
 | Systemd | `mail-proxy.service`, logrotate |
 | Validation | Проверка сервисов и логов |
