@@ -111,7 +111,8 @@ mysql mail_proxy -e "SELECT account_id, expires_at FROM oauth_tokens;"
 Если вы **в** локальной сети, но всё равно 403:
 
 - Проверьте, что Nginx передаёт `$remote_addr`, а не подменённый заголовок
-- Проверьте `getClientIp()` — при доступе через reverse proxy `REMOTE_ADDR` должен быть `127.0.0.1`
+- Проверьте `getClientIp()` — при доступе через reverse proxy `REMOTE_ADDR` должен быть `127.0.0.1`, а установщик должен передавать в PHP-FPM `HTTP_X_REAL_IP` и `HTTP_X_FORWARDED_FOR` из `$remote_addr` (см. [08-security.md](08-security.md) §8.1)
+- Повторный прогон фазы Nginx установщика обновляет vhost; вручную сверьте `fastcgi_param HTTP_X_REAL_IP` в `sites-available/mail-proxy.conf`
 
 ---
 

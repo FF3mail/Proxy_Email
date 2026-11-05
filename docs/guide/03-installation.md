@@ -188,6 +188,8 @@ TLS certificate source:
 
 Для production с публичным DNS предпочтительны **certbot** (вариант 3) или корпоративный CA (вариант 2).
 
+**Клиентский IP и lockout (SEC-10):** vhost панели, который пишет установщик, передаёт в PHP-FPM параметры `HTTP_X_REAL_IP` и `HTTP_X_FORWARDED_FOR` из `$remote_addr` nginx. Это нужно, когда перед панелью стоит локальный reverse proxy (`REMOTE_ADDR` = loopback): функция `getClientIp()` тогда берёт реальный адрес из этих параметров (см. комментарий в `web/includes/helpers.php`). Для прямого доступа из LAN достаточно `$remote_addr`. Дополнительно в `conf.d/mail-proxy.conf` задаётся `limit_req` только для POST `index.php?action=login_submit` (10 запросов в минуту на IP, burst 5).
+
 ---
 
 ## 3.7. Типичные проблемы при установке
