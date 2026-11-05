@@ -16,7 +16,7 @@ class InstallerPhpIntlTests(unittest.TestCase):
     def test_apt_packages_includes_php_intl(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("php-intl", text)
-        block = re.search(r"APT_PACKAGES=\(\n(?P<body>.*?\n\)", text, re.S)
+        block = re.search(r"APT_PACKAGES=\(\n(?P<body>.*?\n)\)", text, re.S)
         self.assertIsNotNone(block)
         body = block.group("body") if block else ""
         self.assertIn("php-intl", body)
