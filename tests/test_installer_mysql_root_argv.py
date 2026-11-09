@@ -425,7 +425,7 @@ mysql_write_client_option_file "{cnf}" "roundtrip_user" "$1"
             text,
             re.S,
         )
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 3)
         for block in blocks:
             self.assertIn('return f\'"{escaped}"\'', block)
             self.assertNotIn("if re.search", block)
