@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS clients (
     UNIQUE KEY uq_clients_local_client (local_client_email),
     UNIQUE KEY uq_clients_local_referent (local_referent_email),
     UNIQUE KEY uq_clients_external_account (external_account_id),
-    FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE CASCADE
+    CONSTRAINT fk_clients_referent FOREIGN KEY (referent_id) REFERENCES referents(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 3. Таблица external_accounts

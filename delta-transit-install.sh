@@ -118,6 +118,7 @@ REQUIRED_FILES=(
     "./schema.sql"
     "./migrations/007_panel_login_attempts.sql"
     "./migrations/008_panel_admins_must_change_password.sql"
+    "./migrations/009_clients_referent_id_restrict.sql"
     "./requirements.txt"
 )
 
@@ -543,6 +544,18 @@ ensure_panel_admins_must_change_password_column() {
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }
 
+# Idempotent DAT-11 upgrade path (issue #161): clients.referent_id ON DELETE RESTRICT.
+ensure_clients_referent_fk_restrict() {
+    local migration_file="./migrations/009_clients_referent_id_restrict.sql"
+    require_file "$migration_file"
+    log_info "Ensuring clients.referent_id FK uses ON DELETE RESTRICT (migration 009, idempotent)"
+    if ! mysql_root_client "${DB_NAME}" < "$migration_file"
+    then
+        fatal "clients.referent_id RESTRICT migration failed (see mysql/mariadb errors above)"
+    fi
+    log_ok "clients.referent_id FK migration applied (ON DELETE RESTRICT)"
+}
+
 panel_admins_must_change_password_column_exists() {
     local count
     count="$(
@@ -552,6 +565,29 @@ panel_admins_must_change_password_column_exists() {
             || true
     )"
     [[ -n "${count}" ]]
+}
+
+clients_referent_fk_delete_rule_is_restrict() {
+    local rule
+    rule="$(
+        mysql_mail_proxy_client \
+            -N -e "
+                SELECT rc.DELETE_RULE
+                FROM information_schema.REFERENTIAL_CONSTRAINTS rc
+                INNER JOIN information_schema.KEY_COLUMN_USAGE kcu
+                    ON kcu.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
+                    AND kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+                    AND kcu.TABLE_NAME = rc.TABLE_NAME
+                WHERE rc.CONSTRAINT_SCHEMA = DATABASE()
+                  AND rc.TABLE_NAME = 'clients'
+                  AND rc.REFERENCED_TABLE_NAME = 'referents'
+                  AND kcu.COLUMN_NAME = 'referent_id'
+                LIMIT 1;
+            " \
+            2>/dev/null \
+            || true
+    )"
+    [[ "${rule}" == "RESTRICT" ]]
 }
 
 panel_login_attempts_table_exists() {
@@ -670,6 +706,7 @@ migrate_panel_auth() {
     ensure_panel_admins_table
     ensure_panel_login_attempts_table
     ensure_panel_admins_must_change_password_column
+    ensure_clients_referent_fk_restrict
     seed_panel_master
 }
 
@@ -749,6 +786,13 @@ validate_panel_auth() {
         log_ok "Panel auth: panel_admins.must_change_password column present (DAT-9)"
     else
         log_warn "Panel auth: panel_admins.must_change_password column missing — password-change gate is fail-closed until migration 008 is applied"
+    fi
+
+    if clients_referent_fk_delete_rule_is_restrict
+    then
+        log_ok "Database: clients.referent_id FK uses ON DELETE RESTRICT (DAT-11)"
+    else
+        log_warn "Database: clients.referent_id FK not RESTRICT — apply migrations/009 or re-run installer Database phase"
     fi
 
     if panel_active_master_exists

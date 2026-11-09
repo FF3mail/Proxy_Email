@@ -349,6 +349,82 @@ PY
     else
         fail "panel_admins.must_change_password missing — apply migrations/008 or re-run installer Database phase"
     fi
+
+    if python3 - "$DB_CONF" <<'PY'
+import configparser
+import os
+import subprocess
+import sys
+import tempfile
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+user = cfg.get("db", "db_user")
+password = cfg.get("db", "db_pass")
+name = cfg.get("db", "db_name")
+host = cfg.get("db", "db_host", fallback="127.0.0.1")
+port = cfg.get("db", "db_port", fallback="3306")
+
+
+def _cnf_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
+os.close(fd)
+os.chmod(cnf_path, 0o600)
+try:
+    with open(cnf_path, "w", encoding="utf-8") as f:
+        f.write("[client]\n")
+        f.write(f"user={_cnf_value(user)}\n")
+        f.write(f"password={_cnf_value(password)}\n")
+        f.write(f"host={_cnf_value(host)}\n")
+        f.write(f"port={_cnf_value(port)}\n")
+    sql = """
+        SELECT rc.DELETE_RULE
+        FROM information_schema.REFERENTIAL_CONSTRAINTS rc
+        INNER JOIN information_schema.KEY_COLUMN_USAGE kcu
+            ON kcu.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
+            AND kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+            AND kcu.TABLE_NAME = rc.TABLE_NAME
+        WHERE rc.CONSTRAINT_SCHEMA = DATABASE()
+          AND rc.TABLE_NAME = 'clients'
+          AND rc.REFERENCED_TABLE_NAME = 'referents'
+          AND kcu.COLUMN_NAME = 'referent_id'
+        LIMIT 1;
+    """
+    cmd = [
+        "mysql",
+        f"--defaults-file={cnf_path}",
+        name,
+        "-N",
+        "-e",
+        sql,
+    ]
+    try:
+        out = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        raise SystemExit("mysql client missing")
+    if out.returncode != 0:
+        raise SystemExit(out.stderr.strip() or "mysql failed")
+    rule = (out.stdout or "").strip()
+    if rule != "RESTRICT":
+        raise SystemExit(f"clients.referent_id delete rule is {rule!r}, expected RESTRICT")
+finally:
+    os.remove(cnf_path)
+PY
+    then
+        pass "clients.referent_id FK ON DELETE RESTRICT (DAT-11)"
+    else
+        fail "clients.referent_id FK not RESTRICT — apply migrations/009 or re-run installer Database phase"
+    fi
 fi
 
 echo "=== Summary: ${FAILURES} failure(s) ==="
