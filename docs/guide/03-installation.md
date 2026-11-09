@@ -152,8 +152,10 @@ systemctl status mail-proxy mariadb nginx postfix dovecot
 
 ```bash
 chmod +x scripts/verify-install-regression.sh
-./scripts/verify-install-regression.sh
+bash scripts/verify-install-regression.sh
 ```
+
+Скрипт не записывает в live `/etc/mail-proxy/db.conf` (проверка `CHANGE_ME` — только на копии во временном каталоге).
 
 Ожидается вывод `[PASS]` по всем пунктам. При `[FAIL]` — см. [07-troubleshooting.md](07-troubleshooting.md).
 
@@ -254,7 +256,8 @@ rm -f "$ROOT_CNF"
 ```bash
 mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
 mysql -u mail_proxy -p mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
-./scripts/verify-install-regression.sh
+chmod +x scripts/verify-install-regression.sh
+bash scripts/verify-install-regression.sh
 ```
 
 ---

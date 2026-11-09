@@ -193,6 +193,8 @@ mailq
 
 Все пункты должны быть `[PASS]`.
 
+Скрипт **читает** live `/etc/mail-proxy/db.conf` (в т.ч. для проверки MariaDB и плейсхолдера `CHANGE_ME`), но **не записывает** в этот файл: проверка отказа демона при `CHANGE_ME` выполняется на копии во временном каталоге (режим `umask 077`).
+
 ---
 
 *Предыдущий: [05-web-panel.md](05-web-panel.md) · Следующий: [07-troubleshooting.md](07-troubleshooting.md)*

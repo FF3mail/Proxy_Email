@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Post-install regression checks for PROMPT 22 / 22.1 (Epic A test VPS).
 # Run as root after delta-transit-install.sh and configure_limits.sh.
+# Reads live /etc/mail-proxy/db.conf only; CHANGE_ME probe uses a private temp copy.
 
 [[ $EUID -eq 0 ]] || { echo "Run as root"; exit 1; }
 
@@ -11,6 +12,21 @@ FAILURES=0
 
 pass() { echo "[PASS] $*"; }
 fail() { echo "[FAIL] $*"; FAILURES=$((FAILURES + 1)); }
+
+_resolve_mail_proxy_daemon_py() {
+    local candidates=(
+        "${MAIL_PROXY_DAEMON_PY:-}"
+        "/usr/local/bin/mail-proxy-daemon.py"
+        "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/mail-proxy-daemon.py"
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        [[ -n "$c" && -f "$c" ]] || continue
+        echo "$c"
+        return 0
+    done
+    return 1
+}
 
 echo "=== PROMPT 22.1 regression checks ==="
 
@@ -103,31 +119,60 @@ else
     fail "db.conf configparser read failed"
 fi
 
-# CHANGE_ME placeholder rejection (scratch copy only).
+# CHANGE_ME placeholder rejection (scratch db.conf only; live db.conf is never written).
 if [[ -f "$DB_CONF" ]]; then
-    scratch="$(mktemp)"
-    cp "$DB_CONF" "${scratch}.real"
-    sed 's/^db_pass = .*/db_pass = CHANGE_ME/' "$DB_CONF" > "$scratch"
-    cp "$scratch" "$DB_CONF"
-    chmod 0640 "$DB_CONF"
-    chown root:mail-proxy-crypto "$DB_CONF" 2>/dev/null || true
-    set +e
-    /opt/delta-transit/venv/bin/python3 /usr/local/bin/mail-proxy-daemon.py >/dev/null 2>&1 &
-    dpid=$!
-    sleep 2
-    if kill -0 "$dpid" 2>/dev/null; then
-        kill "$dpid" 2>/dev/null || true
-        fail "daemon started with CHANGE_ME placeholder"
+    umask 077
+    HARN_DIR="$(mktemp -d)"
+    _harness_cleanup() {
+        [[ -n "${HARN_DIR:-}" && -d "$HARN_DIR" ]] && rm -rf "$HARN_DIR"
+    }
+    trap '_harness_cleanup' EXIT INT TERM
+    scratch="${HARN_DIR}/db_change_me.conf"
+    cp "$DB_CONF" "${HARN_DIR}/db_good.conf"
+    sed 's/^db_pass = .*/db_pass = CHANGE_ME/' "${HARN_DIR}/db_good.conf" > "$scratch"
+    chmod 0640 "$scratch"
+
+    if ! daemon_py="$(_resolve_mail_proxy_daemon_py)"; then
+        fail "mail-proxy-daemon.py not found for CHANGE_ME probe"
     else
-        pass "daemon refuses CHANGE_ME placeholder"
+        py_bin="${MAIL_PROXY_VENV_PYTHON:-/opt/delta-transit/venv/bin/python3}"
+        if [[ ! -x "$py_bin" ]]; then
+            py_bin="$(command -v python3 || true)"
+        fi
+        if [[ -z "$py_bin" ]]; then
+            fail "python3 not found for CHANGE_ME probe"
+        else
+            set +e
+            "$py_bin" - "$scratch" "$daemon_py" <<'PY'
+import importlib.util
+import sys
+
+conf_path, daemon_py = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("mail_proxy_daemon", daemon_py)
+if spec is None or spec.loader is None:
+    sys.exit(2)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+try:
+    mod.Database(conf_file=conf_path)
+except ValueError:
+    sys.exit(0)
+sys.exit(1)
+PY
+            probe_rc=$?
+            set -e
+            if [[ $probe_rc -eq 0 ]]; then
+                pass "daemon refuses CHANGE_ME placeholder"
+            elif [[ $probe_rc -eq 2 ]]; then
+                fail "CHANGE_ME probe could not load mail-proxy-daemon.py"
+            else
+                fail "daemon did not refuse CHANGE_ME placeholder"
+            fi
+        fi
     fi
-    wait "$dpid" 2>/dev/null
-    set -e
-    cp "${scratch}.real" "$DB_CONF"
-    chmod 0640 "$DB_CONF"
-    chown root:mail-proxy-crypto "$DB_CONF" 2>/dev/null || true
-    rm -f "$scratch" "${scratch}.real"
-    systemctl restart mail-proxy.service >/dev/null 2>&1 || true
+    trap - EXIT INT TERM
+    _harness_cleanup
+    unset HARN_DIR
 fi
 
 if grep -rq "client_max_body_size[[:space:]]\+${NGINX_BODY_LIMIT:-210M}" /etc/nginx/conf-enabled /etc/nginx/conf.d /etc/nginx/sites-available 2>/dev/null \
