@@ -83,6 +83,7 @@ jobs:
                    tests/panel_login_lock_order_test.php \
                    tests/panel_operator_password_test.php \
                    tests/panel_referent_activation_test.php \
+                   tests/panel_referent_delete_restrict_test.php \
                    tests/panel_modal_dirty_test.php \
                    tests/panel_dashboard_world_clocks_test.php \
                    tests/panel_external_accounts_list_test.php \

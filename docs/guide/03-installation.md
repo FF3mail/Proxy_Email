@@ -233,9 +233,10 @@ Refusing to harden /var/vmail until ownership is vmail:vmail (found root:root)
 | `panel_admins` | `CREATE TABLE IF NOT EXISTS` от учётной записи приложения в фазе Database |
 | `panel_login_attempts` (DAT-18 / SEC-10) | Файл `migrations/007_panel_login_attempts.sql` применяется **от root MariaDB** в фазе Database (idempotent, только `CREATE TABLE IF NOT EXISTS`) |
 | `panel_admins.must_change_password` (DAT-9 / SEC-11) | Файл `migrations/008_panel_admins_must_change_password.sql` применяется **от root MariaDB** в фазе Database к **`DB_NAME`** (idempotent, `ADD COLUMN IF NOT EXISTS`; в SQL нет `USE …`) |
-| Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007` безопасно |
+| `clients.referent_id` (DAT-11) | Файл `migrations/009_clients_referent_id_restrict.sql` применяется **от root MariaDB** в фазе Database к **`DB_NAME`** (idempotent, замена FK на `ON DELETE RESTRICT`) |
+| Свежая установка | Таблица также создаётся из `schema.sql`; повторное применение `007`/`008`/`009` безопасно |
 
-Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. **Предпочтительно:** повторный интерактивный прогон `./delta-transit-install.sh` (фаза Database применит `007`/`008` от root через тот же механизм `--defaults-file`, что и при установке).
+Если обновляете **только** PHP-панель (`rsync web/`) без повторного установщика, таблица может отсутствовать. **Предпочтительно:** повторный интерактивный прогон `./delta-transit-install.sh` (фаза Database применит `007`/`008`/`009` от root через тот же механизм `--defaults-file`, что и при установке).
 
 Ручной SQL — только если установщик запустить нельзя. Имя БД — как в `/etc/mail-proxy/db.conf`, ключ `db_name`. **Не** передавайте пароль root через `-p` в argv (виден в `ps`); используйте файл параметров клиента `0600`:
 
@@ -246,6 +247,7 @@ chmod 600 "$ROOT_CNF"
 # Заполните [client] user=root и password=… (как в iRedMail/MariaDB), затем:
 mysql --defaults-file="$ROOT_CNF" < migrations/007_panel_login_attempts.sql
 mysql --defaults-file="$ROOT_CNF" "$DB_NAME" < migrations/008_panel_admins_must_change_password.sql
+mysql --defaults-file="$ROOT_CNF" "$DB_NAME" < migrations/009_clients_referent_id_restrict.sql
 rm -f "$ROOT_CNF"
 ```
 

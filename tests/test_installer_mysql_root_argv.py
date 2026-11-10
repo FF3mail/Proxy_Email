@@ -254,7 +254,7 @@ mysql_root_client -e "SELECT 1"
 
     def test_verify_regression_mysql_uses_defaults_file_only(self) -> None:
         text = VERIFY_SCRIPT.read_text(encoding="utf-8")
-        self.assertEqual(text.count('f"--defaults-file={cnf_path}"'), 2)
+        self.assertEqual(text.count('f"--defaults-file={cnf_path}"'), 3)
         self.assertNotIn("--no-defaults", text)
         self.assertNotIn("--defaults-extra-file=", text)
 
@@ -425,7 +425,7 @@ mysql_write_client_option_file "{cnf}" "roundtrip_user" "$1"
             text,
             re.S,
         )
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 3)
         for block in blocks:
             self.assertIn('return f\'"{escaped}"\'', block)
             self.assertNotIn("if re.search", block)

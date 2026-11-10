@@ -609,9 +609,10 @@ function renderReferentCardUi(): void
         <form method="post" action="index.php?action=referent_delete">
             <div class="pm-mh"><h2>Удалить референта?</h2><button type="button" class="pm-x" data-pm-close aria-label="Закрыть">×</button></div>
             <div class="pm-mb">
-                <p style="margin:0">Будет удалён референт «<?= h((string) $row['username']) ?>» вместе с внешним аккаунтом и связями с клиентами. Действие нельзя отменить.</p>
+                <p style="margin:0">Будет удалён референт «<?= h((string) $row['username']) ?>» и его внешние аккаунты. Связи с клиентами нужно удалить заранее — иначе удаление будет отклонено. Действие нельзя отменить.</p>
                 <input type="hidden" name="action" value="referent_delete">
                 <input type="hidden" name="id" value="<?= $id ?>">
+                <input type="hidden" name="return_to" value="referent_view">
                 <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
             </div>
             <div class="pm-mf"><span></span><div class="pm-r">

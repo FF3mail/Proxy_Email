@@ -31,6 +31,7 @@ require_once __DIR__ . '/includes/providers_ui.php';
 require_once __DIR__ . '/includes/maildir_resolver.php';
 require_once __DIR__ . '/includes/relationship_editor.php';
 require_once __DIR__ . '/includes/referent_activation.php';
+require_once __DIR__ . '/includes/referent_delete.php';
 require_once __DIR__ . '/includes/mailbox_verify.php';
 require_once __DIR__ . '/includes/panel_local_mail.php';
 require_once __DIR__ . '/includes/panel_modals.php';
@@ -1425,11 +1426,24 @@ function handleReferentDelete(): void
         redirectTo('referent_list');
     }
 
-    $stmt = $pdo->prepare('DELETE FROM referents WHERE id = ?');
-    $stmt->execute([$id]);
+    try {
+        $stmt = $pdo->prepare('DELETE FROM referents WHERE id = ?');
+        $stmt->execute([$id]);
+    } catch (PDOException $e) {
+        writeLog('Referent delete PDO error: ' . $e->getMessage());
+        if (referentDeleteBlockedByRelationships($e)) {
+            setFlash('error', __('referent.error.delete_has_relationships'));
+        } else {
+            setFlash('error', __('referent.error.delete_failed'));
+        }
+        if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
+            redirectUsingReturnTo('referent_view', ['id' => $id], $id);
+        }
+        redirectTo('referent_list');
+    }
 
     writeLog('Referent deleted: ID ' . $id . ' username=' . (string)$row['username']);
-    setFlash('success', 'Референт удалён');
+    setFlash('success', __('referent.deleted'));
     redirectTo('referent_list');
 }
 
