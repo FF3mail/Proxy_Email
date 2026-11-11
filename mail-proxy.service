@@ -17,6 +17,7 @@ RuntimeDirectoryMode=0755
 ExecStartPre=+/usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/mail-proxy.conf
 ExecStart=/usr/bin/python3 /usr/local/bin/mail-proxy-daemon.py
 Restart=on-failure
+RestartPreventExitStatus=75
 RestartSec=30s
 StandardOutput=journal
 StandardError=journal
