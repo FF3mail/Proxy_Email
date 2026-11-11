@@ -271,7 +271,7 @@
 
 **DMN-10** `[OP]` Очистку хранилища отклонённых входящих писем (STO-2) демон выполняет раз в час. `DEVIATION (DEV-22)`
 
-**DMN-11** `[OP]` Одновременно работает не более одного экземпляра демона. При старте демон берёт эксклюзивную неблокирующую блокировку файла `/run/mail-proxy/mail-proxy.lock`. Если блокировка занята, демон не запускается, выводит в лог и в журнал systemd человекочитаемое сообщение с причиной (уже запущен другой экземпляр демона) и путём файла блокировки и завершается особым кодом возврата, отличным от кодов остальных сбоев. Unit systemd не перезапускает демон по этому коду (`RestartPreventExitStatus`); остальные сбои по-прежнему приводят к перезапуску (`Restart=on-failure`, `RestartSec=30s`). Запуск нескольких систем на одном хосте не предусмотрен. `DEVIATION (DEV-30)`
+**DMN-11** `[OP]` Одновременно работает не более одного экземпляра демона. При старте демон берёт эксклюзивную неблокирующую блокировку файла `/run/mail-proxy/mail-proxy.lock`. Если блокировка занята, демон не запускается, выводит в лог и в журнал systemd человекочитаемое сообщение с причиной (уже запущен другой экземпляр демона) и путём файла блокировки и завершается особым кодом возврата, отличным от кодов остальных сбоев. Unit systemd не перезапускает демон по этому коду (`RestartPreventExitStatus`); остальные сбои по-прежнему приводят к перезапуску (`Restart=on-failure`, `RestartSec=30s`). Запуск нескольких систем на одном хосте не предусмотрен.
 
 **DMN-12** `[CODE][OP]` Параметры демона (значения по умолчанию заданы в коде): параметры БД — в `/etc/mail-proxy/db-daemon.conf`; параметры хранилища отклонённых писем — в `/etc/mail-proxy/daemon.conf` (INS-9); ключ шифрования — `/etc/mail-proxy/crypto.key` (без читаемого ключа демон не запускается); лимит входящего письма — 200 МиБ; таймаут IMAP — 60 с; таймаут SMTP — 300 с; пул БД — 12 соединений. `DEVIATION (DEV-47)`
 
@@ -1193,7 +1193,6 @@
 - Предусловия: пройден ACC-3; демон запущен.
 - Шаги: 1) для администратора: записать PID службы `mail-proxy`; 2) для администратора: запустить второй процесс той же командой ExecStart от пользователя `vmail`; 3) прочитать его сообщение и код возврата; 4) ждать 45 секунд и снова записать PID службы и последние строки журнала systemd.
 - Ожидаемый результат: второй экземпляр не остаётся работать; в логе и в журнале systemd сказано, что демон уже запущен, и указан путь `/run/mail-proxy/mail-proxy.lock` (DMN-11); код возврата отличается от кода обычного сбоя, и systemd не перезапускает службу из-за этой попытки (DMN-11); PID службы прежний.
-- Известное расхождение: DEV-30.
 
 **ACC-97** `[обязательный]` Без читаемого ключа демон не запускается.
 
@@ -1445,6 +1444,7 @@
 | D-105 | Логин и пароль внешнего аккаунта хранятся как введены, без обрезки пробелов; панель ограничений на набор символов не накладывает; верность реквизитов проверяет только проверка подключения (VAL-2 в, SEC-5). Пароль оператора не короче 8 символов, в том числе при смене своего пароля и при сбросе мастером (INS-10, SEC-11). Закрывает P-6. |
 | D-106 | Панель не показывает оператору текст исключений базы данных, только общее сообщение; подробности пишутся в лог без секретов (NFR-13). Закрывает P-15. |
 | D-107 | Если попытку входа в панель невозможно записать в `panel_login_attempts` (ошибка записи), вход отклоняется (fail-closed): сессия не создаётся, оператору показывается сообщение о недоступности входа, в журнале пишется одна строка с причиной `failure_record`. Решение владельца. |
+| D-108 | Код завершения 75, когда демон не может взять блокировку single-instance, потому что её держит другой экземпляр; в unit `RestartPreventExitStatus=75` (DMN-11). Решение владельца 2026-11-11. |
 ### 13.2 Реестр расхождений кода с документом (по состоянию master dfe7031)
 
 | ID | Требование | Что делает код сейчас |
@@ -1478,7 +1478,7 @@
 | DEV-27 | SEC-14 | Функция `writeLog()` (`web/includes/helpers.php`) не добавляет логин оператора и IP автоматически; часть записей `web_admin.log` их содержит (например, запись об успешном входе), часть не содержит (например, «Referent updated: ID 12»). |
 | DEV-28 | PNL-6 | Часть русских строк прописана прямо в PHP, а не в файлах языков `web/lang/ru.php` и `web/lang/en.php`. |
 | DEV-29 | PNL-4 | Вкладок «Отложенная доставка» и «Хранилище входящих» нет; есть вкладки «Прохождение» (delivered) и «Нестандартные» (disposed/skipped). |
-| DEV-30 | DMN-11 | Защиты от запуска второго экземпляра демона нет; PID-файл только информирует панель. |
+| DEV-30 | — | Номер не используется: расхождение снято (#164). |
 | DEV-31 | DMN-6 | Задачи, уже стоящие в очереди рабочих потоков, не проверяют состояние связи повторно: после выключения связи письмо может быть утилизировано с причиной `relationship_inactive`. |
 | DEV-32 | DMN-16 | Константы `RETRY_DELAY`, `OUTGOING_QUEUE_MAXSIZE`, `INOTIFY_EVENT_TIMEOUT` определены и не используются; установщик устанавливает drop-in `mail-proxy.service.d/routing.conf`. |
 | DEV-33 | DAT-2 | Установщик не создаёт `mail_passage_journal` на чистой установке: определение таблицы лежит только в `migrations/`, которые установщик не применяет. |
@@ -1558,3 +1558,4 @@
 | **SEC-11** | `web/includes/panel_operator_password.php`; `web/includes/panel_auth_ui.php` (смена пароля, сброс мастером); `migrations/008_panel_admins_must_change_password.sql`; `delta-transit-install.sh` (`ensure_panel_admins_must_change_password_column`) | `tests/panel_operator_password_test.php`; `tests/test_panel_password_page_gate.py`; `tests/panel_standalone_password_gate_test.py`; сценарий ACC-17 |
 | **DAT-11** | `schema.sql` (`fk_clients_referent`); `migrations/009_clients_referent_id_restrict.sql`; `delta-transit-install.sh` (`ensure_clients_referent_fk_restrict`); `web/index.php` (`handleReferentDelete`); `web/includes/referent_delete.php`; `web/lang/en.php`, `web/lang/ru.php` | `tests/panel_referent_delete_restrict_test.php`; `tests/test_installer_migration_009.py`; `tests/test_issue_161_referent_fk_restrict.py`; `scripts/verify-install-regression.sh`; сценарии ACC-24, ACC-33 |
 | **INS-16** (модули демона, DEV-66) | `delta-transit-install.sh` (`DAEMON_RUNTIME_MODULES`, `REQUIRED_FILES`, копирование модулей при установке) | `tests/test_installer_runtime_modules.py` |
+| **DMN-11** | `mail-proxy-daemon.py` (`acquire_single_instance_lock`, `EXIT_LOCK_HELD`, `LOCK_FILE`); `mail-proxy.service` (`RestartPreventExitStatus=75`, `RuntimeDirectory=mail-proxy`); `delta-transit-install.sh` (копирование unit при UPGRADE) | `tests/test_daemon_single_instance_lock.py`; сценарий ACC-96 |

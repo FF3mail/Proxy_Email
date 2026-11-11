@@ -14,6 +14,8 @@ import logging.handlers
 import smtplib
 import imaplib
 import email
+import errno
+import fcntl
 import signal
 import socket
 import ssl
@@ -77,6 +79,10 @@ DB_CONF_FILE = '/etc/mail-proxy/db.conf'
 LOG_FILE = '/var/log/mail-proxy/mail-proxy-daemon.log'
 # Written for panel monitor.php (PHP-FPM cannot call systemctl/shell_exec).
 PID_FILE = '/run/mail-proxy/mail-proxy.pid'
+# Single-instance lock (DMN-11). Override for tests via MAIL_PROXY_LOCK_FILE only.
+LOCK_FILE = os.environ.get('MAIL_PROXY_LOCK_FILE', '/run/mail-proxy/mail-proxy.lock')
+EXIT_LOCK_HELD = 75
+_instance_lock_fd: Optional[int] = None
 MAILDIR_BASE = '/var/vmail/vmail1'
 LOCAL_SMTP_HOST = '127.0.0.1'
 LOCAL_SMTP_PORT = 25
@@ -2691,6 +2697,51 @@ def write_pid_file(path: str = PID_FILE) -> None:
         logger.warning(f"Could not write pid file {path}: {e}")
 
 
+def acquire_single_instance_lock(lock_path: str = LOCK_FILE) -> int:
+    """Take a non-blocking exclusive flock on lock_path; keep the fd open for process life."""
+    global _instance_lock_fd
+    directory = os.path.dirname(lock_path)
+    if directory:
+        try:
+            os.makedirs(directory, mode=0o755, exist_ok=True)
+        except OSError as e:
+            logger.critical(
+                "Cannot create runtime directory %s for instance lock %s: %s",
+                directory,
+                lock_path,
+                e,
+            )
+            sys.exit(1)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError as e:
+        logger.critical(
+            "Cannot open instance lock file %s: %s",
+            lock_path,
+            e,
+        )
+        sys.exit(1)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EAGAIN, errno.EACCES):
+            logger.error(
+                "Another mail-proxy daemon instance is already running "
+                "(instance lock held): %s",
+                lock_path,
+            )
+            sys.exit(EXIT_LOCK_HELD)
+        logger.critical(
+            "Cannot acquire instance lock on %s: %s",
+            lock_path,
+            e,
+        )
+        sys.exit(1)
+    _instance_lock_fd = fd
+    return fd
+
+
 def remove_pid_file(path: str = PID_FILE) -> None:
     """Remove PID file if it belongs to this process."""
     try:
@@ -2715,6 +2766,7 @@ def main():
         OUTBOUND_WATCH_MODE.value,
     )
     logger.info("=" * 60)
+    acquire_single_instance_lock()
     daemon = None
     write_pid_file()
     try:
