@@ -22,7 +22,7 @@ def _load_daemon_via_c(*extra_lines: str) -> str:
         'import importlib.util',
         'import os',
         'import sys',
-        f'spec = importlib.util.spec_from_file_location("mail_proxy_daemon", {DAEMON_PY!r})',
+        f'spec = importlib.util.spec_from_file_location("mail_proxy_daemon", {str(DAEMON_PY)!r})',
         'mod = importlib.util.module_from_spec(spec)',
         'spec.loader.exec_module(mod)',
         *extra_lines,
