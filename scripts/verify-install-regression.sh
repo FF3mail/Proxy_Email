@@ -62,7 +62,7 @@ NGINX_TEST_LOG="$(mktemp)"
 _nginx_test_log_cleanup() {
     [[ -n "${NGINX_TEST_LOG:-}" && -f "$NGINX_TEST_LOG" ]] && rm -f "$NGINX_TEST_LOG"
 }
-trap '_nginx_test_log_cleanup' EXIT INT TERM
+trap '_nginx_test_log_cleanup' EXIT
 
 if nginx -t >"$NGINX_TEST_LOG" 2>&1; then
     pass "nginx -t passes"
@@ -71,7 +71,7 @@ else
     cat "$NGINX_TEST_LOG" || true
 fi
 _nginx_test_log_cleanup
-trap - EXIT INT TERM
+trap - EXIT
 
 if systemctl is-active --quiet nginx; then
     pass "nginx service is active"

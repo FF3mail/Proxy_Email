@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VERIFY = ROOT / "scripts" / "verify-install-regression.sh"
 
 NGINX_BLOCK_RE = re.compile(
-    r'NGINX_TEST_LOG="\$\(mktemp\)".*?trap - EXIT INT TERM',
+    r'NGINX_TEST_LOG="\$\(mktemp\)".*?trap - EXIT\b',
     re.S,
 )
 
@@ -27,7 +27,8 @@ class Issue160VerifyNginxMktempTests(unittest.TestCase):
         self.assertIsNotNone(match, "nginx mktemp block not found")
         block = match.group(0)
         self.assertIn("_nginx_test_log_cleanup", block)
-        self.assertRegex(block, r"trap\s+'_nginx_test_log_cleanup'\s+EXIT\s+INT\s+TERM")
+        self.assertRegex(block, r"trap\s+'_nginx_test_log_cleanup'\s+EXIT\b")
+        self.assertNotRegex(block, r"trap\s+'_nginx_test_log_cleanup'\s+EXIT\s+INT\s+TERM")
         self.assertIn('nginx -t >"$NGINX_TEST_LOG" 2>&1', block)
         self.assertIn('cat "$NGINX_TEST_LOG"', block)
         self.assertIn("_nginx_test_log_cleanup", block)
