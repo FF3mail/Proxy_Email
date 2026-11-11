@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import textwrap
 import unittest
 from pathlib import Path
 
@@ -18,19 +17,17 @@ DAEMON_PY = ROOT / 'mail-proxy-daemon.py'
 SERVICE = (ROOT / 'mail-proxy.service').read_text(encoding='utf-8')
 
 
-def _daemon_import_snippet() -> str:
-    return textwrap.dedent(
-        f"""
-        import importlib.util
-        import os
-        import sys
-        spec = importlib.util.spec_from_file_location(
-            "mail_proxy_daemon", {DAEMON_PY!r}
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        """
-    )
+def _load_daemon_via_c(*extra_lines: str) -> str:
+    lines = [
+        'import importlib.util',
+        'import os',
+        'import sys',
+        f'spec = importlib.util.spec_from_file_location("mail_proxy_daemon", {DAEMON_PY!r})',
+        'mod = importlib.util.module_from_spec(spec)',
+        'spec.loader.exec_module(mod)',
+        *extra_lines,
+    ]
+    return '\n'.join(lines) + '\n'
 
 
 class DaemonSingleInstanceLockTests(unittest.TestCase):
@@ -60,13 +57,10 @@ class DaemonSingleInstanceLockTests(unittest.TestCase):
     def test_second_acquisition_exits_75(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lock_path = os.path.join(tmp, 'mail-proxy.lock')
-            holder = textwrap.dedent(
-                f"""
-                {_daemon_import_snippet()}
-                mod.acquire_single_instance_lock({lock_path!r})
-                import time
-                time.sleep(30)
-                """
+            holder = _load_daemon_via_c(
+                f'mod.acquire_single_instance_lock({lock_path!r})',
+                'import time',
+                'time.sleep(30)',
             )
             holder_proc = subprocess.Popen(
                 [sys.executable, '-c', holder],
@@ -74,11 +68,8 @@ class DaemonSingleInstanceLockTests(unittest.TestCase):
             )
             try:
                 time.sleep(5)
-                dup = textwrap.dedent(
-                    f"""
-                    {_daemon_import_snippet()}
-                    mod.acquire_single_instance_lock({lock_path!r})
-                    """
+                dup = _load_daemon_via_c(
+                    f'mod.acquire_single_instance_lock({lock_path!r})',
                 )
                 dup_proc = subprocess.run(
                     [sys.executable, '-c', dup],
@@ -94,11 +85,8 @@ class DaemonSingleInstanceLockTests(unittest.TestCase):
     def test_lock_released_after_holder_exits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lock_path = os.path.join(tmp, 'mail-proxy.lock')
-            holder = textwrap.dedent(
-                f"""
-                {_daemon_import_snippet()}
-                fd = mod.acquire_single_instance_lock({lock_path!r})
-                """
+            holder = _load_daemon_via_c(
+                f'mod.acquire_single_instance_lock({lock_path!r})',
             )
             subprocess.run(
                 [sys.executable, '-c', holder],
@@ -119,11 +107,8 @@ class DaemonSingleInstanceLockTests(unittest.TestCase):
             with open(blocker, 'w', encoding='ascii'):
                 pass
             lock_path = os.path.join(blocker, 'mail-proxy.lock')
-            script = textwrap.dedent(
-                f"""
-                {_daemon_import_snippet()}
-                mod.acquire_single_instance_lock({lock_path!r})
-                """
+            script = _load_daemon_via_c(
+                f'mod.acquire_single_instance_lock({lock_path!r})',
             )
             proc = subprocess.run(
                 [sys.executable, '-c', script],
