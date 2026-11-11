@@ -58,12 +58,20 @@ else
     systemctl status mail-proxy.service --no-pager | head -15 || true
 fi
 
-if nginx -t >/tmp/verify-nginx-test.log 2>&1; then
+NGINX_TEST_LOG="$(mktemp)"
+_nginx_test_log_cleanup() {
+    [[ -n "${NGINX_TEST_LOG:-}" && -f "$NGINX_TEST_LOG" ]] && rm -f "$NGINX_TEST_LOG"
+}
+trap '_nginx_test_log_cleanup' EXIT INT TERM
+
+if nginx -t >"$NGINX_TEST_LOG" 2>&1; then
     pass "nginx -t passes"
 else
     fail "nginx -t failed"
-    cat /tmp/verify-nginx-test.log || true
+    cat "$NGINX_TEST_LOG" || true
 fi
+_nginx_test_log_cleanup
+trap - EXIT INT TERM
 
 if systemctl is-active --quiet nginx; then
     pass "nginx service is active"
