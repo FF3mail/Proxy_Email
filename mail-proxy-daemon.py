@@ -153,7 +153,9 @@ def setup_logging() -> logging.Logger:
     stdout_handler.setFormatter(fmt)
     root_logger.addHandler(stdout_handler)
     return logging.getLogger('mail-proxy')
-logger = setup_logging()
+
+# Import-safe: handlers are attached only from main() at daemon startup.
+logger = logging.getLogger('mail-proxy')
 
 def validate_oauth_endpoint(url: str, field_name: str = 'endpoint') -> None:
     """Проверка OAuth endpoint на SSRF: только публичные HTTPS-URL."""
@@ -2757,6 +2759,7 @@ def remove_pid_file(path: str = PID_FILE) -> None:
 
 # Главная точка входа в приложение
 def main():
+    setup_logging()
     logger.info("=" * 60)
     logger.info("DELTA-transit mail-proxy-daemon service starting")
     logger.info(
