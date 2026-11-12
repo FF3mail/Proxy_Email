@@ -10,6 +10,7 @@ php_fpm_intl_detect_panel_environment() {
     PHP_FPM_SERVICE=""
     PHP_FPM_POOL_CONF=""
     PHP_FPM_INI=""
+    PHP_FPM_BINARY=""
 
     PHP_FPM_VERSION="$(
         find /etc/php -mindepth 3 -maxdepth 3 -path '*/fpm/php.ini' 2>/dev/null \
@@ -48,6 +49,52 @@ php_fpm_intl_detect_panel_environment() {
 
     [[ -f "$PHP_FPM_POOL_CONF" && -f "$PHP_FPM_INI" ]] || return 1
     return 0
+}
+
+php_fpm_intl_fpm_binary_path() {
+    if [[ -n "${PHP_FPM_INTL_VERIFY_FPM_BINARY:-}" ]]; then
+        echo "$PHP_FPM_INTL_VERIFY_FPM_BINARY"
+        return 0
+    fi
+    if [[ -n "${PHP_FPM_INTL_VERIFY_RESOLVE_FPM_BINARY_CMD:-}" ]]; then
+        PHP_FPM_INTL_VERIFY_RESOLVE_FPM_BINARY_PATH=""
+        local resolve_rc=0
+        eval "$PHP_FPM_INTL_VERIFY_RESOLVE_FPM_BINARY_CMD" || resolve_rc=$?
+        if [[ $resolve_rc -eq 0 && -n "${PHP_FPM_INTL_VERIFY_RESOLVE_FPM_BINARY_PATH:-}" ]]; then
+            echo "$PHP_FPM_INTL_VERIFY_RESOLVE_FPM_BINARY_PATH"
+            return 0
+        fi
+        return 1
+    fi
+
+    local ver="${PHP_FPM_VERSION:-}"
+    local candidate path=""
+    if [[ -n "$ver" ]]; then
+        for candidate in "php-fpm${ver}" "/usr/sbin/php-fpm${ver}"; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+                path="$(command -v "$candidate")"
+                PHP_FPM_BINARY="$path"
+                echo "$path"
+                return 0
+            fi
+            if [[ -x "$candidate" ]]; then
+                PHP_FPM_BINARY="$candidate"
+                echo "$candidate"
+                return 0
+            fi
+        done
+    fi
+
+    local match
+    for match in /usr/sbin/php-fpm[0-9]*.[0-9]*; do
+        [[ -e "$match" ]] || continue
+        if [[ -z "$ver" ]] || [[ "$match" == *"${ver}"* ]]; then
+            PHP_FPM_BINARY="$match"
+            echo "$match"
+            return 0
+        fi
+    done
+    return 1
 }
 
 php_fpm_intl_panel_pool_listen() {
@@ -117,21 +164,33 @@ php_fpm_intl_wait_panel_ready() {
     return 1
 }
 
+php_fpm_intl_wait_fpm_binary_ready() {
+    local deadline="$((SECONDS + PHP_FPM_INTL_READY_MAX_WAIT))"
+    while (( SECONDS < deadline )); do
+        if php_fpm_intl_fpm_binary_path >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep "$PHP_FPM_INTL_READY_INTERVAL"
+    done
+    return 1
+}
+
 php_fpm_intl_fpm_sapi_module_list() {
     if [[ -n "${PHP_FPM_INTL_VERIFY_MODULE_CMD:-}" ]]; then
         # shellcheck disable=SC2086
-        eval "$PHP_FPM_INTL_VERIFY_MODULE_CMD"
-        return $?
+        local mod_rc=0
+        eval "$PHP_FPM_INTL_VERIFY_MODULE_CMD" || mod_rc=$?
+        return "$mod_rc"
     fi
 
-    local php_bin="php${PHP_FPM_VERSION}"
-    if ! command -v "$php_bin" >/dev/null 2>&1; then
-        php_bin="php"
-    fi
-    if ! command -v "$php_bin" >/dev/null 2>&1; then
+    # Use the PHP-FPM SAPI binary module list (php-fpmVER -m). Do not use php -m or
+    # php -c /etc/php/VER/fpm/php.ini -m: on Debian/Ubuntu those invocations still
+    # load the CLI SAPI and scan cli/conf.d, so FPM-only intl state is invisible.
+    local fpm_bin=""
+    if ! fpm_bin="$(php_fpm_intl_fpm_binary_path)"; then
         return 1
     fi
-    "$php_bin" -c "$PHP_FPM_INI" -m 2>/dev/null
+    "$fpm_bin" -m 2>/dev/null
 }
 
 php_fpm_intl_fpm_sapi_has_intl() {

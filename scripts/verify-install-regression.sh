@@ -40,14 +40,14 @@ else
 fi
 
 if php_fpm_intl_detect_panel_environment; then
-    if php_fpm_intl_wait_panel_ready; then
+    if php_fpm_intl_wait_fpm_binary_ready; then
         if php_fpm_intl_fpm_sapi_has_intl; then
-            pass "PHP FPM SAPI intl extension loaded (panel pool php${PHP_FPM_VERSION}-fpm, FPM php.ini)"
+            pass "PHP FPM SAPI intl extension loaded (php-fpm${PHP_FPM_VERSION} -m)"
         else
-            fail "PHP FPM SAPI intl extension missing — install php-intl for PHP-FPM ${PHP_FPM_VERSION} (panel pool FPM php.ini, not CLI php -m)"
+            fail "PHP FPM SAPI intl extension missing — install php-intl for PHP-FPM ${PHP_FPM_VERSION} (php-fpm binary -m, not CLI php -m)"
         fi
     else
-        fail "PHP-FPM panel pool not ready within ${PHP_FPM_INTL_READY_MAX_WAIT}s (systemd ${PHP_FPM_SERVICE} or pool socket unavailable — not an intl check failure)"
+        fail "PHP-FPM binary php-fpm${PHP_FPM_VERSION} not detectable within ${PHP_FPM_INTL_READY_MAX_WAIT}s (upgrade/restart in progress — not an intl check failure)"
     fi
 else
     fail "PHP-FPM panel pool not detected — cannot verify FPM SAPI intl (expected /etc/php/*/fpm/php.ini and pool.d/www.conf)"

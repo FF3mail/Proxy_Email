@@ -49,6 +49,7 @@ class InstallerPhpIntlTests(unittest.TestCase):
         self.assertIn("php -m", text)
         self.assertIn("intl", text)
         self.assertIn("php_fpm_intl_fpm_sapi_has_intl", text)
+        self.assertIn("php_fpm_intl_wait_fpm_binary_ready", text)
         self.assertNotIn('"${fpm_php}" -m', text)
 
 
