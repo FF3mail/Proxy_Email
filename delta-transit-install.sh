@@ -2191,6 +2191,9 @@ restart_php_fpm() {
 }
 
 validate_php_intl_extensions() {
+    # shellcheck source=scripts/php_fpm_intl_verify.sh disable=SC1091
+    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/php_fpm_intl_verify.sh"
+
     if ! command -v php >/dev/null 2>&1
     then
         fatal "PHP CLI missing — install php-cli and php-intl before continuing"
@@ -2201,17 +2204,19 @@ validate_php_intl_extensions() {
         fatal "PHP CLI intl extension missing — install package php-intl (Normalizer required for panel login throttle)"
     fi
 
-    detect_php_fpm_environment || fatal "PHP-FPM not detected — cannot verify php-intl for FPM SAPI"
-
-    local fpm_php="php${PHP_FPM_VERSION}"
-    if ! command -v "$fpm_php" >/dev/null 2>&1
+    if ! php_fpm_intl_detect_panel_environment
     then
-        fatal "PHP binary ${fpm_php} not found — install php-intl for PHP ${PHP_FPM_VERSION}"
+        fatal "PHP-FPM panel pool not detected — cannot verify php-intl for FPM SAPI"
     fi
 
-    if ! "$fpm_php" -m 2>/dev/null | grep -qx intl
+    if ! php_fpm_intl_wait_panel_ready
     then
-        fatal "PHP-FPM (${fpm_php}) intl extension missing — install php-intl before panel login throttle can run safely"
+        fatal "PHP-FPM panel pool not ready within ${PHP_FPM_INTL_READY_MAX_WAIT}s (systemd ${PHP_FPM_SERVICE} or pool socket — retry after php-fpm finishes starting)"
+    fi
+
+    if ! php_fpm_intl_fpm_sapi_has_intl
+    then
+        fatal "PHP FPM SAPI intl extension missing — install php-intl for PHP-FPM ${PHP_FPM_VERSION} (panel pool FPM php.ini at ${PHP_FPM_INI}, not CLI php -m)"
     fi
 }
 
