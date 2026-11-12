@@ -28,7 +28,8 @@ class InstallerPhpIntlTests(unittest.TestCase):
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("validate_php_intl_extensions()", text)
         self.assertIn('php -m 2>/dev/null | grep -qx intl', text)
-        self.assertIn('"$fpm_php" -m 2>/dev/null | grep -qx intl', text)
+        self.assertIn("php_fpm_intl_fpm_sapi_has_intl", text)
+        self.assertIn("php_fpm_intl_wait_panel_ready", text)
 
     def test_phase_packages_and_validation_call_intl_check(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
@@ -47,6 +48,9 @@ class InstallerPhpIntlTests(unittest.TestCase):
         text = VERIFY.read_text(encoding="utf-8")
         self.assertIn("php -m", text)
         self.assertIn("intl", text)
+        self.assertIn("php_fpm_intl_fpm_sapi_has_intl", text)
+        self.assertIn("php_fpm_intl_wait_fpm_binary_ready", text)
+        self.assertNotIn('"${fpm_php}" -m', text)
 
 
 if __name__ == "__main__":

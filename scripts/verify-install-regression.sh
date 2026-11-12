@@ -13,6 +13,9 @@ FAILURES=0
 pass() { echo "[PASS] $*"; }
 fail() { echo "[FAIL] $*"; FAILURES=$((FAILURES + 1)); }
 
+# shellcheck source=php_fpm_intl_verify.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/php_fpm_intl_verify.sh"
+
 _resolve_mail_proxy_daemon_py() {
     local candidates=(
         "${MAIL_PROXY_DAEMON_PY:-}"
@@ -36,19 +39,18 @@ else
     fail "PHP CLI intl extension missing (install php-intl)"
 fi
 
-fpm_php=""
-for candidate in php8.3 php8.2 php8.1 php; do
-    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -m 2>/dev/null | grep -qx intl; then
-        if [[ -d "/etc/php/${candidate#php}/fpm" ]] || [[ "$candidate" == "php" ]]; then
-            fpm_php="$candidate"
-            break
+if php_fpm_intl_detect_panel_environment; then
+    if php_fpm_intl_wait_fpm_binary_ready; then
+        if php_fpm_intl_fpm_sapi_has_intl; then
+            pass "PHP FPM SAPI intl extension loaded (php-fpm${PHP_FPM_VERSION} -m)"
+        else
+            fail "PHP FPM SAPI intl extension missing — install php-intl for PHP-FPM ${PHP_FPM_VERSION} (php-fpm binary -m, not CLI php -m)"
         fi
+    else
+        fail "PHP-FPM binary php-fpm${PHP_FPM_VERSION} not detectable within ${PHP_FPM_INTL_READY_MAX_WAIT}s (upgrade/restart in progress — not an intl check failure)"
     fi
-done
-if [[ -n "$fpm_php" ]] && "$fpm_php" -m 2>/dev/null | grep -qx intl; then
-    pass "PHP FPM SAPI intl extension loaded (${fpm_php})"
 else
-    fail "PHP FPM intl extension missing — install php-intl for the active PHP-FPM version"
+    fail "PHP-FPM panel pool not detected — cannot verify FPM SAPI intl (expected /etc/php/*/fpm/php.ini and pool.d/www.conf)"
 fi
 
 if systemctl is-active --quiet mail-proxy.service; then
