@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/client_display.php';
+
 require_once __DIR__ . '/maildir_resolver.php';
 
 /**
@@ -289,6 +291,7 @@ function findClientRelationshipOwnedByReferent(
  *   local_referent_email: string,
  *   external_account_id: int|string,
  *   local_client_maildir: string,
+ *   display_name: string|null,
  *   active: int
  * } $data
  */
@@ -306,6 +309,7 @@ function updateClientRelationshipRow(
              local_referent_email = ?,
              external_account_id = ?,
              local_client_maildir = ?,
+             display_name = ?,
              active = ?,
              updated_at = NOW()
          WHERE id = ? AND referent_id = ?'
@@ -317,6 +321,7 @@ function updateClientRelationshipRow(
         $data['local_referent_email'],
         $data['external_account_id'],
         $data['local_client_maildir'],
+        $data['display_name'],
         (int) $data['active'] === 1 ? 1 : 0,
         $relationshipId,
         $referentId,
@@ -441,7 +446,8 @@ function fetchExternalAccountsForRelationshipForm(
         'SELECT ea.id, ea.email, ea.active,
                 c.id AS linked_client_id,
                 c.email AS linked_legacy_email,
-                c.external_client_email AS linked_external_client
+                c.external_client_email AS linked_external_client,
+                c.display_name AS linked_display_name
          FROM external_accounts ea
          LEFT JOIN clients c
                 ON c.external_account_id = ea.id
@@ -464,6 +470,7 @@ function fetchExternalAccountsForRelationshipForm(
  *   local_referent_email: string,
  *   external_account_id: int|null,
  *   local_client_maildir: string,
+ *   display_name: string|null,
  *   active: int,
  *   any_filled: bool,
  *   all_filled: bool
@@ -481,6 +488,9 @@ function parseRelationshipFormPost(array $post): array
         $accountId = null;
     }
     $active = isset($post['active']) ? 1 : 0;
+    $displayName = normalizeClientDisplayName(
+        isset($post['display_name']) ? (string) $post['display_name'] : null
+    );
 
     $parts = [$externalClient, $localClient, $localReferent];
     $filledCount = 0;
@@ -508,6 +518,7 @@ function parseRelationshipFormPost(array $post): array
         'local_referent_email' => $localReferent,
         'external_account_id' => $accountId,
         'local_client_maildir' => $maildir,
+        'display_name' => $displayName,
         'active' => $active,
         'any_filled' => $anyFilled,
         'all_filled' => $allFilled,
@@ -834,18 +845,25 @@ function renderRelationshipListSection(int $referentId, string $context = 'form'
                             'legacy' => 'text-slate-600',
                             default => 'text-slate-700',
                         };
-                        $extLabel = $legacy
+                        $extEmail = $legacy
                             ? (string) $row['email']
-                            : (string) ($row['external_client_email'] ?: '—');
+                            : (string) ($row['external_client_email'] ?? '');
+                        $extLabel = relationshipClientSelectorLabel(
+                            isset($row['display_name']) ? (string) $row['display_name'] : null,
+                            $extEmail
+                        );
                         ?>
                         <tr class="border-t" data-relationship-id="<?= (int)$row['id'] ?>"
                             data-status="<?= h($status['code']) ?>">
-                            <td class="px-3 py-2 font-mono">
+                            <td class="px-3 py-2">
                                 <?php if ($legacy): ?>
                                     <span class="text-slate-500"><?= h(__('relationship.legacy_email')) ?>:</span>
-                                    <?= h((string)$row['email']) ?>
+                                    <?php renderClientDisplayCell(null, (string) $row['email']); ?>
                                 <?php else: ?>
-                                    <?= h((string)($row['external_client_email'] ?: '—')) ?>
+                                    <?php renderClientDisplayCell(
+                                        isset($row['display_name']) ? (string) $row['display_name'] : null,
+                                        $extEmail
+                                    ); ?>
                                 <?php endif; ?>
                             </td>
                             <td class="px-3 py-2 font-mono">

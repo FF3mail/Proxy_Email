@@ -345,7 +345,7 @@ function renderClientsDirectory(): void
 {
     $pdo = getPdo();
     $stmt = $pdo->query(
-        'SELECT c.id, c.active, c.email AS legacy_email,
+        'SELECT c.id, c.active, c.email AS legacy_email, c.display_name,
                 c.external_client_email, c.local_client_email, c.local_referent_email,
                 c.referent_id, r.username AS referent_name, r.active AS referent_active
          FROM clients c
@@ -397,7 +397,8 @@ function renderClientsDirectory(): void
                     $refName = (string) $row['referent_name'];
                     $refId = (int) $row['referent_id'];
                     $goto = 'index.php?action=referent_view&id=' . $refId . '&tab=clients';
-                    $search = strtolower($ext . ' ' . $local . ' ' . $refName);
+                    $display = trim((string) ($row['display_name'] ?? ''));
+                    $search = strtolower($ext . ' ' . $local . ' ' . $display . ' ' . $refName);
                     $status = relationshipStatusLabel($row);
                     ?>
                     <tr tabindex="0"
@@ -405,7 +406,12 @@ function renderClientsDirectory(): void
                         data-ref-name="<?= h($refName) ?>"
                         data-search="<?= h($search) ?>"
                         class="<?= $i === 0 ? 'pm-sel' : '' ?>">
-                        <td class="pm-mono"><?= h($ext !== '' ? $ext : '—') ?></td>
+                        <td><?php
+                            renderClientDisplayCell(
+                                $display !== '' ? $display : null,
+                                $ext
+                            );
+                            ?></td>
                         <td class="pm-mono"><?= h($local !== '' ? $local : '—') ?></td>
                         <td><?= h($refName) ?></td>
                         <td>

@@ -280,7 +280,14 @@ $isPassage = $page['tab'] === PANEL_TAB_PASSAGE;
                             <td class="pm-cell-wrap">
                                 <?= h((string)($row['referent_name'] ?? '—')) ?>
                                 /
-                                <?= h((string)($row['client_name'] ?? '—')) ?>
+                                <?php
+                                $clientPrimary = (string)($row['client_display_primary'] ?? ($row['client_name'] ?? '—'));
+                                $clientSecondary = $row['client_display_secondary'] ?? null;
+                                echo h($clientPrimary);
+                                if ($clientSecondary !== null && $clientSecondary !== '') {
+                                    echo '<div class="pm-help pm-mono text-xs">', h((string)$clientSecondary), '</div>';
+                                }
+                                ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

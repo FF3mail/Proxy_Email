@@ -1590,6 +1590,14 @@ function renderRelationshipForm(): void
         <p class="text-sm text-slate-600"><?= h(__('relationship.all_or_nothing_hint')) ?></p>
 
         <div>
+            <label class="block mb-1 font-medium"><?= h(__('relationship.field.display_name')) ?></label>
+            <input type="text" name="display_name" class="w-full border rounded px-3 py-2"
+                   maxlength="<?= (int) CLIENT_DISPLAY_NAME_MAX_CHARS ?>"
+                   value="<?= h((string)($row['display_name'] ?? '')) ?>"
+                   data-testid="client-display-name">
+            <p class="text-xs text-slate-500 mt-1"><?= h(__('relationship.display_name_hint')) ?></p>
+        </div>
+        <div>
             <label class="block mb-1 font-medium"><?= h(__('relationship.field.external_client_email')) ?></label>
             <input type="email" name="external_client_email" class="w-full border rounded px-3 py-2 font-mono"
                    value="<?= h($externalClientValue) ?>"
@@ -1620,9 +1628,15 @@ function renderRelationshipForm(): void
                         $label .= ' (' . __('common.inactive') . ')';
                     }
                     if ($disabled) {
-                        $linkedLabel = trim((string)($acc['linked_external_client'] ?? '')) !== ''
+                        $linkedEmail = trim((string)($acc['linked_external_client'] ?? '')) !== ''
                             ? (string)$acc['linked_external_client']
-                            : (string)($acc['linked_legacy_email'] ?? ('#' . (int)$linkedId));
+                            : (string)($acc['linked_legacy_email'] ?? '');
+                        $linkedLabel = $linkedEmail !== ''
+                            ? relationshipClientSelectorLabel(
+                                isset($acc['linked_display_name']) ? (string) $acc['linked_display_name'] : null,
+                                $linkedEmail
+                            )
+                            : ('#' . (int)$linkedId);
                         $label .= ' — ' . __('relationship.account_linked_to', [
                             'id' => (string)(int)$linkedId,
                             'label' => $linkedLabel,
@@ -1726,6 +1740,14 @@ function handleRelationshipSave(): void
     }
 
     $data = parseRelationshipFormPost($_POST);
+
+    if (clientDisplayNameTooLong((string) ($_POST['display_name'] ?? ''))) {
+        setFlash('error', __('relationship.error.display_name_too_long'));
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
+    }
 
     if ($data['any_filled'] && !$data['all_filled']) {
         setFlash('error', __('relationship.error.all_or_nothing'));
@@ -1940,8 +1962,8 @@ function handleRelationshipSave(): void
                 'INSERT INTO clients (
                     email, referent_id,
                     external_client_email, local_client_email, local_referent_email,
-                    external_account_id, local_client_maildir, active
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                    external_account_id, local_client_maildir, display_name, active
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $data['external_client_email'],
@@ -1951,6 +1973,7 @@ function handleRelationshipSave(): void
                 $data['local_referent_email'],
                 $data['external_account_id'],
                 $data['local_client_maildir'],
+                $data['display_name'],
                 $data['active'],
             ]);
             $id = (int)$pdo->lastInsertId();

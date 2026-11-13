@@ -535,6 +535,7 @@ function renderReferentCardUi(): void
                                 : (string) ($rel['external_client_email'] ?? '');
                             $payload = [
                                 'id' => (int) $rel['id'],
+                                'display_name' => (string) ($rel['display_name'] ?? ''),
                                 'external_client_email' => relationshipExternalClientFormValue($rel),
                                 'local_client_email' => (string) ($rel['local_client_email'] ?? ''),
                                 'local_referent_email' => (string) ($rel['local_referent_email'] ?? ''),
@@ -545,7 +546,12 @@ function renderReferentCardUi(): void
                             ?>
                             <tr tabindex="0" data-open="1" data-rel='<?= h(json_encode($payload, JSON_UNESCAPED_UNICODE)) ?>'
                                 class="<?= $ri === 0 ? 'pm-sel' : '' ?>">
-                                <td><?= h($ext !== '' ? $ext : '—') ?></td>
+                                <td><?php
+                                    renderClientDisplayCell(
+                                        isset($rel['display_name']) ? (string) $rel['display_name'] : null,
+                                        $ext
+                                    );
+                                    ?></td>
                                 <td><?= h($legacy ? '—' : ((string) ($rel['local_client_email'] ?: '—'))) ?></td>
                                 <td><?= h($legacy ? '—' : ((string) ($rel['local_referent_email'] ?: '—'))) ?></td>
                                 <td>
@@ -746,6 +752,12 @@ function renderReferentCardUi(): void
                 <input type="hidden" name="referent_id" value="<?= $id ?>">
                 <input type="hidden" name="csrf_token" value="<?= $csrf ?>">
                 <?php panelReturnFields($id, 'clients'); ?>
+                <div class="pm-f pm-full">
+                    <label><?= h(__('relationship.field.display_name')) ?></label>
+                    <input type="text" name="display_name" id="rel_display_name"
+                           maxlength="<?= (int) CLIENT_DISPLAY_NAME_MAX_CHARS ?>" autocomplete="off">
+                    <span class="pm-help"><?= h(__('relationship.display_name_hint')) ?></span>
+                </div>
                 <div class="pm-f pm-full">
                     <label>Внешний адрес клиента *</label>
                     <input type="email" name="external_client_email" id="rel_external_client_email" required
@@ -976,6 +988,7 @@ function renderReferentCardUi(): void
         var isNew = !data || !data.id;
         document.getElementById('rel-dlg-title').textContent = isNew ? 'Новая связь с клиентом' : 'Связь с клиентом';
         document.getElementById('rel_id').value = isNew ? '' : String(data.id);
+        document.getElementById('rel_display_name').value = data && data.display_name ? data.display_name : '';
         document.getElementById('rel_external_client_email').value = data && data.external_client_email ? data.external_client_email : '';
         document.getElementById('rel_local_client_email').value = data && data.local_client_email ? data.local_client_email : '';
         document.getElementById('rel_local_referent_email').value = data && data.local_referent_email ? data.local_referent_email : '';

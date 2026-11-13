@@ -22,6 +22,63 @@ function assert_true(bool $cond, string $msg): void
     }
 }
 
+// --- Issue #35: client display helpers ---
+assert_true(
+    relationshipClientPrimaryLabel('Proton GmbH', 'a@b.com') === 'Proton GmbH',
+    'primary label prefers display name'
+);
+assert_true(
+    relationshipClientPrimaryLabel(null, 'a@b.com') === 'a@b.com',
+    'primary label falls back to email'
+);
+assert_true(
+    relationshipClientSecondaryEmail('Proton GmbH', 'a@b.com') === 'a@b.com',
+    'secondary email when display set'
+);
+assert_true(
+    relationshipClientSecondaryEmail(null, 'a@b.com') === null,
+    'no secondary without display'
+);
+assert_true(
+    relationshipClientSelectorLabel('Proton GmbH', 'a@b.com') === 'Proton GmbH (a@b.com)',
+    'selector label Name (email)'
+);
+assert_true(clientDisplayNameTooLong(str_repeat('x', 101)), 'display_name 101 chars rejected');
+assert_true(!clientDisplayNameTooLong(str_repeat('x', 100)), 'display_name 100 chars allowed');
+
+$clientCatalog = [
+    [
+        'id' => 1,
+        'external_client_email' => 'proton-gmbh@ext.com',
+        'local_client_email' => 'clientloc@test.loc',
+        'display_name' => 'Proton GmbH',
+    ],
+    [
+        'id' => 2,
+        'external_client_email' => 'proton-labs@ext.com',
+        'local_client_email' => 'refloc@test.loc',
+        'display_name' => 'Proton Labs',
+    ],
+    [
+        'id' => 3,
+        'external_client_email' => 'acme@ext.com',
+        'local_client_email' => 'clientloc2@test.loc',
+        'display_name' => 'Acme Inc',
+    ],
+    [
+        'id' => 4,
+        'external_client_email' => 'literal-pct@ext.com',
+        'local_client_email' => 'clientloc3@test.loc',
+        'display_name' => '100%_sure Co',
+    ],
+    [
+        'id' => 5,
+        'external_client_email' => 'proton-skip@ext.com',
+        'local_client_email' => 'ref2@test.loc',
+        'display_name' => 'Proton Skip Co',
+    ],
+];
+
 $delivered = [
     [
         'id' => 1,
@@ -29,7 +86,7 @@ $delivered = [
         'event_type' => 'delivered',
         'direction' => 'outbound',
         'referent_name' => 'Иван',
-        'client_name' => 'Proton GmbH',
+        'client_name' => 'proton-gmbh@ext.com',
         'local_mailbox' => 'clientloc@test.loc',
         'external_mailbox' => 'client@ext.com',
         'received_at' => '2026-09-18 09:59:00',
@@ -44,7 +101,7 @@ $delivered = [
         'event_type' => 'delivered',
         'direction' => 'inbound',
         'referent_name' => 'Иван',
-        'client_name' => 'Proton Labs',
+        'client_name' => 'proton-labs@ext.com',
         'local_mailbox' => 'refloc@test.loc',
         'external_mailbox' => 'p@ext.com',
         'received_at' => '2026-09-20 10:04:00',
@@ -59,7 +116,7 @@ $delivered = [
         'event_type' => 'delivered',
         'direction' => 'outbound',
         'referent_name' => 'Мария',
-        'client_name' => 'Acme Inc',
+        'client_name' => 'acme@ext.com',
         'local_mailbox' => 'clientloc2@test.loc',
         'external_mailbox' => 'acme@ext.com',
         'received_at' => '2026-09-20 23:58:00',
@@ -74,7 +131,7 @@ $delivered = [
         'event_type' => 'delivered',
         'direction' => 'outbound',
         'referent_name' => 'Мария',
-        'client_name' => '100%_sure Co',
+        'client_name' => 'literal-pct@ext.com',
         'local_mailbox' => 'clientloc3@test.loc',
         'external_mailbox' => 'sure@ext.com',
         'received_at' => '2026-09-20 23:59:00',
@@ -133,7 +190,7 @@ $disposed = [[
     'event_type' => 'skipped',
     'direction' => 'outbound',
     'referent_name' => 'Мария',
-    'client_name' => 'Proton Skip Co',
+    'client_name' => 'proton-skip@ext.com',
     'local_mailbox' => 'ref2@test.loc',
     'external_mailbox' => 's@ext.com',
     'received_at' => '2026-09-20 14:59:00',
@@ -148,11 +205,13 @@ $disposed = [[
  * Fixture PDO: mirrors SQL filter semantics (party / date / direction / event).
  * Bound order matches appendPartyFilters + appendEventTsDateRange + appendDirectionFilter + limit.
  */
-$pdo = new class ($delivered, $disposed) {
+$pdo = new class ($delivered, $disposed, $clientCatalog) {
     /** @var list<array<string,mixed>> */
     private array $delivered;
     /** @var list<array<string,mixed>> */
     private array $nonstandard;
+    /** @var list<array<string,mixed>> */
+    private array $clientCatalog;
     public string $lastPassageSql = '';
     public string $lastNonstandardSql = '';
     /** @var list<mixed> */
@@ -161,10 +220,43 @@ $pdo = new class ($delivered, $disposed) {
     public array $lastNonstandardBinds = [];
     public int $prepareCount = 0;
 
-    public function __construct(array $delivered, array $nonstandard)
+    public function __construct(array $delivered, array $nonstandard, array $clientCatalog)
     {
         $this->delivered = $delivered;
         $this->nonstandard = $nonstandard;
+        $this->clientCatalog = $clientCatalog;
+    }
+
+    public function displayNameForJournalEmail(string $email): ?string
+    {
+        foreach ($this->clientCatalog as $c) {
+            if ($email === (string)($c['external_client_email'] ?? '')
+                || $email === (string)($c['local_client_email'] ?? '')
+            ) {
+                $dn = trim((string)($c['display_name'] ?? ''));
+                return $dn !== '' ? $dn : null;
+            }
+        }
+
+        return null;
+    }
+
+    public function clientFilterMatches(string $email, string $clientLike): bool
+    {
+        $needle = $clientLike;
+        if (str_starts_with($needle, '%') && str_ends_with($needle, '%')) {
+            $needle = substr($needle, 1, -1);
+        }
+        $needle = str_replace(['\\%', '\\_', '\\\\'], ['%', '_', '\\'], $needle);
+        if (mb_stripos($email, $needle) !== false) {
+            return true;
+        }
+        $display = $this->displayNameForJournalEmail($email);
+        if ($display !== null && mb_stripos($display, $needle) !== false) {
+            return true;
+        }
+
+        return false;
     }
 
     public function query(string $query)
@@ -217,6 +309,48 @@ $pdo = new class ($delivered, $disposed) {
     public function prepare(string $query)
     {
         $this->prepareCount++;
+        if (stripos($query, 'FROM clients') !== false
+            && stripos($query, 'external_client_email IN') !== false
+        ) {
+            $catalog = $this->clientCatalog;
+            return new class ($catalog) {
+                /** @var list<array<string,mixed>> */
+                private array $catalog;
+                /** @var list<mixed> */
+                private array $params = [];
+
+                public function __construct(array $catalog)
+                {
+                    $this->catalog = $catalog;
+                }
+
+                public function execute(?array $params = null): bool
+                {
+                    $this->params = $params ?? [];
+                    return true;
+                }
+
+                public function fetchAll($mode = null): array
+                {
+                    $emails = [];
+                    $n = count($this->params) / 2;
+                    for ($i = 0; $i < $n; $i++) {
+                        $emails[(string)$this->params[$i]] = true;
+                    }
+                    $out = [];
+                    foreach ($this->catalog as $row) {
+                        $ext = (string)($row['external_client_email'] ?? '');
+                        $loc = (string)($row['local_client_email'] ?? '');
+                        if (($ext !== '' && isset($emails[$ext])) || ($loc !== '' && isset($emails[$loc]))) {
+                            $out[] = $row;
+                        }
+                    }
+
+                    return $out;
+                }
+            };
+        }
+
         $isPassage = stripos($query, "event_type = 'delivered'") !== false;
         if ($isPassage) {
             $this->lastPassageSql = $query;
@@ -296,6 +430,10 @@ $pdo = new class ($delivered, $disposed) {
                 }
                 if (stripos($this->query, 'client_name LIKE ?') !== false && $values !== []) {
                     $clientLike = (string)array_shift($values);
+                    if (stripos($this->query, 'display_name LIKE') !== false) {
+                        array_shift($values);
+                        array_shift($values);
+                    }
                 }
                 if (stripos($this->query, 'event_ts >= ?') !== false && $values !== []) {
                     $dateFrom = (string)array_shift($values);
@@ -319,13 +457,8 @@ $pdo = new class ($delivered, $disposed) {
                         continue;
                     }
                     if ($clientLike !== null) {
-                        $needle = $clientLike;
-                        if (str_starts_with($needle, '%') && str_ends_with($needle, '%')) {
-                            $needle = substr($needle, 1, -1);
-                        }
-                        $needle = str_replace(['\\%', '\\_', '\\\\'], ['%', '_', '\\'], $needle);
                         $hay = (string)($row['client_name'] ?? '');
-                        if (mb_stripos($hay, $needle) === false) {
+                        if (!$this->outer->clientFilterMatches($hay, $clientLike)) {
                             continue;
                         }
                     }
@@ -437,8 +570,12 @@ $pageDateFrom = buildRelationshipStatusPageData($pdo, [
 ]);
 assert_true(count($pageDateFrom['passage_rows']) === 1, 'passage_date_from 2026-09-21 → 1');
 assert_true(
-    ($pageDateFrom['passage_rows'][0]['client_name'] ?? '') === '100%_sure Co',
-    'date_from boundary is midnight-inclusive'
+    ($pageDateFrom['passage_rows'][0]['client_name'] ?? '') === 'literal-pct@ext.com',
+    'date_from boundary is midnight-inclusive (stored email)'
+);
+assert_true(
+    ($pageDateFrom['passage_rows'][0]['client_display_primary'] ?? '') === '100%_sure Co',
+    'date_from row resolves display name'
 );
 
 // --- N3: passage_direction ---
@@ -491,7 +628,7 @@ $pageClient = buildRelationshipStatusPageData($pdo, [
     'passage_client' => 'Proton',
 ]);
 assert_true(count($pageClient['passage_rows']) === 2, 'client Proton → 2 rows');
-$names = array_map(static fn($r) => (string)$r['client_name'], $pageClient['passage_rows']);
+$names = array_map(static fn($r) => (string)($r['client_display_primary'] ?? ''), $pageClient['passage_rows']);
 assert_true(in_array('Proton GmbH', $names, true) && in_array('Proton Labs', $names, true), 'both Proton clients');
 assert_true(!in_array('Acme Inc', $names, true), 'Acme excluded from Proton search');
 
@@ -510,8 +647,8 @@ $pagePct = buildRelationshipStatusPageData($pdo, [
 ]);
 assert_true(count($pagePct['passage_rows']) === 1, 'literal percent/underscore client match');
 assert_true(
-    ($pagePct['passage_rows'][0]['client_name'] ?? '') === '100%_sure Co',
-    'matched literal 100%_sure Co'
+    ($pagePct['passage_rows'][0]['client_name'] ?? '') === 'literal-pct@ext.com',
+    'matched literal 100%_sure Co by display name'
 );
 $pageBarePct = buildRelationshipStatusPageData($pdo, [
     'limit' => 50,
@@ -549,6 +686,14 @@ assert_true(
     str_contains($pdo->lastPassageSql, 'LIKE ? ESCAPE'),
     'passage SQL uses LIKE ESCAPE for client filter'
 );
+assert_true(
+    str_contains($pdo->lastPassageSql, 'display_name LIKE ? ESCAPE'),
+    'passage SQL matches client display_name via clients subquery'
+);
+assert_true(
+    ($page['passage_rows'][0]['client_display_primary'] ?? '') === 'Proton GmbH',
+    'passage row enriches client display from clients table'
+);
 
 // --- N4: ns date / direction / party combined ---
 $pageNsDate = buildRelationshipStatusPageData($pdo, [
@@ -559,7 +704,7 @@ $pageNsDate = buildRelationshipStatusPageData($pdo, [
 ]);
 assert_true(count($pageNsDate['nonstandard_rows']) === 1, 'ns date 2026-09-20 → 1');
 assert_true(
-    ($pageNsDate['nonstandard_rows'][0]['client_name'] ?? '') === 'Proton Skip Co',
+    ($pageNsDate['nonstandard_rows'][0]['client_display_primary'] ?? '') === 'Proton Skip Co',
     'ns date row is Proton Skip Co'
 );
 
@@ -582,7 +727,7 @@ $pageNsCombo = buildRelationshipStatusPageData($pdo, [
 ]);
 assert_true(count($pageNsCombo['nonstandard_rows']) === 1, 'ns combined filters → 1');
 assert_true(
-    ($pageNsCombo['nonstandard_rows'][0]['client_name'] ?? '') === 'Proton Skip Co',
+    ($pageNsCombo['nonstandard_rows'][0]['client_display_primary'] ?? '') === 'Proton Skip Co',
     'ns combined matches Proton Skip Co'
 );
 

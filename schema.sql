@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS clients (
     local_referent_email VARCHAR(255) NULL,
     external_account_id INT UNSIGNED NULL,
     local_client_maildir VARCHAR(512) NULL,
+    display_name VARCHAR(100) NULL DEFAULT NULL,
     active TINYINT(1) DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
