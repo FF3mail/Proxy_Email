@@ -435,6 +435,68 @@ PY
     else
         fail "clients.referent_id FK not RESTRICT — apply migrations/009 or re-run installer Database phase"
     fi
+
+    if python3 - "$DB_CONF" <<'PY'
+import configparser
+import os
+import subprocess
+import sys
+import tempfile
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+user = cfg.get("db", "db_user")
+password = cfg.get("db", "db_pass")
+name = cfg.get("db", "db_name")
+host = cfg.get("db", "db_host", fallback="127.0.0.1")
+port = cfg.get("db", "db_port", fallback="3306")
+
+
+def _cnf_value(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+fd, cnf_path = tempfile.mkstemp(prefix="verify-mysql-", suffix=".cnf")
+os.close(fd)
+os.chmod(cnf_path, 0o600)
+try:
+    with open(cnf_path, "w", encoding="utf-8") as f:
+        f.write("[client]\n")
+        f.write(f"user={_cnf_value(user)}\n")
+        f.write(f"password={_cnf_value(password)}\n")
+        f.write(f"host={_cnf_value(host)}\n")
+        f.write(f"port={_cnf_value(port)}\n")
+    cmd = [
+        "mysql",
+        f"--defaults-file={cnf_path}",
+        name,
+        "-N",
+        "-e",
+        "SHOW COLUMNS FROM clients LIKE 'display_name';",
+    ]
+    try:
+        out = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        raise SystemExit("mysql client missing")
+    if out.returncode != 0:
+        raise SystemExit(out.stderr.strip() or "mysql failed")
+    if not out.stdout.strip():
+        raise SystemExit("clients.display_name column missing")
+finally:
+    os.remove(cnf_path)
+PY
+    then
+        pass "clients.display_name column present (DAT-24)"
+    else
+        fail "clients.display_name missing — apply migrations/010 or re-run installer Database phase"
+    fi
 fi
 
 echo "=== Summary: ${FAILURES} failure(s) ==="

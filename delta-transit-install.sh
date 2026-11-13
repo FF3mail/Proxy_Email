@@ -119,6 +119,7 @@ REQUIRED_FILES=(
     "./migrations/007_panel_login_attempts.sql"
     "./migrations/008_panel_admins_must_change_password.sql"
     "./migrations/009_clients_referent_id_restrict.sql"
+    "./migrations/010_clients_display_name.sql"
     "./requirements.txt"
 )
 
@@ -544,6 +545,29 @@ ensure_panel_admins_must_change_password_column() {
     log_ok "panel_admins.must_change_password migration applied (ADD COLUMN IF NOT EXISTS only)"
 }
 
+# Idempotent DAT-24 upgrade path (issue #35): clients.display_name.
+ensure_clients_display_name_column() {
+    local migration_file="./migrations/010_clients_display_name.sql"
+    require_file "$migration_file"
+    log_info "Ensuring clients.display_name column exists (migration 010, idempotent)"
+    if ! mysql_root_client "${DB_NAME}" < "$migration_file"
+    then
+        fatal "clients.display_name migration failed (see mysql/mariadb errors above)"
+    fi
+    log_ok "clients.display_name migration applied (ADD COLUMN IF NOT EXISTS only)"
+}
+
+clients_display_name_column_exists() {
+    local count
+    count="$(
+        mysql_mail_proxy_client \
+            -N -e "SHOW COLUMNS FROM clients LIKE 'display_name';" \
+            2>/dev/null \
+            || true
+    )"
+    [[ -n "${count}" ]]
+}
+
 # Idempotent DAT-11 upgrade path (issue #161): clients.referent_id ON DELETE RESTRICT.
 ensure_clients_referent_fk_restrict() {
     local migration_file="./migrations/009_clients_referent_id_restrict.sql"
@@ -707,6 +731,7 @@ migrate_panel_auth() {
     ensure_panel_login_attempts_table
     ensure_panel_admins_must_change_password_column
     ensure_clients_referent_fk_restrict
+    ensure_clients_display_name_column
     seed_panel_master
 }
 
@@ -793,6 +818,13 @@ validate_panel_auth() {
         log_ok "Database: clients.referent_id FK uses ON DELETE RESTRICT (DAT-11)"
     else
         log_warn "Database: clients.referent_id FK not RESTRICT — apply migrations/009 or re-run installer Database phase"
+    fi
+
+    if clients_display_name_column_exists
+    then
+        log_ok "Database: clients.display_name column present (DAT-24)"
+    else
+        log_warn "Database: clients.display_name missing — apply migrations/010 or re-run installer Database phase"
     fi
 
     if panel_active_master_exists

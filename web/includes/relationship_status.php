@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/client_display.php';
+
 /**
  * Mail-passage journal observability
  * (PROMPT-79.2 / ADR-001 / 79.2l / 79.2m / 79.2n).
@@ -152,7 +154,7 @@ function formatPassageJournalLine(array $row): string
     $direction = (string)($row['direction'] ?? '');
     $eventType = (string)($row['event_type'] ?? '');
     $referent = (string)($row['referent_name'] ?? '—');
-    $client = (string)($row['client_name'] ?? '—');
+    $client = (string)($row['client_display_substitute'] ?? ($row['client_name'] ?? '—'));
     $local = (string)($row['local_mailbox'] ?? '—');
     $external = (string)($row['external_mailbox'] ?? '—');
     $received = (string)($row['received_at'] ?? '—');
@@ -199,8 +201,22 @@ function appendPartyFilters(
         $binds[] = [$referent, PDO::PARAM_STR];
     }
     if ($client !== '') {
-        $where[] = 'client_name LIKE ? ESCAPE \'\\\\\'';
-        $binds[] = ['%' . escapeSqlLikeWildcards($client) . '%', PDO::PARAM_STR];
+        $pattern = '%' . escapeSqlLikeWildcards($client) . '%';
+        $where[] = '(
+            client_name LIKE ? ESCAPE \'\\\\\'
+            OR client_name IN (
+                SELECT external_client_email FROM clients
+                WHERE display_name IS NOT NULL AND display_name <> \'\'
+                  AND display_name LIKE ? ESCAPE \'\\\\\'
+                UNION
+                SELECT local_client_email FROM clients
+                WHERE display_name IS NOT NULL AND display_name <> \'\'
+                  AND display_name LIKE ? ESCAPE \'\\\\\'
+            )
+        )';
+        $binds[] = [$pattern, PDO::PARAM_STR];
+        $binds[] = [$pattern, PDO::PARAM_STR];
+        $binds[] = [$pattern, PDO::PARAM_STR];
     }
 }
 
@@ -357,6 +373,7 @@ function buildRelationshipStatusPageData(object $pdo, array $opts = []): array
             bindAll($stmt, $binds);
             $stmt->execute();
             $passage = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $passage = enrichJournalRowsClientDisplay($passage, $pdo);
             $result['passage_rows'] = $passage;
             foreach ($passage as $row) {
                 $result['passage_lines'][] = formatPassageJournalLine($row);
@@ -390,6 +407,7 @@ function buildRelationshipStatusPageData(object $pdo, array $opts = []): array
         bindAll($stmt, $binds);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = enrichJournalRowsClientDisplay($rows, $pdo);
         foreach ($rows as &$row) {
             $row['reason_label'] = disposalReasonLabel(
                 isset($row['disposal_reason']) ? (string)$row['disposal_reason'] : null

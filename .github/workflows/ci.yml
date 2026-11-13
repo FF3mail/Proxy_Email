@@ -97,7 +97,9 @@ jobs:
                    tests/panel_standalone_password_gate_test.php \
                    tests/panel_system_info_test.php \
                    tests/panel_web_fpm_static_test.php \
-                   tests/panel_whitelist_runner_test.php; do
+                   tests/panel_whitelist_runner_test.php \
+                   tests/panel_mail_passage_journal_test.php \
+                   tests/panel_client_display_fixup_test.php; do
             echo "=== $t ==="
             php "$t" || fail=1
           done
