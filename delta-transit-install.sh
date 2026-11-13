@@ -499,13 +499,8 @@ ask_panel_master_credentials() {
 }
 
 ensure_panel_admins_table() {
-    local db_pass
-    db_pass="$(resolve_db_pass)"
     log_info "Ensuring panel_admins table exists"
-    mysql \
-        -u "${DB_USER}" \
-        -p"${db_pass}" \
-        "${DB_NAME}" \
+    mysql_mail_proxy_client \
         <<'SQL'
 CREATE TABLE IF NOT EXISTS panel_admins (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -615,13 +610,9 @@ clients_referent_fk_delete_rule_is_restrict() {
 }
 
 panel_login_attempts_table_exists() {
-    local count db_pass
-    db_pass="$(resolve_db_pass)"
+    local count
     count="$(
-        mysql \
-            -u "${DB_USER}" \
-            -p"${db_pass}" \
-            "${DB_NAME}" \
+        mysql_mail_proxy_client \
             -N -e "SHOW TABLES LIKE 'panel_login_attempts';" \
             2>/dev/null \
             || true
@@ -630,26 +621,18 @@ panel_login_attempts_table_exists() {
 }
 
 panel_master_exists() {
-    local count db_pass
-    db_pass="$(resolve_db_pass)"
+    local count
     count="$(
-        mysql \
-            -u "${DB_USER}" \
-            -p"${db_pass}" \
-            "${DB_NAME}" \
+        mysql_mail_proxy_client \
             -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master';"
     )"
     [[ "${count}" -gt 0 ]]
 }
 
 panel_active_master_exists() {
-    local count db_pass
-    db_pass="$(resolve_db_pass)"
+    local count
     count="$(
-        mysql \
-            -u "${DB_USER}" \
-            -p"${db_pass}" \
-            "${DB_NAME}" \
+        mysql_mail_proxy_client \
             -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;"
     )"
     [[ "${count}" -gt 0 ]]
@@ -674,8 +657,23 @@ Remediation (choose one):
 
   2. If the database already exists, seed master manually (hash only):
        HASH=$(php -r 'echo password_hash("YOUR_PASSWORD", PASSWORD_DEFAULT);')
-       mysql -u mail_proxy -p mail_proxy -e \
+       umask 077
+       APP_CNF=$(mktemp)
+       chmod 600 "$APP_CNF"
+       read -rsp "mail_proxy DB password: " _MP_PASS; echo
+       MYSQL_CNF_PASS="$_MP_PASS" python3 - "$APP_CNF" mail_proxy <<'PY'
+import os, sys
+cnf, user = sys.argv[1], sys.argv[2]
+password = os.environ.pop("MYSQL_CNF_PASS", "")
+escaped = password.replace("\\", "\\\\").replace('"', '\\"')
+with open(cnf, "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f'user="{user}"\n')
+    f.write(f'password="{escaped}"\n')
+PY
+       mysql --defaults-file="$APP_CNF" mail_proxy -e \
          "INSERT INTO panel_admins (username, password_hash, role, active) VALUES ('YOUR_USER', '$HASH', 'master', 1);"
+       rm -f "$APP_CNF"
 
 Then re-run the installer.
 EOF
@@ -690,10 +688,7 @@ try_detect_active_panel_master() {
     [[ -n "${db_pass}" ]] || return 1
 
     count="$(
-        mysql \
-            -u "${DB_USER}" \
-            -p"${db_pass}" \
-            "${DB_NAME}" \
+        mysql_mail_proxy_client \
             -N -e "SELECT COUNT(*) FROM panel_admins WHERE role = 'master' AND active = 1;" \
             2>/dev/null || true
     )"
@@ -781,13 +776,7 @@ seed_panel_master() {
     hash_sql="$(escape_sql_string "${hash}")"
     hash=""
 
-    local db_pass
-    db_pass="$(resolve_db_pass)"
-
-    mysql \
-        -u "${DB_USER}" \
-        -p"${db_pass}" \
-        "${DB_NAME}" \
+    mysql_mail_proxy_client \
         -e "INSERT INTO panel_admins (username, password_hash, role, active)
             VALUES ('${user_sql}', '${hash_sql}', 'master', 1);"
 
@@ -1061,10 +1050,7 @@ create_database_user() {
 }
 
 schema_already_installed() {
-    mysql \
-        -u "${DB_USER}" \
-        -p"${PARAM_DB_PASS}" \
-        "${DB_NAME}" \
+    mysql_mail_proxy_client \
         -e "SHOW TABLES;" \
         2>/dev/null \
         | grep -q .
@@ -1232,12 +1218,7 @@ mysql_mail_proxy_client() {
 }
 
 validate_db_connectivity() {
-    local db_pass
-    db_pass="$(read_db_pass_from_conf)"
-    mysql \
-        -u "${DB_USER}" \
-        -p"${db_pass}" \
-        "${DB_NAME}" \
+    mysql_mail_proxy_client \
         -e "SELECT 1;" \
         >/dev/null
 }
@@ -3504,14 +3485,10 @@ audit_dbconf_permissions() {
 }
 
 audit_database_contents() {
-    local tables_out db_pass
+    local tables_out
     tables_out="$(mktemp)"
     register_tmpfile "$tables_out"
-    db_pass="$(read_db_pass_from_conf)"
-    mysql \
-        -u "${DB_USER}" \
-        -p"${db_pass}" \
-        "${DB_NAME}" \
+    mysql_mail_proxy_client \
         -e "SHOW TABLES;" \
         > "$tables_out"
     grep -q . "$tables_out" || fatal "Database schema appears empty"
