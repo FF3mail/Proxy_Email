@@ -100,6 +100,61 @@ def _raw_nested_attachment(
     return (hdr + body).encode('utf-8')
 
 
+def _raw_message_inner_zip(
+    subtype: str,
+    *,
+    disposition: str | None = None,
+    ctype_header: str | None = None,
+    subject: str = 'inner.zip',
+) -> bytes:
+    """RAW MIME: message/<subtype> encapsulating inner multipart with inner.zip."""
+    b64 = base64.b64encode(b'PK\x03\x04data').decode('ascii')
+    zip_body = (
+        'Content-Type: application/zip; name="inner.zip"\r\n'
+        'Content-Disposition: attachment; filename="inner.zip"\r\n'
+        'Content-Transfer-Encoding: base64\r\n'
+        '\r\n'
+        '%s'
+    ) % b64
+    inner_msg = (
+        'MIME-Version: 1.0\r\n'
+        'Content-Type: multipart/mixed; boundary="inner"\r\n'
+        '\r\n'
+        '--inner\r\n'
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        '\r\n'
+        '\r\n'
+        '--inner\r\n'
+        '%s\r\n'
+        '--inner--\r\n'
+    ) % zip_body
+    ctype = ctype_header or ('message/%s' % subtype)
+    disp_line = ''
+    if disposition == 'attachment':
+        disp_line = 'Content-Disposition: attachment; filename="fwd.eml"\r\n'
+    elif disposition == 'inline':
+        disp_line = 'Content-Disposition: inline; filename="fwd.eml"\r\n'
+    body = (
+        'From: client-a@lab-a.example.test\r\n'
+        'To: referent-a@lab-a.example.test\r\n'
+        'Subject: %s\r\n'
+        'MIME-Version: 1.0\r\n'
+        'Content-Type: multipart/mixed; boundary="mix"\r\n'
+        '\r\n'
+        '--mix\r\n'
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        '\r\n'
+        '\r\n'
+        '--mix\r\n'
+        'Content-Type: %s\r\n'
+        '%s'
+        '\r\n'
+        '%s'
+        '--mix--\r\n'
+    ) % (subject, ctype, disp_line, inner_msg)
+    return body.encode('utf-8')
+
+
 _RAW_DSN = b"""From: mailer-daemon@example.test
 To: client-a@lab-a.example.test
 Subject: Delivery Status Notification
@@ -276,6 +331,51 @@ class Issue34ClassifyCases(unittest.TestCase):
         self.assertEqual(c_rfc.status, c_glob.status)
         self.assertEqual(c_rfc.reason, c_glob.reason)
         self.assertEqual(c_glob.reason, DISPOSAL_NESTED_MESSAGE)
+
+
+class Issue34OpaqueNonAttachmentCases(unittest.TestCase):
+    """
+    Fixup a–e: message/* without attachment disposition must not unwrap inner.zip.
+
+    Same opaque boundary as message/rfc822 today (invalid / zero_attachments).
+  """
+
+    def test_fixup_a_global_no_content_disposition(self) -> None:
+        c = classify_inbound_attachments(_raw_message_inner_zip('global'))
+        self.assertEqual(c.status, 'invalid')
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+        self.assertFalse(c.approved_filenames)
+
+    def test_fixup_b_global_inline(self) -> None:
+        c = classify_inbound_attachments(
+            _raw_message_inner_zip('global', disposition='inline')
+        )
+        self.assertEqual(c.status, 'invalid')
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+
+    def test_fixup_c_x_future_type_no_content_disposition(self) -> None:
+        c = classify_inbound_attachments(_raw_message_inner_zip('x-future-type'))
+        self.assertEqual(c.status, 'invalid')
+        self.assertEqual(c.reason, DISPOSAL_ZERO)
+
+    def test_fixup_d_x_future_type_attachment_nested_message(self) -> None:
+        c = classify_inbound_attachments(
+            _raw_message_inner_zip('x-future-type', disposition='attachment')
+        )
+        self.assertEqual(c.status, 'invalid')
+        self.assertEqual(c.reason, DISPOSAL_NESTED_MESSAGE)
+        self.assertNotIn('inner.zip', tuple(c.approved_filenames or ()))
+
+    def test_fixup_e_message_global_mixed_case_attachment(self) -> None:
+        c = classify_inbound_attachments(
+            _raw_message_inner_zip(
+                'global',
+                disposition='attachment',
+                ctype_header='Message/Global',
+            )
+        )
+        self.assertEqual(c.status, 'invalid')
+        self.assertEqual(c.reason, DISPOSAL_NESTED_MESSAGE)
 
 
 class Issue34DaemonGlobalNestedTest(unittest.TestCase):

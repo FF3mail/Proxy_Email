@@ -361,8 +361,6 @@ def _walk_non_attachment_named(
                         disposition = (part.get('Content-Disposition') or '').lower()
                         found.append((name, disposition or '(none)'))
             return
-        elif _is_message_rfc822_type(part):
-            return
     if part.is_multipart():
         payload = part.get_payload()
         if not isinstance(payload, list):
