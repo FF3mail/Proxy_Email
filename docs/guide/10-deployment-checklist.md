@@ -182,7 +182,26 @@ grep -E "IMAP size skip|Invalid (auth_type|imap_encryption)" /var/log/mail-proxy
 - [ ] После обновления панели без установщика — применён `migrations/007_panel_login_attempts.sql` или прогон установщика (Database)
 
 ```bash
-mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+umask 077
+APP_CNF="$(mktemp)"
+chmod 600 "$APP_CNF"
+python3 - /etc/mail-proxy/db.conf "$APP_CNF" <<'PY'
+import configparser
+import sys
+
+def cv(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cv(cfg.get('db', 'db_user'))}\n")
+    f.write(f"password={cv(cfg.get('db', 'db_pass'))}\n")
+PY
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+rm -f "$APP_CNF"
 ./scripts/verify-install-regression.sh
 ```
 
@@ -192,7 +211,26 @@ mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
 - [ ] После обновления панели без установщика — применён `migrations/008_panel_admins_must_change_password.sql` или прогон установщика (Database)
 
 ```bash
-mysql -u mail_proxy -p mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
+umask 077
+APP_CNF="$(mktemp)"
+chmod 600 "$APP_CNF"
+python3 - /etc/mail-proxy/db.conf "$APP_CNF" <<'PY'
+import configparser
+import sys
+
+def cv(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cv(cfg.get('db', 'db_user'))}\n")
+    f.write(f"password={cv(cfg.get('db', 'db_pass'))}\n")
+PY
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
+rm -f "$APP_CNF"
 ./scripts/verify-install-regression.sh
 ```
 
