@@ -300,6 +300,7 @@ return [
     'relationship.field.display_name' => 'Отображаемое имя клиента',
     'relationship.display_name_hint' => 'Необязательно; в панели показывается вместо адреса, если задано. Маршрутизация почты по-прежнему использует адреса ниже.',
     'relationship.error.display_name_too_long' => 'Отображаемое имя клиента — не более 100 символов.',
+    'relationship.error.display_name_invalid' => 'Отображаемое имя клиента содержит недопустимые управляющие символы.',
     'relationship.field.external_client_email' => 'external_client_email',
     'relationship.field.local_client_email' => 'local_client_email',
     'relationship.field.local_referent_email' => 'local_referent_email',

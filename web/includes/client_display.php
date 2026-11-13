@@ -27,6 +27,16 @@ function clientDisplayNameTooLong(?string $raw): bool
     return mb_strlen($s) > CLIENT_DISPLAY_NAME_MAX_CHARS;
 }
 
+/** Reject C0/C1 controls, DEL, and Unicode line/paragraph separators (issue #35 fixup). */
+function clientDisplayNameInvalid(?string $raw): bool
+{
+    if ($raw === null || $raw === '') {
+        return false;
+    }
+
+    return (bool) preg_match('/[\x00-\x1F\x7F\x{2028}\x{2029}]/u', $raw);
+}
+
 function relationshipClientPrimaryLabel(?string $displayName, string $email): string
 {
     $dn = normalizeClientDisplayName($displayName);

@@ -42,6 +42,9 @@ assert_contains($index, 'function renderRelationshipForm():', 'renderRelationshi
 assert_contains($index, 'function handleRelationshipSave():', 'handleRelationshipSave defined');
 assert_contains($index, 'name="display_name"', 'relationship form has display_name field');
 assert_contains($index, 'clientDisplayNameTooLong', 'save validates display_name length');
+assert_contains($index, 'clientDisplayNameInvalid', 'save validates display_name control chars');
+assert_contains($ru, 'relationship.error.display_name_invalid', 'RU display_name invalid control chars');
+assert_contains($en, 'relationship.error.display_name_invalid', 'EN display_name invalid control chars');
 assert_contains($helper, 'display_name = ?', 'update persists display_name');
 assert_contains($helper, 'client_display.php', 'relationship editor loads client_display');
 assert_contains($ru, 'relationship.field.display_name', 'RU display_name label');

@@ -1749,6 +1749,14 @@ function handleRelationshipSave(): void
         ]);
     }
 
+    if (clientDisplayNameInvalid((string) ($_POST['display_name'] ?? ''))) {
+        setFlash('error', __('relationship.error.display_name_invalid'));
+        panelRedirectPreferReferentCard($referentId, 'relationship_form', [
+            'referent_id' => $referentId,
+            'id' => $id > 0 ? $id : null,
+        ]);
+    }
+
     if ($data['any_filled'] && !$data['all_filled']) {
         setFlash('error', __('relationship.error.all_or_nothing'));
         if ((string) ($_POST['return_to'] ?? '') === 'referent_view') {
