@@ -248,8 +248,19 @@ def _content_disposition_is_attachment(part: Message) -> bool:
     return (disp or '').lower() == 'attachment'
 
 
-def _is_nested_rfc822(part: Message) -> bool:
-    return (part.get_content_type() or '').lower() == 'message/rfc822'
+def _content_type_lower(part: Message) -> str:
+    try:
+        return (part.get_content_type() or '').lower()
+    except Exception:
+        return ''
+
+
+def _is_message_rfc822_type(part: Message) -> bool:
+    return _content_type_lower(part) == 'message/rfc822'
+
+
+def _is_message_type(part: Message) -> bool:
+    return _content_type_lower(part).startswith('message/')
 
 
 def _walk_attachments(
@@ -258,10 +269,11 @@ def _walk_attachments(
     *,
     nested_policy: str = NESTED_POLICY_ERROR,
 ) -> None:
-    if _is_nested_rfc822(part):
+    if _is_message_type(part):
         if nested_policy == NESTED_POLICY_ERROR:
-            raise ValueError('nested_rfc822')
-        if nested_policy == NESTED_POLICY_OPAQUE:
+            if _is_message_rfc822_type(part):
+                raise ValueError('nested_rfc822')
+        elif nested_policy == NESTED_POLICY_OPAQUE:
             if _content_disposition_is_attachment(part):
                 found.append(part)
             return
@@ -336,17 +348,19 @@ def _walk_non_attachment_named(
     nested_policy: str = NESTED_POLICY_ERROR,
 ) -> None:
     """Collect leaf non-attachment parts that have a filename (for detail/DEBUG)."""
-    if _is_nested_rfc822(part):
+    if _is_message_type(part):
         if nested_policy == NESTED_POLICY_ERROR:
-            raise ValueError('nested_rfc822')
-        if not _content_disposition_is_attachment(part):
-            raw_name = part.get_filename()
-            if raw_name and str(raw_name).strip():
-                name = decode_mime_filename(str(raw_name))
-                if name:
-                    disposition = (part.get('Content-Disposition') or '').lower()
-                    found.append((name, disposition or '(none)'))
-        return
+            if _is_message_rfc822_type(part):
+                raise ValueError('nested_rfc822')
+        elif nested_policy == NESTED_POLICY_OPAQUE:
+            if not _content_disposition_is_attachment(part):
+                raw_name = part.get_filename()
+                if raw_name and str(raw_name).strip():
+                    name = decode_mime_filename(str(raw_name))
+                    if name:
+                        disposition = (part.get('Content-Disposition') or '').lower()
+                        found.append((name, disposition or '(none)'))
+            return
     if part.is_multipart():
         payload = part.get_payload()
         if not isinstance(payload, list):
@@ -561,7 +575,7 @@ def classify_inbound_attachments(
     parts: List[PartClassification] = []
     for idx, part in enumerate(attachments):
         ctype = (part.get_content_type() or '').lower()
-        if _is_nested_rfc822(part) and _content_disposition_is_attachment(part):
+        if _is_message_type(part) and _content_disposition_is_attachment(part):
             filename = try_attachment_filename(part) or NESTED_MESSAGE_DISPLAY
             parts.append(
                 PartClassification(
