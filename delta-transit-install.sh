@@ -1201,11 +1201,12 @@ resolve_db_pass() {
     read_db_pass_from_conf
 }
 
-# mail_proxy mysql CLI without -p on argv (password in chmod-600 option file only).
-mysql_mail_proxy_client() {
-    local cnf db_pass rc
+# Shared mail_proxy mysql CLI: password in chmod-600 option file only (never -p on argv).
+_mysql_mail_proxy_client_with_pass() {
+    local db_pass="$1"
+    shift
+    local cnf rc
     trap - RETURN
-    db_pass="$(resolve_db_pass)"
     cnf="$(mktemp)"
     register_tmpfile "$cnf"
     trap "rm -f $(printf '%q' "$cnf")" RETURN
@@ -1217,8 +1218,18 @@ mysql_mail_proxy_client() {
     return "$rc"
 }
 
+# Uses PARAM_DB_PASS when set (Database phase), else db.conf.
+mysql_mail_proxy_client() {
+    _mysql_mail_proxy_client_with_pass "$(resolve_db_pass)" "$@"
+}
+
+# Always db.conf — validation/audit must not trust PARAM_DB_PASS alone.
+mysql_mail_proxy_client_from_conf() {
+    _mysql_mail_proxy_client_with_pass "$(read_db_pass_from_conf)" "$@"
+}
+
 validate_db_connectivity() {
-    mysql_mail_proxy_client \
+    mysql_mail_proxy_client_from_conf \
         -e "SELECT 1;" \
         >/dev/null
 }
@@ -3488,7 +3499,7 @@ audit_database_contents() {
     local tables_out
     tables_out="$(mktemp)"
     register_tmpfile "$tables_out"
-    mysql_mail_proxy_client \
+    mysql_mail_proxy_client_from_conf \
         -e "SHOW TABLES;" \
         > "$tables_out"
     grep -q . "$tables_out" || fatal "Database schema appears empty"

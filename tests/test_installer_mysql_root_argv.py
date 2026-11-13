@@ -441,9 +441,11 @@ mysql_write_client_option_file "{cnf}" "roundtrip_user" "$1"
         self.assertRegex(body, r'trap "rm -f \$\(printf \'%q\' "\$cnf"\)" RETURN')
 
     def test_mysql_mail_proxy_client_return_trap_for_temp_cnf(self) -> None:
-        body = _named_function_body(_read_installer(), "mysql_mail_proxy_client")
+        body = _named_function_body(_read_installer(), "_mysql_mail_proxy_client_with_pass")
         self.assertIn("trap - RETURN", body)
         self.assertRegex(body, r'trap "rm -f \$\(printf \'%q\' "\$cnf"\)" RETURN')
+        wrapper = _named_function_body(_read_installer(), "mysql_mail_proxy_client")
+        self.assertIn("_mysql_mail_proxy_client_with_pass", wrapper)
 
     def test_installer_and_verify_never_mutate_root_my_cnf(self) -> None:
         """Issue #145 anomaly: operator /root/.my.cnf must never be touched by repo scripts."""

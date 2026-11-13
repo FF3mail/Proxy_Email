@@ -102,11 +102,32 @@ class InstallerMysqlMailProxyArgvStaticTests(unittest.TestCase):
 
     def test_mysql_mail_proxy_client_uses_option_file_not_p_flag(self) -> None:
         body = _named_function_body(_read_installer(), "mysql_mail_proxy_client")
+        self.assertIn("_mysql_mail_proxy_client_with_pass", body)
+        self.assertIn("resolve_db_pass", body)
+        self.assertNotRegex(body, r"\s-p")
+
+    def test_shared_client_helper_uses_option_file_not_p_flag(self) -> None:
+        body = _named_function_body(_read_installer(), "_mysql_mail_proxy_client_with_pass")
         self.assertIn("mysql_client_with_defaults_file", body)
         self.assertIn('rm -f "$cnf"', body)
         self.assertIn("mysql_write_client_option_file", body)
-        self.assertIn("resolve_db_pass", body)
         self.assertNotRegex(body, r"\s-p")
+
+    def test_validate_db_connectivity_uses_from_conf_not_resolve_db_pass(self) -> None:
+        body = _named_function_body(_read_installer(), "validate_db_connectivity")
+        self.assertIn("mysql_mail_proxy_client_from_conf", body)
+        self.assertNotIn("mysql_mail_proxy_client ", body.replace("mysql_mail_proxy_client_from_conf", ""))
+        self.assertNotIn("resolve_db_pass", body)
+
+    def test_audit_database_contents_uses_from_conf_not_resolve_db_pass(self) -> None:
+        body = _named_function_body(_read_installer(), "audit_database_contents")
+        self.assertIn("mysql_mail_proxy_client_from_conf", body)
+        self.assertNotIn("resolve_db_pass", body)
+
+    def test_from_conf_helper_reads_db_conf_only(self) -> None:
+        body = _named_function_body(_read_installer(), "mysql_mail_proxy_client_from_conf")
+        self.assertIn("read_db_pass_from_conf", body)
+        self.assertNotIn("resolve_db_pass", body)
 
 
 class InstallerMysqlMailProxyShimTests(unittest.TestCase):
@@ -272,6 +293,58 @@ class InstallerMysqlMailProxyShimTests(unittest.TestCase):
             )
             subprocess.run(["bash", "-c", script], env=env, check=True)
             self.assertTrue(marker.is_file(), "caller RETURN trap did not run")
+
+    def test_validate_and_audit_use_db_conf_password_when_param_differs(self) -> None:
+        conf_pass = "CONF-PASS-ONLY-7a9c"
+        param_pass = "PARAM-PASS-MUST-NOT-APPEAR"
+        self.assertNotEqual(conf_pass, param_pass)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            argv_log = tmp_path / "argv.log"
+            cnf_hook = tmp_path / "cnf_hook.log"
+            _shim_mysql(tmp_path, argv_log, cnf_hook)
+            db_conf = tmp_path / "db.conf"
+            db_conf.write_text(
+                "[db]\n"
+                "db_host = 127.0.0.1\n"
+                "db_port = 3306\n"
+                "db_name = mail_proxy_shim\n"
+                "db_user = mail_proxy\n"
+                f"db_pass = {conf_pass}\n",
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
+                "DB_CONF": str(db_conf),
+                "PARAM_DB_PASS": param_pass,
+            }
+            script = textwrap.dedent(
+                f"""
+                set +o histexpand
+                set -euo pipefail
+                source "{INSTALLER}"
+                DB_CONF="{db_conf}"
+                DB_NAME="mail_proxy_shim"
+                DB_USER="mail_proxy"
+                PARAM_DB_PASS="{param_pass}"
+                register_tmpfile() {{ :; }}
+                validate_db_connectivity
+                audit_database_contents() {{
+                  local tables_out
+                  tables_out="$(mktemp)"
+                  register_tmpfile "$tables_out"
+                  mysql_mail_proxy_client_from_conf -e "SHOW TABLES;" > "$tables_out" || true
+                  rm -f "$tables_out"
+                }}
+                audit_database_contents
+                """
+            )
+            subprocess.run(["bash", "-c", script], env=env, check=True)
+            hook = _cnf_hook_text(cnf_hook)
+            self.assertIn(conf_pass, hook)
+            self.assertNotIn(param_pass, hook)
+            self.assertNotIn(param_pass, _argv_blob(argv_log))
 
 
 class InstallerMysqlMailProxyMutationGuardTests(unittest.TestCase):
