@@ -181,8 +181,8 @@ def _run_validate_cli_only(
     php = bindir / "php"
     system_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     if php_missing:
-        env_path = f"{tmp / 'empty_bin'}:{system_path}"
         (tmp / "empty_bin").mkdir(exist_ok=True)
+        env_path = str(tmp / "empty_bin")
     else:
         _write_slow_stub(php, no_intl=no_intl)
         env_path = f"{bindir}:{system_path}"
@@ -201,8 +201,9 @@ def _run_validate_cli_only(
         """
     )
     env = {**os.environ, "PATH": env_path}
+    bash_bin = os.environ.get("BASH", "/bin/bash")
     return subprocess.run(
-        ["bash", "-c", script],
+        [bash_bin, "-c", script],
         env=env,
         capture_output=True,
         text=True,
