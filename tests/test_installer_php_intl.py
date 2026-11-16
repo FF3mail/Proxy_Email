@@ -27,7 +27,8 @@ class InstallerPhpIntlTests(unittest.TestCase):
     def test_validate_php_intl_extensions_present(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("validate_php_intl_extensions()", text)
-        self.assertIn('php -m 2>/dev/null | grep -qx intl', text)
+        self.assertIn('mods="$(php -m 2>/dev/null || true)"', text)
+        self.assertIn('grep -qx intl <<<"$mods"', text)
         self.assertIn("php_fpm_intl_fpm_sapi_has_intl", text)
         self.assertIn("php_fpm_intl_wait_panel_ready", text)
 

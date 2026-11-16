@@ -2231,7 +2231,9 @@ validate_php_intl_extensions() {
         fatal "PHP CLI missing — install php-cli and php-intl before continuing"
     fi
 
-    if ! php -m 2>/dev/null | grep -qx intl
+    local mods=""
+    mods="$(php -m 2>/dev/null || true)"
+    if ! grep -qx intl <<<"$mods"
     then
         fatal "PHP CLI intl extension missing — install package php-intl (Normalizer required for panel login throttle)"
     fi
