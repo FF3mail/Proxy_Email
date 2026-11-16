@@ -242,10 +242,31 @@ def _run_create_db_user_harness(
 
 
 class InstallerCreateUserStdinStaticTests(unittest.TestCase):
+    def test_identified_by_argv_guard_pattern_required(self) -> None:
+        """M5: removing this module's mysql_root_exec/IDENTIFIED BY regex must fail tests."""
+        source = Path(__file__).read_text(encoding="utf-8")
+        self.assertRegex(
+            source,
+            r"_IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC\s*=\s*re\.compile\(",
+            "static argv guard pattern _IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC must stay defined",
+        )
+        self.assertIn(
+            'r\'mysql_root_exec\\s+"[^"]*IDENTIFIED\\s+BY\'',
+            source,
+            "argv guard must keep mysql_root_exec … IDENTIFIED BY regex literal",
+        )
+        self.assertIn(
+            "_IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC.search(text)",
+            source,
+            "test_no_identified_by must call the argv guard regex",
+        )
+
     def test_no_identified_by_in_mysql_root_exec_argv(self) -> None:
+        guard = _IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC
+        self.assertIsNotNone(guard, "argv IDENTIFIED BY guard pattern must be wired")
         for path in (INSTALLER, *SCRIPTS):
             text = path.read_text(encoding="utf-8")
-            m = _IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC.search(text)
+            m = guard.search(text)
             self.assertIsNone(
                 m,
                 f"{path.name}: IDENTIFIED BY must not appear in mysql_root_exec argv SQL",
