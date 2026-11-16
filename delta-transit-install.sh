@@ -432,6 +432,12 @@ mysql_root_exec() {
     mysql_root_client -e "$sql"
 }
 
+# Run SQL that contains secrets via stdin (never -e on argv).
+mysql_root_exec_stdin() {
+    local sql="$1"
+    printf '%s\n' "$sql" | mysql_root_client
+}
+
 ask_mysql_root_password() {
     if mysql_root_can_use_socket
     then
@@ -1035,11 +1041,11 @@ create_database_user() {
     local db_pass_sql
     db_pass_sql="$(escape_sql_string "$PARAM_DB_PASS")"
 
-    mysql_root_exec "
+    mysql_root_exec_stdin "
         CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost'
         IDENTIFIED BY '${db_pass_sql}';
     "
-    mysql_root_exec "
+    mysql_root_exec_stdin "
         ALTER USER '${DB_USER}'@'localhost'
         IDENTIFIED BY '${db_pass_sql}';
     "
