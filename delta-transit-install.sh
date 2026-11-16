@@ -433,9 +433,11 @@ mysql_root_exec() {
 }
 
 # Run SQL that contains secrets via stdin (never -e on argv).
+# Process substitution keeps mysql_root_client in the current shell so
+# register_tmpfile / RETURN cleanup behave like other mysql_root_client calls.
 mysql_root_exec_stdin() {
     local sql="$1"
-    printf '%s\n' "$sql" | mysql_root_client
+    mysql_root_client < <(printf '%s\n' "$sql")
 }
 
 ask_mysql_root_password() {

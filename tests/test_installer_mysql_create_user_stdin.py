@@ -15,7 +15,13 @@ ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "delta-transit-install.sh"
 SCRIPTS = tuple((ROOT / "scripts").glob("*.sh"))
 
-_FAKE_PASS = 'pa$`"s s\'\\'
+_FAKE_PASS_SPECIAL = 'pa$`"s s\'\\'
+_FAKE_PASS_PLAIN = "MailProxyPlain9z"
+
+_PASS_CASES = (
+    ("special", _FAKE_PASS_SPECIAL),
+    ("plain", _FAKE_PASS_PLAIN),
+)
 
 _IDENTIFIED_BY_IN_MYSQL_ROOT_EXEC = re.compile(
     r'mysql_root_exec\s+"[^"]*IDENTIFIED\s+BY',
@@ -28,6 +34,16 @@ _FORBIDDEN_SECRET_IN_E_ARGV = (
     re.compile(r"-e\s*'[^']*\$\{db_pass_sql\}"),
     re.compile(r"-e\s*'[^']*\$\{PARAM_DB_PASS\}"),
 )
+
+
+def _escape_sql_string(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _quote_free_prefix(password: str) -> str:
+    if "'" in password:
+        return password.split("'", 1)[0]
+    return password
 
 
 def _read_installer() -> str:
@@ -44,6 +60,47 @@ def _mysql_root_exec_sql_literals(text: str) -> list[str]:
                 break
             i += 1
     return literals
+
+
+def _assert_argv_has_no_secret_sql(argv: str, password: str) -> None:
+    blob = argv.replace("---", "")
+    escaped = _escape_sql_string(password)
+    prefix = _quote_free_prefix(password)
+    forbidden = (
+        "IDENTIFIED BY",
+        "CREATE USER",
+        "ALTER USER",
+        password,
+        escaped,
+        prefix,
+        "--init-command",
+        "--execute",
+    )
+    for needle in forbidden:
+        if needle:
+            assert needle not in blob, f"argv must not contain {needle!r}"
+
+
+def _assert_stdin_has_user_sql(stdin: str, password: str) -> None:
+    escaped = _escape_sql_string(password)
+    prefix = _quote_free_prefix(password)
+    assert stdin.count("IDENTIFIED BY") == 2, stdin
+    assert "CREATE USER" in stdin, stdin
+    assert "ALTER USER" in stdin, stdin
+    assert password in stdin or escaped in stdin, "password literal on stdin"
+    assert prefix in stdin, "password prefix on stdin"
+
+
+def _assert_no_password_in_tree(root: Path, password: str) -> None:
+    escaped = _escape_sql_string(password)
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name in ("argv.log", "stdin.log", "cnf_hook.log", "reg.log"):
+            continue
+        text = path.read_bytes().decode("utf-8", "replace")
+        assert password not in text, f"password in unexpected file {path}"
+        assert escaped not in text, f"escaped password in unexpected file {path}"
 
 
 def _shim_mysql_stdin(
@@ -95,26 +152,59 @@ def _run_create_db_user_harness(
     tmp_path: Path,
     *,
     use_socket: bool,
+    fake_pass: str,
     fail_create_user: bool = False,
     shim_root_pass: str = "",
-) -> tuple[int, str, str, str]:
+    stub_register: bool = True,
+    real_install_traps: bool = False,
+) -> tuple[int, str, str, str, str]:
     argv_log = tmp_path / "argv.log"
     stdin_log = tmp_path / "stdin.log"
     cnf_hook = tmp_path / "cnf_hook.log"
+    reg_log = tmp_path / "reg.log"
     _shim_mysql_stdin(tmp_path, argv_log, stdin_log, cnf_hook)
     env = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
         "MYSQL_SHIM_FAIL_CREATE_USER": "1" if fail_create_user else "0",
         "MYSQL_SHIM_EXIT": "0",
-        "SHIM_FAKE_DB_PASS": _FAKE_PASS,
+        "SHIM_FAKE_DB_PASS": fake_pass,
         "SHIM_ROOT_PASS": shim_root_pass,
+        "SHIM_REG_LOG": str(reg_log),
     }
     socket_override = (
         "mysql_root_can_use_socket() { return 0; }"
         if use_socket
         else "mysql_root_can_use_socket() { return 1; }"
     )
+    register_stub = (
+        "register_tmpfile() { :; }"
+        if stub_register
+        else textwrap.dedent(
+            """
+            register_tmpfile() {
+                TMP_FILES+=("$1")
+                echo "$1" >> "${SHIM_REG_LOG:?}"
+            }
+            """
+        ).strip()
+    )
+    traps_line = (
+        "install_traps"
+        if real_install_traps
+        else textwrap.dedent(
+            """
+            install_traps() { :; }
+            """
+        ).strip()
+    )
+    track_block = ""
+    if not stub_register:
+        track_block = textwrap.dedent(
+            f"""
+            printf 'REGISTERED_COUNT=%s\\n' "$(wc -l < "{reg_log}" 2>/dev/null || echo 0)"
+            """
+        )
     script = textwrap.dedent(
         f"""
         set +o histexpand
@@ -122,17 +212,18 @@ def _run_create_db_user_harness(
         cd "{ROOT}"
         source "./delta-transit-install.sh"
         {socket_override}
+        {register_stub}
         MYSQL_ROOT_PASSWORD="${{SHIM_ROOT_PASS-}}"
         DB_NAME="mail_proxy_shim"
         DB_USER="mail_proxy"
         PARAM_DB_PASS="${{SHIM_FAKE_DB_PASS:?}}"
-        register_tmpfile() {{ :; }}
-        install_traps() {{ :; }}
+        {traps_line}
         log_info() {{ :; }}
         log_ok() {{ :; }}
         log_warn() {{ :; }}
         create_database
         create_database_user
+        {track_block}
         """
     )
     if fail_create_user:
@@ -145,8 +236,9 @@ def _run_create_db_user_harness(
     )
     argv_blob = argv_log.read_bytes().decode("utf-8", "replace") if argv_log.is_file() else ""
     stdin_blob = stdin_log.read_bytes().decode("utf-8", "replace") if stdin_log.is_file() else ""
-    cnf_hook = cnf_hook.read_text(encoding="utf-8") if (tmp_path / "cnf_hook.log").is_file() else ""
-    return proc.returncode, argv_blob, stdin_blob, cnf_hook
+    cnf_blob = cnf_hook.read_text(encoding="utf-8") if cnf_hook.is_file() else ""
+    reg_blob = reg_log.read_text(encoding="utf-8") if reg_log.is_file() else ""
+    return proc.returncode, proc.stdout, argv_blob, stdin_blob, cnf_blob + ("\n" + reg_blob if reg_blob else "")
 
 
 class InstallerCreateUserStdinStaticTests(unittest.TestCase):
@@ -181,7 +273,17 @@ class InstallerCreateUserStdinStaticTests(unittest.TestCase):
     def test_mysql_root_exec_stdin_defined(self) -> None:
         text = _read_installer()
         self.assertRegex(text, r"mysql_root_exec_stdin\(\)")
-        self.assertIn('printf \'%s\\n\' "$sql" | mysql_root_client', text)
+        body = re.search(
+            r"(?m)^mysql_root_exec_stdin\(\) \{\n(?P<body>.*?)\n\}",
+            text,
+            re.S,
+        )
+        self.assertIsNotNone(body)
+        fn = body.group("body")
+        self.assertIn("mysql_root_client < <(printf '%s\\n' \"$sql\")", fn)
+        self.assertNotIn("| mysql_root_client", fn)
+        self.assertNotIn("--init-command", fn)
+        self.assertNotIn("--execute", fn)
 
     def test_mysql_root_client_does_not_read_stdin_before_mysql(self) -> None:
         body = re.search(
@@ -204,49 +306,99 @@ class InstallerCreateUserStdinStaticTests(unittest.TestCase):
 
 
 class InstallerCreateUserStdinShimTests(unittest.TestCase):
-    def test_socket_path_password_on_stdin_not_argv(self) -> None:
+    def _shim_case(self, *, use_socket: bool, fake_pass: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            rc, argv, stdin, _cnf = _run_create_db_user_harness(Path(tmp), use_socket=True)
-            self.assertEqual(rc, 0)
-            self.assertNotIn(_FAKE_PASS, argv)
-            self.assertIn('pa$`"s s', stdin)
-            self.assertEqual(stdin.count("IDENTIFIED BY"), 2)
-            self.assertIn("CREATE USER", stdin)
-            self.assertIn("ALTER USER", stdin)
+            tmp_path = Path(tmp)
+            rc, _out, argv, stdin, meta = _run_create_db_user_harness(
+                tmp_path,
+                use_socket=use_socket,
+                fake_pass=fake_pass,
+                shim_root_pass='root$ecret"pw' if not use_socket else "",
+            )
+            self.assertEqual(rc, 0, meta)
+            _assert_argv_has_no_secret_sql(argv, fake_pass)
+            _assert_stdin_has_user_sql(stdin, fake_pass)
             self.assertIn("GRANT ALL PRIVILEGES", argv.replace("---", ""))
             self.assertIn("FLUSH PRIVILEGES", argv)
             self.assertIn("CREATE DATABASE", argv.replace("---", ""))
-            self.assertNotIn("--defaults-file=", argv.replace("---", ""))
+            if use_socket:
+                self.assertNotIn("--defaults-file=", argv.replace("---", ""))
+            else:
+                self.assertIn("--defaults-file=", argv)
+                self.assertIn("MODE:600", meta)
+                cnf_paths = [
+                    ln
+                    for ln in meta.splitlines()
+                    if ln and not ln.startswith("MODE:") and ln.startswith("/")
+                ]
+                for p in cnf_paths:
+                    self.assertFalse(Path(p).exists(), f"temp cnf not removed: {p}")
+            _assert_no_password_in_tree(tmp_path, fake_pass)
 
-    def test_option_file_path_password_on_stdin_not_argv(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            rc, argv, stdin, cnf_hook = _run_create_db_user_harness(
-                Path(tmp),
-                use_socket=False,
-                shim_root_pass='root$ecret"pw',
-            )
-            self.assertEqual(rc, 0)
-            self.assertNotIn(_FAKE_PASS, argv)
-            self.assertIn('pa$`"s s', stdin)
-            self.assertIn("--defaults-file=", argv)
-            self.assertIn("MODE:600", cnf_hook)
-            cnf_paths = [ln for ln in cnf_hook.splitlines() if ln and not ln.startswith("MODE:")]
-            for p in cnf_paths:
-                self.assertFalse(Path(p).exists(), f"temp cnf not removed: {p}")
+    def test_socket_path_two_passwords(self) -> None:
+        for _label, pw in _PASS_CASES:
+            with self.subTest(password=_label):
+                self._shim_case(use_socket=True, fake_pass=pw)
+
+    def test_option_file_path_two_passwords(self) -> None:
+        for _label, pw in _PASS_CASES:
+            with self.subTest(password=_label):
+                self._shim_case(use_socket=False, fake_pass=pw)
 
     def test_create_user_failure_aborts_create_database_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            rc, _, _, _ = _run_create_db_user_harness(
+            rc, _, _, _, _ = _run_create_db_user_harness(
                 Path(tmp),
                 use_socket=True,
+                fake_pass=_FAKE_PASS_SPECIAL,
                 fail_create_user=True,
             )
             self.assertNotEqual(rc, 0)
 
 
-class InstallerCreateUserStdinMutationGuardTests(unittest.TestCase):
-    def test_mutation_guard_documented(self) -> None:
-        self.assertTrue(INSTALLER.is_file())
+class InstallerCreateUserStdinRegisterTmpfileTests(unittest.TestCase):
+    def test_option_file_registers_cnf_in_parent_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rc, out, _argv, _stdin, meta = _run_create_db_user_harness(
+                tmp_path,
+                use_socket=False,
+                fake_pass=_FAKE_PASS_PLAIN,
+                shim_root_pass="root-only-for-cnf",
+                stub_register=False,
+            )
+            self.assertEqual(rc, 0, meta)
+            reg_lines = [ln for ln in meta.splitlines() if ln.startswith("/")]
+            self.assertGreaterEqual(len(reg_lines), 1, "register_tmpfile did not record cnf in parent shell")
+            self.assertIn("REGISTERED_COUNT=", out)
+
+    def test_abort_on_create_user_leaves_no_cnf_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rc, _out, argv, _stdin, meta = _run_create_db_user_harness(
+                tmp_path,
+                use_socket=False,
+                fake_pass=_FAKE_PASS_PLAIN,
+                shim_root_pass="root-abort-cnf",
+                fail_create_user=True,
+                stub_register=False,
+                real_install_traps=True,
+            )
+            self.assertNotEqual(rc, 0)
+            leftover = []
+            for path in tmp_path.rglob("tmp.*"):
+                if path.is_file():
+                    leftover.append(str(path))
+            cnf_paths = [
+                ln
+                for ln in meta.splitlines()
+                if ln.startswith("/") and "tmp." in ln
+            ]
+            for p in cnf_paths:
+                if Path(p).exists():
+                    leftover.append(p)
+            self.assertFalse(leftover, f"leftover cnf/tmp files after abort: {leftover}")
+            self.assertNotIn(_FAKE_PASS_PLAIN, argv)
 
 
 if __name__ == "__main__":
