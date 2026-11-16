@@ -194,5 +194,17 @@ php_fpm_intl_fpm_sapi_module_list() {
 }
 
 php_fpm_intl_fpm_sapi_has_intl() {
-    php_fpm_intl_fpm_sapi_module_list | grep -qx intl
+    # Capture module list first: live `| grep -q` under pipefail can false-fail when the
+    # producer is still writing (php/php-fpm exit 255 on EPIPE). If the list command fails
+    # and intl is not present in captured stdout, propagate failure (non-zero); intl in the
+    # captured text is a pass even if the list command returned non-zero (partial output).
+    local mods="" list_rc=0
+    mods="$(php_fpm_intl_fpm_sapi_module_list)" || list_rc=$?
+    if grep -qx intl <<<"$mods"; then
+        return 0
+    fi
+    if [[ "$list_rc" -ne 0 ]]; then
+        return "$list_rc"
+    fi
+    return 1
 }

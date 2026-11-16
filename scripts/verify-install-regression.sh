@@ -33,7 +33,8 @@ _resolve_mail_proxy_daemon_py() {
 
 echo "=== PROMPT 22.1 regression checks ==="
 
-if php -m 2>/dev/null | grep -qx intl; then
+mods="$(php -m 2>/dev/null || true)"
+if grep -qx intl <<<"$mods"; then
     pass "PHP CLI intl extension loaded"
 else
     fail "PHP CLI intl extension missing (install php-intl)"
