@@ -153,7 +153,26 @@ php -i | grep -E "upload_max|post_max"
 ## 7.9. MariaDB: connection errors
 
 ```bash
-mysql -u mail_proxy -p mail_proxy -e "SELECT 1"
+umask 077
+APP_CNF="$(mktemp)"
+chmod 600 "$APP_CNF"
+python3 - /etc/mail-proxy/db.conf "$APP_CNF" <<'PY'
+import configparser
+import sys
+
+def cv(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cv(cfg.get('db', 'db_user'))}\n")
+    f.write(f"password={cv(cfg.get('db', 'db_pass'))}\n")
+PY
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SELECT 1"
+rm -f "$APP_CNF"
 ```
 
 Проверьте `max_connections`, место на диске, права на `/var/lib/mysql`.

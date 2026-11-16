@@ -53,7 +53,7 @@ chmod +x delta-transit-install.sh configure_limits.sh
 Скрипт запросит:
 
 1. **Public URL** — HTTPS-адрес панели (не `https://mail-proxy.local`)
-2. **Пароль root MariaDB** — если `mysql -u root` без пароля (unix_socket) недоступен: скрытый запрос `MariaDB root password:`; проверка и все операции от root в фазе Database выполняются через временный файл параметров клиента (`chmod 600`, `mysql --defaults-file=…`), **без** `-p` в аргументах командной строки. Пароли с символами `$`, кавычками и обратным слэшем поддерживаются (значения `user` и `password` в файле всегда записываются в двойных кавычках через Python, не через небезопасное раскрытие в shell). Временные cnf удаляются после вызова и при прерывании установки (SIGINT/SIGTERM).
+2. **Пароль root MariaDB** — установщик сначала проверяет `mysql -u root -e "SELECT 1"` (`mysql_root_can_use_socket`). Если команда **успешна**, пароль **не запрашивается**, `MYSQL_ROOT_PASSWORD` остаётся пустым, а операции root в фазе Database идут через `mysql -u root` по сокету (без `-p` и без файла параметров). Если проверка **неуспешна** (в том числе при ошибке **1698** «Access denied» у root с плагином `unix_socket`, когда клиент без пароля не проходит), выводится скрытый запрос `MariaDB root password:`, введённое значение проверяется через `mysql_root_client` (`SELECT 1`); при неверном пароле установка **прерывается** с `MariaDB root password validation failed` — «угадать» пароль через обход на сокет в этом пути нельзя, потому что сокет уже признан недоступным. Все вызовы с непустым паролем используют временный файл параметров клиента (`chmod 600`, `mysql --defaults-file=…`), **без** `-p` в argv. Пароли с символами `$`, кавычками и обратным слэшем поддерживаются (значения `user` и `password` в файле записываются в двойных кавычках через Python). Временные cnf удаляются после вызова и при прерывании установки (SIGINT/SIGTERM).
 3. **Зеркало pip** — Enter для стандартного PyPI
 4. **Учётная запись master панели** — если в БД ещё нет активного `panel_admins` с `role='master'`:
    - `Panel master username:` — имя оператора (до 100 символов)
@@ -253,13 +253,58 @@ rm -f "$ROOT_CNF"
 
 Учётная запись панели по DAT-20 **не обязана** иметь `CREATE TABLE` / `ALTER`; без таблицы `panel_login_attempts` вход **fail-closed** по SEC-10; без столбца `must_change_password` авторизационные запросы к `panel_admins` **fail-closed** (DAT-9). Резервный путь в PHP (`ensurePanelLoginAttemptsSchema()`, `ensurePanelAdminsMustChangePasswordColumn()`) пытается создать объект, если у пользователя БД есть право; иначе — сообщение в `web_admin.log` и отказ.
 
-Проверка после обновления:
+Проверка после обновления (пароль учётной записи приложения — **не** в argv; из `db.conf` в `0600` cnf):
 
 ```bash
-mysql -u mail_proxy -p mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
-mysql -u mail_proxy -p mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
+umask 077
+APP_CNF="$(mktemp)"
+chmod 600 "$APP_CNF"
+python3 - /etc/mail-proxy/db.conf "$APP_CNF" <<'PY'
+import configparser
+import sys
+
+def cv(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cv(cfg.get('db', 'db_user'))}\n")
+    f.write(f"password={cv(cfg.get('db', 'db_pass'))}\n")
+PY
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SHOW TABLES LIKE 'panel_login_attempts';"
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SHOW COLUMNS FROM panel_admins LIKE 'must_change_password';"
+rm -f "$APP_CNF"
 chmod +x scripts/verify-install-regression.sh
 bash scripts/verify-install-regression.sh
+```
+
+Ручной SQL от имени `mail_proxy` **без** установщика (если пароль не в `db.conf`, а только в голове): `umask 077`; `read -rs` для пароля; `printf` / Python с **двойными кавычками** вокруг `password=`; `mysql --defaults-file=…`; удалить файл:
+
+```bash
+umask 077
+APP_CNF="$(mktemp)"
+chmod 600 "$APP_CNF"
+read -rsp "mail_proxy DB password: " _MP_PASS
+echo
+MYSQL_CNF_PASS="$_MP_PASS" python3 - "$APP_CNF" mail_proxy <<'PY'
+import os
+import sys
+
+def cv(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+password = os.environ.pop("MYSQL_CNF_PASS", "")
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    f.write("[client]\n")
+    f.write(f"user={cv(sys.argv[2])}\n")
+    f.write(f"password={cv(password)}\n")
+PY
+mysql --defaults-file="$APP_CNF" mail_proxy -e "SELECT 1;"
+rm -f "$APP_CNF"
 ```
 
 ---
