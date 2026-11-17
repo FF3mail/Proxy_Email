@@ -6,6 +6,7 @@ from __future__ import annotations
 import configparser
 import os
 import re
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -15,31 +16,303 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "delta-transit-install.sh"
-SCRIPTS = tuple((ROOT / "scripts").glob("*.sh"))
+CONFIGURE_LIMITS = ROOT / "configure_limits.sh"
+SCRIPTS = tuple(sorted((ROOT / "scripts").glob("*.sh")))
 
-# M6: this guard must stay defined and non-empty.
-_FORBIDDEN_SECRET_ON_EXTERNAL_ARGV = re.compile(
-    r"(?:"
-    r'python3\s+(?:-\\|\n\s*)?["\']?\$PARAM_DB_PASS'
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$\{PARAM_DB_PASS\}"
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$db_pass"
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$\{db_pass\}"
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$_MP_PASS"
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$MYSQL_ROOT_PASSWORD"
-    r"|python3\s+(?:-\\|\n\s*)?[\"']?\$\{MYSQL_ROOT_PASSWORD\}"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$PARAM_DB_PASS"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$\{PARAM_DB_PASS\}"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$db_pass"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$\{db_pass\}"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$_MP_PASS"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$MYSQL_ROOT_PASSWORD"
-    r"|php\s+(?:-\\|\n\s*)?[\"']?\$\{MYSQL_ROOT_PASSWORD\}"
-    r"|openssl[^\n]*[\"']?\$PARAM_DB_PASS"
-    r"|openssl[^\n]*[\"']?\$\{PARAM_DB_PASS\}"
-    r"|openssl[^\n]*[\"']?\$MYSQL_ROOT_PASSWORD"
-    r")",
-    re.MULTILINE,
+# M9 mutation target: must stay non-empty or synthetic + repo scans lose coverage.
+GUARDED_EXTERNAL_COMMANDS: frozenset[str] = frozenset(
+    {
+        "python3",
+        "python",
+        "php",
+        "openssl",
+        "curl",
+        "wget",
+        "logger",
+        "ssh",
+        "sshpass",
+        "scp",
+        "gpg",
+        "htpasswd",
+        "mail",
+        "mutt",
+        "sendmail",
+    }
 )
+
+_EXPLICIT_SECRET_VARS: frozenset[str] = frozenset(
+    {
+        "PARAM_DB_PASS",
+        "db_pass",
+        "_MP_PASS",
+        "pass",
+        "pass1",
+        "pass2",
+        "MYSQL_ROOT_PASSWORD",
+        "PANEL_MASTER_PASSWORD",
+        "MYSQL_CNF_PASS",
+        "DB_CONF_PASS",
+        "APP_PASS",
+    }
+)
+
+_SECRET_VAR_NAME_RE = re.compile(r"(?i)(pass|passwd|password|secret|token|key)")
+
+_NON_SECRET_ARG_VARS: frozenset[str] = frozenset(
+    {
+        "tmp_file",
+        "tmp",
+        "cnf",
+        "DB_CONF",
+        "PARAM_APP_URL",
+        "outfile",
+        "user",
+        "path",
+        "url",
+        # openssl self-signed cert paths (material is generated, not a DB/install secret)
+        "NGINX_SSL_KEY",
+        "NGINX_SSL_CERT",
+        "NGINX_SERVER_NAME",
+        "san_ext",
+    }
+)
+
+_HEREDOC_START_RE = re.compile(
+    r"(?<![<])<<(?![<])-?\s*'([^']+)'"
+    r"|(?<![<])<<(?![<])-?\s*\"([^\"]+)\""
+    r"|(?<![<])<<(?![<])-?\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+_ASSIGNMENT_PREFIX_RE = re.compile(
+    r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S+)$"
+)
+
+_WRAPPER_WORDS = frozenset({"sudo", "env", "command", "exec", "nice"})
+
+
+def _is_secret_var_name(name: str) -> bool:
+    if name in _NON_SECRET_ARG_VARS:
+        return False
+    if name in _EXPLICIT_SECRET_VARS:
+        return True
+    return _SECRET_VAR_NAME_RE.search(name) is not None
+
+
+def _collect_var_names_from_text(fragment: str) -> set[str]:
+    names: set[str] = set()
+    for m in re.finditer(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[^}]*)?\}", fragment):
+        names.add(m.group(1))
+    for m in re.finditer(r"\$([A-Za-z_][A-Za-z0-9_]*)", fragment):
+        names.add(m.group(1))
+    for m in re.finditer(r"\$\(([^)]*)\)", fragment):
+        names |= _collect_var_names_from_text(m.group(1))
+    for m in re.finditer(r"`([^`]*)`", fragment):
+        names |= _collect_var_names_from_text(m.group(1))
+    return names
+
+
+def _argument_tokens_contain_secret(args: list[str]) -> bool:
+    for tok in args:
+        for name in _collect_var_names_from_text(tok):
+            if _is_secret_var_name(name):
+                return True
+    return False
+
+
+def _command_basename(word: str) -> str:
+    word = word.strip()
+    if word.startswith("("):
+        return ""
+    return Path(word).name
+
+
+def _join_line_continuations(text: str) -> list[tuple[int, str]]:
+    raw_lines = text.splitlines()
+    physical: list[tuple[int, str]] = [(i + 1, ln) for i, ln in enumerate(raw_lines)]
+    joined: list[tuple[int, str]] = []
+    idx = 0
+    while idx < len(physical):
+        start_lineno, acc = physical[idx]
+        while acc.rstrip().endswith("\\") and idx + 1 < len(physical):
+            acc = acc.rstrip()[:-1].rstrip() + " " + physical[idx + 1][1].lstrip()
+            idx += 1
+        joined.append((start_lineno, acc))
+        idx += 1
+    return joined
+
+
+def _heredoc_skip_lines(lines: list[tuple[int, str]]) -> set[int]:
+    skip: set[int] = set()
+    i = 0
+    while i < len(lines):
+        lineno, content = lines[i]
+        if lineno in skip:
+            i += 1
+            continue
+        m = _HEREDOC_START_RE.search(content)
+        if not m:
+            i += 1
+            continue
+        tag = m.group(1) or m.group(2) or m.group(3)
+        i += 1
+        while i < len(lines):
+            term_lineno, term_line = lines[i]
+            skip.add(term_lineno)
+            if term_line.strip() == tag:
+                i += 1
+                break
+            i += 1
+    return skip
+
+
+def _split_outside_quotes(line: str, seps: tuple[str, ...]) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    i = 0
+    in_single = False
+    in_double = False
+    n = len(line)
+
+    def flush() -> None:
+        parts.append("".join(buf).strip())
+        buf.clear()
+
+    while i < n:
+        ch = line[i]
+        if in_single:
+            buf.append(ch)
+            if ch == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            buf.append(ch)
+            if ch == "\\" and i + 1 < n:
+                buf.append(line[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            in_double = True
+            buf.append(ch)
+            i += 1
+            continue
+        if i + 1 < n and line[i : i + 2] == "||":
+            flush()
+            i += 2
+            continue
+        if i + 1 < n and line[i : i + 2] == "&&":
+            flush()
+            i += 2
+            continue
+        if ch in seps:
+            flush()
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    flush()
+    return [p for p in parts if p]
+
+
+def _strip_redirections_simple(cmd: str) -> str:
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        tokens = cmd.split()
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in {"<", ">", ">>", "&>", ">&", "2>", "2>>", "2>&1"}:
+            i += 1
+            if i < len(tokens):
+                i += 1
+            continue
+        if t in {"<<", "<<<"}:
+            i += 1
+            if i < len(tokens):
+                i += 1
+            continue
+        if t.startswith("<") or t.startswith(">") or (
+            len(t) > 1 and t[0] in "0123456789" and ">" in t
+        ):
+            i += 1
+            continue
+        out.append(t)
+        i += 1
+    return " ".join(out)
+
+
+def _parse_simple_command(segment: str) -> tuple[str, list[str]] | None:
+    segment = _strip_redirections_simple(segment.strip())
+    if not segment:
+        return None
+    try:
+        words = shlex.split(segment, posix=True)
+    except ValueError:
+        words = segment.split()
+    if not words:
+        return None
+    while words and (
+        _ASSIGNMENT_PREFIX_RE.match(words[0])
+        or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0])
+    ):
+        words.pop(0)
+    while words:
+        w = words[0]
+        if w in _WRAPPER_WORDS:
+            words.pop(0)
+            continue
+        if w == "timeout" and len(words) >= 2 and words[1].isdigit():
+            words = words[2:]
+            continue
+        break
+    if not words:
+        return None
+    for i, w in enumerate(words):
+        cmd_word = _command_basename(w)
+        if cmd_word in GUARDED_EXTERNAL_COMMANDS:
+            return cmd_word, words[i + 1 :]
+    cmd_word = _command_basename(words[0])
+    return cmd_word, words[1:]
+
+
+def find_secret_on_external_argv(text: str) -> list[tuple[int, str, str]]:
+    """Return (lineno, command, snippet) for guarded commands with secret args.
+
+    Deliberately excludes mysql/mariadb (covered by #145/#148/#171 tests).
+    """
+    joined = _join_line_continuations(text)
+    heredoc_skip = _heredoc_skip_lines(joined)
+    hits: list[tuple[int, str, str]] = []
+    for lineno, line in joined:
+        if lineno in heredoc_skip:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        for segment in _split_outside_quotes(line, ("|", ";", "&")):
+            parsed = _parse_simple_command(segment)
+            if not parsed:
+                continue
+            cmd_word, args = parsed
+            if cmd_word not in GUARDED_EXTERNAL_COMMANDS:
+                continue
+            if _argument_tokens_contain_secret(args):
+                snippet = segment.strip()
+                if len(snippet) > 160:
+                    snippet = snippet[:157] + "..."
+                hits.append((lineno, cmd_word, snippet))
+    return hits
 
 _ALLOWED_EXCEPTIONS: tuple[tuple[str, str], ...] = (
     (
@@ -55,6 +328,10 @@ _ALLOWED_EXCEPTIONS: tuple[tuple[str, str], ...] = (
         "delta-transit-install.sh",
         "PANEL_MASTER_PASSWORD=… php -r — password via environment, not argv.",
     ),
+    (
+        "delta-transit-install.sh",
+        "openssl req -keyout/-out $NGINX_SSL_* — certificate paths, not installer DB/root secrets.",
+    ),
 )
 
 _PROBE_FILE_RE = re.compile(r'probe_path\s*=\s*outfile\s*\+\s*["\']\.probe["\']')
@@ -66,10 +343,6 @@ _FORBIDDEN_PASS_FILE_TO_PYTHON = re.compile(
 
 def _read_installer() -> str:
     return INSTALLER.read_text(encoding="utf-8")
-
-
-def _decontinued(text: str) -> str:
-    return re.sub(r"\\\s*\n\s*", " ", text)
 
 
 def _named_function_body(text: str, name: str) -> str:
@@ -232,25 +505,90 @@ def _run_write_db_config(
     return db_conf, argv_log, env_log, proc
 
 
-class InstallerDbConfArgvStaticTests(unittest.TestCase):
-    def test_forbidden_secret_on_external_argv_guard_pattern_required(self) -> None:
-        """M6: removing _FORBIDDEN_SECRET_ON_EXTERNAL_ARGV must fail tests."""
-        self.assertIsNotNone(_FORBIDDEN_SECRET_ON_EXTERNAL_ARGV)
-        self.assertGreater(
-            len(_FORBIDDEN_SECRET_ON_EXTERNAL_ARGV.pattern),
-            80,
-            "static argv guard pattern must stay substantive",
+class SecretOnExternalArgvCheckerTests(unittest.TestCase):
+    """Unit tests for find_secret_on_external_argv (synthetic snippets)."""
+
+    def _assert_detects(self, snippet: str, cmd: str | None = None) -> None:
+        hits = find_secret_on_external_argv(snippet)
+        self.assertTrue(hits, f"expected detection in: {snippet!r}")
+        if cmd is not None:
+            self.assertEqual(hits[0][1], cmd)
+
+    def _assert_clean(self, snippet: str) -> None:
+        hits = find_secret_on_external_argv(snippet)
+        self.assertEqual(hits, [], f"unexpected hits {hits!r} in: {snippet!r}")
+
+    def test_detects_original_write_db_config_argv_leak(self) -> None:
+        self._assert_detects('python3 - "$PARAM_DB_PASS" "$tmp_file" <<\'PY\'', "python3")
+
+    def test_detects_leak_probe_python_c_pass(self) -> None:
+        self._assert_detects('leak_probe() { python3 -c "pass" "${db_pass}"; }', "python3")
+
+    def test_detects_leak_probe2_php_continuation(self) -> None:
+        snippet = 'leak_probe2() {\n    php -r "echo 1;" \\\n        "$PARAM_DB_PASS"\n}'
+        self._assert_detects(snippet, "php")
+
+    def test_detects_leak_probe3_openssl(self) -> None:
+        self._assert_detects(
+            'leak_probe3() { openssl passwd "${MYSQL_ROOT_PASSWORD}"; }', "openssl"
         )
 
-    def test_installer_and_scripts_no_secret_on_python_php_openssl_argv(self) -> None:
-        paths = (INSTALLER, *SCRIPTS)
+    def test_detects_logger_secret(self) -> None:
+        self._assert_detects('logger -t x "$PARAM_DB_PASS"', "logger")
+
+    def test_detects_sshpass(self) -> None:
+        self._assert_detects('sshpass -p "$pass" ssh host', "sshpass")
+
+    def test_detects_curl_user_pass(self) -> None:
+        self._assert_detects('curl -u "user:$pass" url', "curl")
+
+    def test_allowed_db_conf_pass_env_prefix_python(self) -> None:
+        self._assert_clean('DB_CONF_PASS="$PARAM_DB_PASS" python3 - "$tmp_file" <<\'PY\'')
+
+    def test_allowed_mysql_cnf_pass_env_prefix(self) -> None:
+        self._assert_clean('MYSQL_CNF_PASS="$pass" python3 - "$cnf" "$user" <<\'PY\'')
+
+    def test_allowed_panel_master_password_php_getenv(self) -> None:
+        self._assert_clean(
+            'PANEL_MASTER_PASSWORD="${PANEL_MASTER_PASSWORD}" php -r '
+            '\'echo password_hash(getenv("PANEL_MASTER_PASSWORD"), PASSWORD_DEFAULT);\''
+        )
+
+    def test_allowed_python_path_and_app_url_only(self) -> None:
+        self._assert_clean('python3 - "$tmp" "$PARAM_APP_URL" <<\'PY\'')
+
+    def test_comment_line_mentioning_leak_not_detected(self) -> None:
+        self._assert_clean('# python3 - "$PARAM_DB_PASS" was the old form')
+
+    def test_heredoc_body_with_fake_leak_not_detected(self) -> None:
+        snippet = textwrap.dedent(
+            """\
+            python3 - "$tmp_file" <<'PY'
+            python3 "$PARAM_DB_PASS"
+            PY
+            """
+        )
+        self._assert_clean(snippet)
+
+    def test_guarded_commands_list_nonempty(self) -> None:
+        """M6/M9: guarded command list must stay substantive."""
+        self.assertGreater(len(GUARDED_EXTERNAL_COMMANDS), 10)
+
+
+class InstallerDbConfArgvStaticTests(unittest.TestCase):
+    def test_installer_scripts_configure_limits_no_secret_on_guarded_argv(self) -> None:
+        paths = (INSTALLER, CONFIGURE_LIMITS, *SCRIPTS)
+        all_hits: list[tuple[str, tuple[int, str, str]]] = []
         for path in paths:
-            text = _decontinued(path.read_text(encoding="utf-8"))
-            hit = _FORBIDDEN_SECRET_ON_EXTERNAL_ARGV.search(text)
-            self.assertIsNone(
-                hit,
-                f"{path.name}: forbidden secret on external argv: {hit.group(0) if hit else ''}",
-            )
+            text = path.read_text(encoding="utf-8")
+            for hit in find_secret_on_external_argv(text):
+                all_hits.append((path.name, hit))
+        self.assertEqual(
+            all_hits,
+            [],
+            "find_secret_on_external_argv hits (mysql/mariadb excluded by design): "
+            + repr(all_hits),
+        )
 
     def test_write_db_config_uses_db_conf_pass_env_prefix(self) -> None:
         body = _write_db_config_block()
