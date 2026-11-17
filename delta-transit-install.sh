@@ -1083,12 +1083,16 @@ write_db_config() {
     tmp_file="$(mktemp)"
     register_tmpfile "$tmp_file"
 
-    python3 - "$PARAM_DB_PASS" "$tmp_file" <<'PY'
+    if ! DB_CONF_PASS="$PARAM_DB_PASS" python3 - "$tmp_file" <<'PY'
 import configparser
+import io
+import os
 import sys
 
-password = sys.argv[1]
-outfile = sys.argv[2]
+password = os.environ.pop("DB_CONF_PASS", "")
+if not password:
+    sys.exit("DB_CONF_PASS missing")
+outfile = sys.argv[1]
 
 cfg = configparser.ConfigParser()
 cfg["db"] = {
@@ -1108,17 +1112,20 @@ read_back.read(outfile)
 if read_back.get("db", "db_pass") != password:
     sys.exit("db.conf round-trip verification failed")
 
-# Regression probe for characters that break naive manual quoting.
+# Regression probe for characters that break naive manual quoting (in memory only).
 probe = configparser.ConfigParser()
 probe["db"] = {"db_pass": "p#ass=word with spaces"}
-probe_path = outfile + ".probe"
-with open(probe_path, "w", encoding="utf-8") as f:
-    probe.write(f)
+probe_buf = io.StringIO()
+probe.write(probe_buf)
 probe_read = configparser.ConfigParser()
-probe_read.read(probe_path)
+probe_read.read_string(probe_buf.getvalue())
 if probe_read.get("db", "db_pass") != "p#ass=word with spaces":
     sys.exit("db.conf special-character round-trip failed")
 PY
+    then
+        rm -f "$tmp_file"
+        fatal "db.conf write failed"
+    fi
 
     chmod 0640 "$tmp_file"
     chown root:"$GROUP_CRYPTO" "$tmp_file"
