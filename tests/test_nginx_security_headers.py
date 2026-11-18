@@ -106,9 +106,14 @@ class NginxSecurityHeaderTests(unittest.TestCase):
     def test_default_template_has_no_hsts_literal(self) -> None:
         template = _vhost_template()
         self.assertNotIn("Strict-Transport-Security", template)
-        self.assertIn("${hsts_header}", template)
-        add_headers = re.findall(r"(?m)^\s*add_header\b.*$", template)
-        self.assertEqual(list(REQUIRED_HEADERS), [line.strip() for line in add_headers])
+        self.assertIn('Referrer-Policy "same-origin" always;${hsts_header}', template)
+        add_header_lines = []
+        for line in re.findall(r"(?m)^\s*add_header\b.*$", template):
+            stripped = line.strip()
+            if "${hsts_header}" in stripped:
+                stripped = stripped.split("${hsts_header}", 1)[0].strip()
+            add_header_lines.append(stripped)
+        self.assertEqual(list(REQUIRED_HEADERS), add_header_lines)
 
     def test_installer_has_single_conditional_hsts_directive(self) -> None:
         text = _read_installer()

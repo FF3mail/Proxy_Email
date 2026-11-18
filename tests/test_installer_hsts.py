@@ -29,11 +29,14 @@ GUARD_HSTS_DIRECTIVE = re.compile(
     re.escape('add_header Strict-Transport-Security "max-age=31536000" always;')
 )
 
-# Panel vhost heredoc from master @ 2a6447c38a77031fccf5d14a7e98230b37d607f0 (pre-HSTS).
+# Rendered panel vhost (PANEL_HSTS_APPLY=no) with fixed installer test inputs below.
+# Snapshot of pre-HSTS layout from master @ 2a6447c38a77031fccf5d14a7e98230b37d607f0.
 # Committed fixture: shallow CI clones cannot `git show` arbitrary SHAs.
-_GOLDEN_VHOST_FIXTURE = (
-    ROOT / "tests" / "fixtures" / "panel_vhost_golden_pre_hsts.txt"
-)
+_GOLDEN_VHOST_FIXTURE = ROOT / "tests" / "fixtures" / "panel_vhost_golden_pre_hsts.txt"
+GOLDEN_VHOST_SERVER_NAME = "panel.hsts.test"
+GOLDEN_VHOST_PHP_FPM = "/run/php/php8.2-fpm.sock"
+# Fixed scratch paths so rendered vhost bytes match committed golden fixture.
+GOLDEN_VHOST_SCRATCH = Path("/tmp/mail-proxy-issue155-vhost-golden")
 
 
 def _read_installer() -> str:
@@ -42,6 +45,172 @@ def _read_installer() -> str:
 
 def _vhost_golden_pre_hsts() -> str:
     return _GOLDEN_VHOST_FIXTURE.read_text(encoding="utf-8")
+
+
+def _render_panel_vhost(scratch: Path | None = None, *, hsts_apply: str) -> str:
+    base = scratch if scratch is not None else GOLDEN_VHOST_SCRATCH
+    base.mkdir(parents=True, exist_ok=True)
+    return _run_create_vhost(
+        base,
+        ssl_mode="self-signed",
+        hsts_apply=hsts_apply,
+        server_name=GOLDEN_VHOST_SERVER_NAME,
+    )
+
+
+def _openssl_panel_chain(
+    tmp: Path,
+    leaf_cn: str,
+    *,
+    include_intermediate_in_fullchain: bool = True,
+) -> dict[str, Path]:
+    """Root CA -> intermediate -> leaf; return PEM paths for HSTS chain tests."""
+    root_key = tmp / "root.key"
+    root_pem = tmp / "root.pem"
+    int_key = tmp / "int.key"
+    int_csr = tmp / "int.csr"
+    int_pem = tmp / "int.pem"
+    leaf_key = tmp / "leaf.key"
+    leaf_csr = tmp / "leaf.csr"
+    leaf_pem = tmp / "leaf.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(root_key),
+            "-out",
+            str(root_pem),
+            "-days",
+            "3650",
+            "-nodes",
+            "-subj",
+            "/CN=HSTS Test Root",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(int_key),
+            "-out",
+            str(int_csr),
+            "-nodes",
+            "-subj",
+            "/CN=HSTS Test Intermediate",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    int_ext = tmp / "int-ca.ext"
+    int_ext.write_text(
+        "basicConstraints=critical,CA:TRUE,pathlen:0\n"
+        "keyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            str(int_csr),
+            "-CA",
+            str(root_pem),
+            "-CAkey",
+            str(root_key),
+            "-CAcreateserial",
+            "-out",
+            str(int_pem),
+            "-days",
+            "365",
+            "-extfile",
+            str(int_ext),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(leaf_key),
+            "-out",
+            str(leaf_csr),
+            "-nodes",
+            "-subj",
+            f"/CN={leaf_cn}",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            str(leaf_csr),
+            "-CA",
+            str(int_pem),
+            "-CAkey",
+            str(int_key),
+            "-CAcreateserial",
+            "-out",
+            str(leaf_pem),
+            "-days",
+            "365",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    fullchain = tmp / "fullchain.pem"
+    if include_intermediate_in_fullchain:
+        fullchain.write_text(
+            leaf_pem.read_text(encoding="utf-8") + int_pem.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    else:
+        fullchain.write_bytes(leaf_pem.read_bytes())
+    return {
+        "root_pem": root_pem,
+        "intermediate_pem": int_pem,
+        "leaf_pem": leaf_pem,
+        "fullchain_pem": fullchain,
+    }
+
+
+def _panel_hsts_existing_check(
+    cert_path: Path,
+    server_name: str,
+    *,
+    trust_ca: Path,
+) -> int:
+    env = {**os.environ, "DELTA_TLS_CA_FILE": str(trust_ca)}
+    script = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        cd "{ROOT}"
+        source "./delta-transit-install.sh"
+        SSL_MODE="existing"
+        NGINX_SSL_CERT="{cert_path}"
+        NGINX_SERVER_NAME="{server_name}"
+        panel_certificate_is_valid_for_hsts && exit 0 || exit 1
+        """
+    )
+    return subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode
 
 
 def _extract_vhost_template(source: str) -> str:
@@ -113,7 +282,7 @@ def _run_create_vhost(
         NGINX_SERVER_NAME="{server_name}"
         NGINX_SSL_CERT="{ssl_cert}"
         NGINX_SSL_KEY="{ssl_key}"
-        PHP_FPM_SOCKET_DETECTED="/run/php/php8.2-fpm.sock"
+        PHP_FPM_SOCKET_DETECTED="{GOLDEN_VHOST_PHP_FPM}"
         SSL_MODE="{ssl_mode}"
         PANEL_HSTS_APPLY="{hsts_apply}"
         PANEL_HSTS_INTENT="{'enabled' if hsts_apply == 'yes' else 'disabled'}"
@@ -442,6 +611,64 @@ class InstallerHstsCertificateRule(unittest.TestCase):
             _ = ca_pem
 
 
+class InstallerHstsFullchainCertificateRule(unittest.TestCase):
+    def test_fullchain_with_intermediate_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            material = _openssl_panel_chain(tmp, "panel.fullchain.test")
+            rc = _panel_hsts_existing_check(
+                material["fullchain_pem"],
+                "panel.fullchain.test",
+                trust_ca=material["root_pem"],
+            )
+            self.assertEqual(rc, 0, "root->intermediate->leaf fullchain should verify")
+
+    def test_leaf_only_without_intermediate_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            material = _openssl_panel_chain(tmp, "panel.no-int.test", include_intermediate_in_fullchain=False)
+            rc = _panel_hsts_existing_check(
+                material["leaf_pem"],
+                "panel.no-int.test",
+                trust_ca=material["root_pem"],
+            )
+            self.assertEqual(rc, 1, "leaf without intermediate in bundle should fail")
+
+    def test_wrong_cert_first_in_bundle_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            material = _openssl_panel_chain(tmp, "panel.right.test")
+            wrong_dir = tmp / "wrong"
+            wrong_dir.mkdir(parents=True, exist_ok=True)
+            _, wrong_leaf, _ = _openssl_ca_signed_pair(wrong_dir, cn="other.host.first")
+            reversed_pem = tmp / "wrong-first.pem"
+            reversed_pem.write_text(
+                wrong_leaf.read_text(encoding="utf-8")
+                + material["leaf_pem"].read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            rc = _panel_hsts_existing_check(
+                reversed_pem,
+                "panel.right.test",
+                trust_ca=material["root_pem"],
+            )
+            self.assertEqual(rc, 1, "nginx uses first PEM cert; wrong leaf-first must fail host check")
+
+    def test_bundle_signed_by_other_ca_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            trusted = _openssl_panel_chain(tmp, "panel.trusted.test")
+            rogue_dir = tmp / "rogue"
+            rogue_dir.mkdir()
+            rogue_leaf, _, _ = _openssl_ca_signed_pair(rogue_dir, cn="panel.trusted.test")
+            rc = _panel_hsts_existing_check(
+                rogue_leaf,
+                "panel.trusted.test",
+                trust_ca=trusted["root_pem"],
+            )
+            self.assertEqual(rc, 1)
+
+
 class InstallerHstsPersistence(unittest.TestCase):
     def test_intent_file_atomic_mode_and_non_tty(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -582,22 +809,41 @@ class InstallerHstsDialog(unittest.TestCase):
 
 
 class InstallerHstsGoldenVhost(unittest.TestCase):
-    def test_default_vhost_template_matches_master_minus_hsts_slot(self) -> None:
+    def test_default_rendered_vhost_byte_identical_to_golden(self) -> None:
+        generated = _render_panel_vhost(hsts_apply="no")
         golden = _vhost_golden_pre_hsts()
-        current = _extract_vhost_template(_read_installer())
-        normalized = "\n".join(
-            line for line in current.splitlines() if "${hsts_header}" not in line
+        self.assertEqual(generated, golden)
+
+    def test_hsts_on_adds_single_sts_line_after_referrer(self) -> None:
+        generated = _render_panel_vhost(hsts_apply="yes")
+        golden = _vhost_golden_pre_hsts()
+        expected = golden.replace(
+            'add_header Referrer-Policy "same-origin" always;\n',
+            'add_header Referrer-Policy "same-origin" always;\n'
+            f"    {HSTS_DIRECTIVE}\n",
+            1,
         )
-        self.assertEqual(normalized.strip(), golden.strip())
+        self.assertEqual(generated, expected)
+        self.assertEqual(generated.count(HSTS_DIRECTIVE), 1)
+
+    def test_referrer_to_access_log_single_blank_line_when_hsts_off(self) -> None:
+        generated = _render_panel_vhost(hsts_apply="no")
+        marker = 'add_header Referrer-Policy "same-origin" always;\n'
+        tail = generated.split(marker, 1)[1]
+        self.assertTrue(
+            tail.startswith("\n    access_log"),
+            "expected exactly one blank line between Referrer-Policy and access_log",
+        )
+        self.assertFalse(tail.startswith("\n\n    access_log"))
 
 
 class InstallerHstsMutationGuardDocumentation(unittest.TestCase):
-    """Document mutation ids M1–M14; enforcement is manual pre-PR."""
+    """Document mutation ids M1–M22; enforcement is manual pre-PR."""
 
-    MUTATION_IDS = tuple(f"M{i}" for i in range(1, 15))
+    MUTATION_IDS = tuple(f"M{i}" for i in range(1, 23))
 
     def test_mutation_list_complete(self) -> None:
-        self.assertEqual(len(self.MUTATION_IDS), 14)
+        self.assertEqual(len(self.MUTATION_IDS), 22)
 
 
 if __name__ == "__main__":

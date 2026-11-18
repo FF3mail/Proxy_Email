@@ -2944,6 +2944,15 @@ panel_tls_ca_verify_args() {
     fi
 }
 
+panel_tls_untrusted_bundle() {
+    if [[ -n "${DELTA_TLS_UNTRUSTED_FILE:-}" ]]
+    then
+        echo "$DELTA_TLS_UNTRUSTED_FILE"
+    else
+        echo "$NGINX_SSL_CERT"
+    fi
+}
+
 panel_certificate_is_valid_for_hsts() {
     PANEL_HSTS_INVALID_REASON=""
     case "$SSL_MODE" in
@@ -2955,6 +2964,7 @@ panel_certificate_is_valid_for_hsts() {
             return 1
             ;;
         existing)
+            # openssl x509 reads the first PEM certificate in the file (nginx panel leaf).
             if ! openssl x509 -checkend 0 -noout -in "$NGINX_SSL_CERT" 2>/dev/null
             then
                 PANEL_HSTS_INVALID_REASON="certificate is expired or not yet valid"
@@ -2968,8 +2978,12 @@ panel_certificate_is_valid_for_hsts() {
                 return 1
             fi
             local ca_args=()
+            local untrusted_bundle=""
             panel_tls_ca_verify_args ca_args
-            if ! openssl verify "${ca_args[@]}" "$NGINX_SSL_CERT" >/dev/null 2>&1
+            untrusted_bundle="$(panel_tls_untrusted_bundle)"
+            # Leaf to verify is the first cert in NGINX_SSL_CERT; intermediates from the same PEM
+            # (or DELTA_TLS_UNTRUSTED_FILE) are passed as -untrusted, matching openssl fullchain usage.
+            if ! openssl verify "${ca_args[@]}" -untrusted "$untrusted_bundle" "$NGINX_SSL_CERT" >/dev/null 2>&1
             then
                 PANEL_HSTS_INVALID_REASON="certificate chain is not trusted by the system CA store"
                 return 1
@@ -3063,7 +3077,7 @@ create_mail_proxy_virtual_host() {
     local hsts_header=""
     if [[ "$PANEL_HSTS_APPLY" == "yes" ]]
     then
-        hsts_header='    add_header Strict-Transport-Security "max-age=31536000" always;'
+        hsts_header=$'\n    add_header Strict-Transport-Security "max-age=31536000" always;'
     fi
 
     # Определяем, как использовать fastcgi_pass
@@ -3119,8 +3133,7 @@ server {
 
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "same-origin" always;
-${hsts_header}
+    add_header Referrer-Policy "same-origin" always;${hsts_header}
 
     access_log /var/log/nginx/mail-proxy-access.log;
     error_log  /var/log/nginx/mail-proxy-error.log;
