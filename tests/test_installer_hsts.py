@@ -29,22 +29,19 @@ GUARD_HSTS_DIRECTIVE = re.compile(
     re.escape('add_header Strict-Transport-Security "max-age=31536000" always;')
 )
 
-_MASTER_GOLDEN_SHA = "2a6447c38a77031fccf5d14a7e98230b37d607f0"
+# Panel vhost heredoc from master @ 2a6447c38a77031fccf5d14a7e98230b37d607f0 (pre-HSTS).
+# Committed fixture: shallow CI clones cannot `git show` arbitrary SHAs.
+_GOLDEN_VHOST_FIXTURE = (
+    ROOT / "tests" / "fixtures" / "panel_vhost_golden_pre_hsts.txt"
+)
 
 
 def _read_installer() -> str:
     return INSTALLER.read_text(encoding="utf-8")
 
 
-def _vhost_from_git_at_master() -> str:
-    proc = subprocess.run(
-        ["git", "show", f"{_MASTER_GOLDEN_SHA}:delta-transit-install.sh"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return _extract_vhost_template(proc.stdout)
+def _vhost_golden_pre_hsts() -> str:
+    return _GOLDEN_VHOST_FIXTURE.read_text(encoding="utf-8")
 
 
 def _extract_vhost_template(source: str) -> str:
@@ -586,7 +583,7 @@ class InstallerHstsDialog(unittest.TestCase):
 
 class InstallerHstsGoldenVhost(unittest.TestCase):
     def test_default_vhost_template_matches_master_minus_hsts_slot(self) -> None:
-        golden = _vhost_from_git_at_master()
+        golden = _vhost_golden_pre_hsts()
         current = _extract_vhost_template(_read_installer())
         normalized = "\n".join(
             line for line in current.splitlines() if "${hsts_header}" not in line
