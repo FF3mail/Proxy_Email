@@ -193,6 +193,37 @@ else
     fail "client_max_body_size 210M not found in expected nginx locations"
 fi
 
+PANEL_VHOST="/etc/nginx/sites-available/mail-proxy.conf"
+PANEL_HSTS_CONF="/etc/mail-proxy/panel-hsts"
+if [[ -f "$PANEL_VHOST" ]]; then
+    for _sec_hdr in \
+        'add_header X-Content-Type-Options "nosniff" always;' \
+        'add_header X-Frame-Options "DENY" always;' \
+        'add_header Referrer-Policy "same-origin" always;'
+    do
+        _sec_cnt="$(grep -cF "$_sec_hdr" "$PANEL_VHOST" 2>/dev/null || true)"
+        if [[ "$_sec_cnt" -eq 1 ]]; then
+            pass "panel vhost SEC-12 header once: ${_sec_hdr}"
+        else
+            fail "panel vhost SEC-12 header count ${_sec_cnt} (expected 1): ${_sec_hdr}"
+        fi
+    done
+    _hsts_cnt="$(grep -c 'Strict-Transport-Security' "$PANEL_VHOST" 2>/dev/null || true)"
+    _hsts_want=0
+    if [[ -f "$PANEL_HSTS_CONF" ]] && grep -qx 'enabled' "$PANEL_HSTS_CONF" 2>/dev/null; then
+        _hsts_want=1
+    fi
+    if [[ "$_hsts_cnt" -gt 1 ]]; then
+        fail "panel vhost Strict-Transport-Security count ${_hsts_cnt} (at most 1)"
+    elif [[ "$_hsts_want" -eq 1 && "$_hsts_cnt" -ne 1 ]]; then
+        fail "panel HSTS intent enabled but Strict-Transport-Security missing in vhost"
+    elif [[ "$_hsts_want" -eq 0 && "$_hsts_cnt" -ne 0 ]]; then
+        fail "panel HSTS intent disabled/absent but Strict-Transport-Security present in vhost"
+    else
+        pass "panel vhost HSTS line count ${_hsts_cnt} matches persisted intent"
+    fi
+fi
+
 # PROMPT-34 (D1): /var/vmail must be owned by Dovecot mail user before hardening.
 if [[ -d /var/vmail ]]; then
     _vmail_expected=""

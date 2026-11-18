@@ -63,6 +63,10 @@ NGINX_CONFLICTS="unknown"
 NGINX_SERVER_NAME=""
 PHP_FPM_SOCKET_DETECTED=""
 SSL_MODE="none"
+PANEL_HSTS_CONF="${CONFIG_DIR}/panel-hsts"
+PANEL_HSTS_INTENT="disabled"
+PANEL_HSTS_APPLY="no"
+PANEL_HSTS_INVALID_REASON=""
 # -----------------------------------------------------------------------------
 SYSCTL_CONF="/etc/sysctl.d/99-mail-proxy.conf"
 
@@ -2893,6 +2897,161 @@ configure_tls_certificate() {
     ask_tls_certificate_source
 }
 
+read_panel_hsts_intent_from_file() {
+    PANEL_HSTS_INTENT="disabled"
+    if [[ -f "$PANEL_HSTS_CONF" ]]
+    then
+        local line=""
+        line="$(head -n1 "$PANEL_HSTS_CONF" 2>/dev/null | tr -d '[:space:]' || true)"
+        case "$line" in
+            enabled|disabled)
+                PANEL_HSTS_INTENT="$line"
+                ;;
+            *)
+                log_warn "Ignoring invalid panel HSTS intent file (expected enabled or disabled on one line)"
+                ;;
+        esac
+    fi
+}
+
+write_panel_hsts_intent_file() {
+    local value="${1:?}"
+    case "$value" in
+        enabled|disabled) ;;
+        *)
+            fatal "internal: invalid panel HSTS intent"
+            ;;
+    esac
+    local tmp_file
+    tmp_file="$(mktemp)"
+    register_tmpfile "$tmp_file"
+    printf '%s\n' "$value" > "$tmp_file"
+    chmod 0640 "$tmp_file"
+    chown root:"$GROUP_CRYPTO" "$tmp_file"
+    mv "$tmp_file" "$PANEL_HSTS_CONF"
+    PANEL_HSTS_INTENT="$value"
+}
+
+panel_tls_ca_verify_args() {
+    local -n _out_ref=$1
+    _out_ref=()
+    if [[ -n "${DELTA_TLS_CA_FILE:-}" ]]
+    then
+        _out_ref=(-CAfile "$DELTA_TLS_CA_FILE")
+    elif [[ -n "${DELTA_TLS_CA_PATH:-}" ]]
+    then
+        _out_ref=(-CApath "$DELTA_TLS_CA_PATH")
+    fi
+}
+
+panel_certificate_is_valid_for_hsts() {
+    PANEL_HSTS_INVALID_REASON=""
+    case "$SSL_MODE" in
+        certbot)
+            return 0
+            ;;
+        none|self-signed)
+            PANEL_HSTS_INVALID_REASON="self-signed or missing certificate"
+            return 1
+            ;;
+        existing)
+            if ! openssl x509 -checkend 0 -noout -in "$NGINX_SSL_CERT" 2>/dev/null
+            then
+                PANEL_HSTS_INVALID_REASON="certificate is expired or not yet valid"
+                return 1
+            fi
+            local checkhost_out=""
+            checkhost_out="$(openssl x509 -noout -checkhost "$NGINX_SERVER_NAME" -in "$NGINX_SSL_CERT" 2>&1 || true)"
+            if [[ "$checkhost_out" != *"does match certificate"* ]]
+            then
+                PANEL_HSTS_INVALID_REASON="certificate name does not match panel hostname (${NGINX_SERVER_NAME})"
+                return 1
+            fi
+            local ca_args=()
+            panel_tls_ca_verify_args ca_args
+            if ! openssl verify "${ca_args[@]}" "$NGINX_SSL_CERT" >/dev/null 2>&1
+            then
+                PANEL_HSTS_INVALID_REASON="certificate chain is not trusted by the system CA store"
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            PANEL_HSTS_INVALID_REASON="unknown TLS mode (${SSL_MODE})"
+            return 1
+            ;;
+    esac
+}
+
+evaluate_panel_hsts_apply() {
+    PANEL_HSTS_APPLY="no"
+    if [[ "$PANEL_HSTS_INTENT" != "enabled" ]]
+    then
+        return 0
+    fi
+    if panel_certificate_is_valid_for_hsts
+    then
+        PANEL_HSTS_APPLY="yes"
+        return 0
+    fi
+    if [[ "$SSL_MODE" == "self-signed" || "$SSL_MODE" == "none" ]]
+    then
+        log_info "HSTS: operator chose to enable it, but the panel uses a self-signed certificate — the header will not be added"
+    else
+        log_info "HSTS: operator chose to enable it, but the certificate is not valid for HSTS (${PANEL_HSTS_INVALID_REASON}) — the header will not be added"
+    fi
+}
+
+ask_panel_hsts() {
+    local stored="disabled"
+    local default_letter="n"
+    read_panel_hsts_intent_from_file
+    stored="$PANEL_HSTS_INTENT"
+    if [[ "$stored" == "enabled" ]]
+    then
+        default_letter="y"
+    fi
+    echo
+    echo "HTTP Strict Transport Security (HSTS) for the panel:"
+    echo "  Browsers cache HSTS for up to one year (max-age=31536000)."
+    echo "  Use only with a certificate issued by a trusted CA."
+    echo "  With a self-signed certificate your choice is ignored and the header is not added."
+    local choice=""
+    local answer=""
+    while true
+    do
+        read -rp "Enable HSTS on the panel vhost? [y/N] (stored: ${stored}; Enter = ${default_letter}): " choice
+        if [[ -z "$choice" ]]
+        then
+            choice="$default_letter"
+        fi
+        case "$choice" in
+            [yY]|[yY][eE][sS])
+                answer="enabled"
+                break
+                ;;
+            [nN]|[nN][oO])
+                answer="disabled"
+                break
+                ;;
+            *)
+                log_warn "Invalid choice; enter y or n"
+                ;;
+        esac
+    done
+    write_panel_hsts_intent_file "$answer"
+}
+
+configure_panel_hsts() {
+    if installer_has_tty
+    then
+        ask_panel_hsts
+    else
+        read_panel_hsts_intent_from_file
+    fi
+    evaluate_panel_hsts_apply
+}
+
 # -----------------------------------------------------------------------------
 # Создание полноценного Virtual Host для DELTA-Транзит
 # -----------------------------------------------------------------------------
@@ -2900,6 +3059,12 @@ configure_tls_certificate() {
 create_mail_proxy_virtual_host() {
 
     log_info "Creating Nginx virtual host"
+
+    local hsts_header=""
+    if [[ "$PANEL_HSTS_APPLY" == "yes" ]]
+    then
+        hsts_header='    add_header Strict-Transport-Security "max-age=31536000" always;'
+    fi
 
     # Определяем, как использовать fastcgi_pass
     local fastcgi_pass_value
@@ -2955,6 +3120,7 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "same-origin" always;
+${hsts_header}
 
     access_log /var/log/nginx/mail-proxy-access.log;
     error_log  /var/log/nginx/mail-proxy-error.log;
@@ -3070,6 +3236,7 @@ phase_nginx() {
     detect_php_fpm_socket
     install_nginx_delta_profile
     configure_tls_certificate
+    configure_panel_hsts
     create_mail_proxy_virtual_host
     enable_mail_proxy_virtual_host
     validate_nginx_configuration

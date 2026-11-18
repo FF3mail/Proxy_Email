@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Issue #134 — SEC-12 headers in the panel vhost; HSTS stays off (DEV-25 not closed)."""
+"""Issue #134 / #155 — SEC-12 headers in the panel vhost; HSTS conditional per D-111."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ REQUIRED_HEADERS = (
     'add_header X-Frame-Options "DENY" always;',
     'add_header Referrer-Policy "same-origin" always;',
 )
+
+HSTS_DIRECTIVE = 'add_header Strict-Transport-Security "max-age=31536000" always;'
 
 PRESERVED_LINES = (
     "listen 443 ssl;",
@@ -101,12 +103,18 @@ class NginxSecurityHeaderTests(unittest.TestCase):
             for directive in REQUIRED_HEADERS:
                 self.assertEqual(location.count(directive), 1, location)
 
-    def test_no_hsts_and_no_extra_add_header(self) -> None:
+    def test_default_template_has_no_hsts_literal(self) -> None:
         template = _vhost_template()
         self.assertNotIn("Strict-Transport-Security", template)
-        self.assertNotIn("Strict-Transport-Security", _read_installer())
+        self.assertIn("${hsts_header}", template)
         add_headers = re.findall(r"(?m)^\s*add_header\b.*$", template)
         self.assertEqual(list(REQUIRED_HEADERS), [line.strip() for line in add_headers])
+
+    def test_installer_has_single_conditional_hsts_directive(self) -> None:
+        text = _read_installer()
+        self.assertEqual(text.count(HSTS_DIRECTIVE), 1)
+        self.assertNotIn("includeSubDomains", text)
+        self.assertNotIn("preload", text)
 
     def test_listen_acl_tls_and_body_limit_stay(self) -> None:
         template = _vhost_template()
