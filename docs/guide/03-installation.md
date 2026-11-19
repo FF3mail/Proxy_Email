@@ -223,7 +223,7 @@ TLS certificate source:
 
 Для production с публичным DNS предпочтительны **certbot** (вариант 3) или корпоративный CA (вариант 2).
 
-**Клиентский IP и lockout (SEC-10):** vhost панели, который пишет установщик, передаёт в PHP-FPM параметры `HTTP_X_REAL_IP` и `HTTP_X_FORWARDED_FOR` из `$remote_addr` nginx. Это нужно, когда перед панелью стоит локальный reverse proxy (`REMOTE_ADDR` = loopback): функция `getClientIp()` тогда берёт реальный адрес из этих параметров (см. комментарий в `web/includes/helpers.php`). Для прямого доступа из LAN достаточно `$remote_addr`.
+**Клиентский IP и lockout (SEC-10):** vhost панели, который пишет установщик, передаёт в PHP-FPM параметр `HTTP_X_REAL_IP` из `$remote_addr` nginx, а `HTTP_X_FORWARDED_FOR` — из `$proxy_add_x_forwarded_for` (к уже существующей цепочке добавляется адрес клиента, а не подставляется только `$remote_addr`). Это нужно, когда перед панелью стоит локальный reverse proxy (`REMOTE_ADDR` = loopback): `getClientIp()` тогда берёт первый допустимый адрес из `HTTP_X_REAL_IP` или, если его нет, из `HTTP_X_FORWARDED_FOR` (см. `web/includes/helpers.php`); при прямом доступе из LAN `getClientIp()` возвращает `REMOTE_ADDR`. Счётчик SEC-10 в БД привязан к паре «логин + IP» по результату `getClientIp()`.
 
 ---
 
