@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Isolated ACC-102: SIGTERM → supervisor → _shutdown (subprocess child)."""
+"""ACC-102: SIGTERM during simulated DB I/O that ignores stop event."""
 
 from __future__ import annotations
 
@@ -34,7 +34,55 @@ assert spec.loader is not None
 spec.loader.exec_module(mod)
 
 DB_INSIDE = threading.Event()
-SLEEP_CHUNK = 0.05
+BLOCK_SEC = float(os.environ.get('ACC102_DB_BLOCK_SEC', '0.35'))
+MODE = os.environ.get('ACC102_DB_MODE', 'complete')
+SLEEP_CHUNK = 0.02
+
+
+class _SimulatedDatabase:
+    """Blocks inside fetchall without observing daemon stop (socket-read stall)."""
+
+    def __init__(self, block_sec: float, mode: str) -> None:
+        self._block_sec = block_sec
+        self._mode = mode
+
+    def get_connection(self):
+        outer = self
+
+        class _Conn:
+            def cursor(self, dictionary=False):
+                return _SimulatedCursor(outer)
+
+            def close(self) -> None:
+                pass
+
+        return _Conn()
+
+
+class _SimulatedCursor:
+    def __init__(self, db: _SimulatedDatabase) -> None:
+        self._db = db
+
+    def execute(self, *args, **kwargs) -> None:
+        pass
+
+    def fetchall(self):
+        DB_INSIDE.set()
+        print('IN_DB', flush=True)
+        time.sleep(self._db._block_sec)
+        if self._db._mode == 'timeout':
+            import mysql.connector.errors as mysql_errors
+
+            print('DB_EXIT=timeout', flush=True)
+            raise mysql_errors.OperationalError(
+                errno=3024,
+                msg='Simulated read timeout waiting for server response',
+            )
+        print('DB_EXIT=complete', flush=True)
+        return []
+
+    def close(self) -> None:
+        pass
 
 
 def main() -> int:
@@ -44,6 +92,7 @@ def main() -> int:
     daemon._stop_event = threading.Event()
     daemon._shutdown_signaled_mono = None
     daemon._shutdown_deadline_mono = None
+    daemon._db = _SimulatedDatabase(BLOCK_SEC, MODE)
     daemon._observer = None
     daemon._observer_started = False
     daemon._imap_poller = MagicMock()
@@ -61,16 +110,7 @@ def main() -> int:
     daemon._watched_relationship_ids = set()
     daemon._unschedule_watches_for_referent = MagicMock()
     daemon._register_watches_for_referent = MagicMock()
-
-    def blocking_load_referents():
-        DB_INSIDE.set()
-        print('IN_DB', flush=True)
-        while not daemon._stop_event.is_set():
-            time.sleep(SLEEP_CHUNK)
-        return []
-
-    daemon._load_referents = blocking_load_referents
-    daemon._sync_relationship_watches = MagicMock()
+    daemon._load_referents = lambda: mod.ProxyDaemon._load_referents(daemon)
 
     signal.signal(signal.SIGTERM, daemon._handle_signal)
     signal.signal(signal.SIGINT, daemon._handle_signal)
@@ -89,7 +129,7 @@ def main() -> int:
         while not daemon._stop_event.is_set():
             if daemon._past_shutdown_deadline():
                 break
-            daemon._sync_database_state()
+            mod.ProxyDaemon._sync_database_state(daemon)
             if daemon._stop_event.is_set():
                 break
             for _ in range(mod.SUPERVISOR_SYNC_INTERVAL_SEC):
@@ -97,11 +137,12 @@ def main() -> int:
                     break
                 time.sleep(SLEEP_CHUNK)
     finally:
-        daemon._shutdown()
+        mod.ProxyDaemon._shutdown(daemon)
 
     assert daemon._shutdown_signaled_mono is not None
     elapsed = time.monotonic() - daemon._shutdown_signaled_mono
     print(f'ELAPSED={elapsed:.6f}', flush=True)
+    print(f'MODE={MODE}', flush=True)
     return 0
 
 

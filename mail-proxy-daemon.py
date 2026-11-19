@@ -113,8 +113,9 @@ SUPERVISOR_SYNC_INTERVAL_SEC = 60
 IMAP_QUEUE_MAXSIZE = 5000
 SMTP_QUEUE_MAXSIZE = 1000
 DB_POOL_SIZE = 12
-# MariaDB pool socket timeouts (mysql-connector-python>=8.4.0 connect args).
-# connect_timeout: TCP/handshake; read_timeout/write_timeout: query I/O wait.
+# MariaDB pool socket timeouts (mysql-connector-python>=9.2.0 connect args).
+# connect_timeout: TCP/handshake; read_timeout/write_timeout: per socket I/O wait
+# (not guaranteed wall-clock bound for an entire multi-read SQL operation).
 DB_CONNECT_TIMEOUT_SEC = 10
 DB_READ_TIMEOUT_SEC = 30
 DB_WRITE_TIMEOUT_SEC = 30

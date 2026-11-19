@@ -6,7 +6,9 @@ from __future__ import annotations
 import configparser
 import importlib.util
 import logging
+import os
 import queue
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from relationship_routing import OutboundDeliveryPlan, OutboundRoutingMode
 
 
 def _install_watchdog_stubs() -> None:
@@ -336,69 +340,108 @@ class OutboundPreservationTests(unittest.TestCase):
             send_block.set()
             pool.join_until_deadline(time.monotonic() + 2.0)
 
-    def test_interrupted_smtp_file_rediscoverable_after_release(self) -> None:
+    def test_production_outbound_retry_after_shutdown_blocked_send(self) -> None:
+        """Reserve/enqueue/scan/dup paths on real ProxyDaemon methods (DMN-5)."""
+        plan = OutboundDeliveryPlan(
+            mode=OutboundRoutingMode.RELATIONSHIP_LIVE,
+            account={
+                'email': 'ext@example.com',
+                'smtp_host': 'smtp.example.com',
+                'smtp_port': '587',
+                'smtp_encryption': 'tls',
+            },
+            relationship_id=1,
+            external_account_id=9,
+        )
         with tempfile.TemporaryDirectory() as tmp:
-            new_dir = Path(tmp) / 'new'
+            maildir = Path(tmp)
+            new_dir = maildir / 'new'
             new_dir.mkdir()
             mail_path = new_dir / 'retrymsg'
             mail_path.write_bytes(
-                b'To: user@example.com\r\nFrom: x@y.z\r\nSubject: t\r\n\r\nbody'
+                b'To: user@example.com\r\n'
+                b'From: client@local.test\r\n'
+                b'Subject: t\r\n\r\nbody'
             )
-            task_q: queue.Queue = queue.Queue()
-            stop = threading.Event()
+            daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+            daemon._shutdown_lock = threading.Lock()
+            daemon._is_shutdown = False
+            daemon._shutdown_signaled_mono = None
+            daemon._shutdown_deadline_mono = None
+            daemon._queued_outgoing_files = set()
+            daemon._queued_files_lock = threading.Lock()
+            daemon._stop_event = threading.Event()
+            daemon._smtp_task_queue = queue.Queue()
+            daemon._mail_handler = MagicMock()
+            lookup = MagicMock()
             send_block = threading.Event()
             send_started = threading.Event()
 
-            daemon_stub = MagicMock()
-            daemon_stub._queued_outgoing_files = set()
-            daemon_stub._queued_files_lock = threading.Lock()
-
-            key = str(mail_path.resolve())
-
-            def reserve(path):
-                with daemon_stub._queued_files_lock:
-                    if key in daemon_stub._queued_outgoing_files:
-                        return False
-                    daemon_stub._queued_outgoing_files.add(key)
-                    return True
-
-            def release(path):
-                with daemon_stub._queued_files_lock:
-                    daemon_stub._queued_outgoing_files.discard(str(path.resolve()))
-
-            daemon_stub._release_outgoing_file = release
-
             class Handler:
-                _daemon = daemon_stub
+                def __init__(self, d):
+                    self._daemon = d
 
                 def send_via_external_smtp(self, task):
                     send_started.set()
                     send_block.wait(timeout=30.0)
                     return False
 
-            pool = self.mpd.SmtpWorkerPool(task_q, Handler(), stop)
+            with patch.object(
+                self.mpd, 'extract_outbound_identity_from_message', return_value='client@local.test'
+            ), patch.object(self.mpd, 'plan_outbound_delivery', return_value=plan):
+                self.mpd.ProxyDaemon._enqueue_outbound_file(
+                    daemon,
+                    referent_data={'id': 1, 'username': 'ref1'},
+                    file_path=mail_path,
+                    relationship_lookup=lookup,
+                    smtp_queue=daemon._smtp_task_queue,
+                    source='backlog_relationship',
+                )
 
+            self.assertFalse(daemon._smtp_task_queue.empty())
+            self.assertFalse(
+                self.mpd.ProxyDaemon._reserve_outgoing_file(daemon, mail_path)
+            )
+
+            pool = self.mpd.SmtpWorkerPool(
+                daemon._smtp_task_queue, Handler(daemon), daemon._stop_event
+            )
             with patch.object(self.mpd, 'SMTP_WORKER_COUNT', 1):
                 pool.start()
 
-            task = self.mpd.SmtpTask(
-                referent_data={'id': 1},
-                account={'email': 'a@b.c'},
-                recipients=['user@example.com'],
-                file_path=mail_path,
-            )
-            self.assertTrue(reserve(mail_path))
-            task_q.put(task)
             self.assertTrue(send_started.wait(timeout=2.0))
-            stop.set()
-            pool.join_until_deadline(time.monotonic() + 1.0)
+            daemon._initiate_shutdown_schedule()
+            pool.join_until_deadline(daemon._shutdown_deadline_mono)
             send_block.set()
             pool.join_until_deadline(time.monotonic() + 2.0)
 
             self.assertTrue(mail_path.is_file())
-            with daemon_stub._queued_files_lock:
-                self.assertNotIn(key, daemon_stub._queued_outgoing_files)
-            self.assertTrue(reserve(mail_path))
+            key = str(mail_path.resolve())
+            with daemon._queued_files_lock:
+                self.assertNotIn(key, daemon._queued_outgoing_files)
+
+            # Simulate daemon restart after interrupt (fresh stop state).
+            daemon._stop_event = threading.Event()
+            daemon._shutdown_signaled_mono = None
+            daemon._shutdown_deadline_mono = None
+            daemon._is_shutdown = False
+
+            target = {
+                'relationship': {'relationship_id': 1, 'referent_id': 1},
+                'local_client_maildir': str(maildir),
+            }
+            with patch.object(
+                self.mpd, 'extract_outbound_identity_from_message', return_value='client@local.test'
+            ), patch.object(self.mpd, 'plan_outbound_delivery', return_value=plan):
+                daemon._smtp_task_queue = queue.Queue()
+                self.mpd.ProxyDaemon._scan_existing_outgoing_for_relationship(
+                    daemon, target
+                )
+
+            self.assertFalse(daemon._smtp_task_queue.empty())
+            self.assertFalse(
+                self.mpd.ProxyDaemon._reserve_outgoing_file(daemon, mail_path)
+            )
 
     def test_successful_smtp_still_deletes_only_after_send(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -543,19 +586,70 @@ class Acc102EndToEndTimingTests(unittest.TestCase):
         )
 
 
+def _run_acc102_child(mode: str, block_sec: float = 0.35) -> subprocess.CompletedProcess:
+    harness = ROOT / 'tests' / 'harness' / 'dev56_acc102_lifecycle_child.py'
+    env = os.environ.copy()
+    env['ACC102_DB_MODE'] = mode
+    env['ACC102_DB_BLOCK_SEC'] = str(block_sec)
+    return subprocess.run(
+        [sys.executable, str(harness)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+
+class ConnectorCompatibilityTests(unittest.TestCase):
+    def _run_probe(self, version: str, expect_unsupported: bool) -> subprocess.CompletedProcess:
+        probe = ROOT / 'tests' / 'harness' / 'verify_connector_pool_timeouts.py'
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / 'site'
+            pip = subprocess.run(
+                [
+                    sys.executable,
+                    '-m',
+                    'pip',
+                    'install',
+                    '-q',
+                    f'mysql-connector-python=={version}',
+                    '--target',
+                    str(target),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertEqual(pip.returncode, 0, pip.stderr)
+            env = os.environ.copy()
+            env['PYTHONPATH'] = str(target)
+            if expect_unsupported:
+                env['EXPECT_UNSUPPORTED_TIMEOUTS'] = '1'
+            return subprocess.run(
+                [sys.executable, str(probe)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+
+    def test_minimum_9_2_0_accepts_timeout_kwargs(self) -> None:
+        proc = self._run_probe('9.2.0', expect_unsupported=False)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('CONFIG_TIMEOUT_ARGS_OK', proc.stdout)
+
+    def test_8_4_0_rejects_read_timeout_kwarg(self) -> None:
+        proc = self._run_probe('8.4.0', expect_unsupported=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('UNSUPPORTED', proc.stdout)
+
+
 class Acc102LifecycleSubprocessTests(unittest.TestCase):
-    def test_subprocess_sigterm_during_db_to_shutdown_under_cap(self) -> None:
-        harness = (
-            ROOT / 'tests' / 'harness' / 'dev56_acc102_lifecycle_child.py'
-        )
-        proc = subprocess.Popen(
-            [sys.executable, str(harness)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stdout, stderr = proc.communicate(timeout=30)
-        self.assertEqual(proc.returncode, 0, stderr)
+    def _assert_acc102_timing(self, proc: subprocess.CompletedProcess, mode: str) -> None:
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stdout = proc.stdout
+        self.assertIn('IN_DB', stdout)
+        self.assertIn(f'DB_EXIT={mode}', stdout)
         elapsed_line = next(
             (ln for ln in stdout.splitlines() if ln.startswith('ELAPSED=')),
             None,
@@ -563,8 +657,20 @@ class Acc102LifecycleSubprocessTests(unittest.TestCase):
         self.assertIsNotNone(elapsed_line)
         elapsed = float(elapsed_line.split('=', 1)[1])
         mpd = _load_daemon()
-        self.assertLess(elapsed, mpd.SYSTEMD_TIMEOUT_STOP_SEC)
-        self.assertIn('IN_DB', stdout)
+        margin = 5.0
+        self.assertLess(
+            elapsed,
+            mpd.SYSTEMD_TIMEOUT_STOP_SEC - margin,
+            f'ACC-102 margin: signal→shutdown must be < {mpd.SYSTEMD_TIMEOUT_STOP_SEC}s',
+        )
+
+    def test_subprocess_sigterm_during_db_fetchall_stall(self) -> None:
+        proc = _run_acc102_child('complete', block_sec=0.35)
+        self._assert_acc102_timing(proc, 'complete')
+
+    def test_subprocess_sigterm_during_db_read_timeout_error(self) -> None:
+        proc = _run_acc102_child('timeout', block_sec=0.25)
+        self._assert_acc102_timing(proc, 'timeout')
 
 
 class SupervisorLoopDeadlineTests(unittest.TestCase):
