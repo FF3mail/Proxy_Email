@@ -1,0 +1,67 @@
+# =============================================================================
+# DELTA-Транзит
+# Автоматически создано установщиком
+# =============================================================================
+
+server {
+
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name panel.hsts.test;
+
+    ssl_certificate     /tmp/mail-proxy-issue155-vhost-golden/panel.crt;
+    ssl_certificate_key /tmp/mail-proxy-issue155-vhost-golden/panel.key;
+
+    root /tmp/mail-proxy-issue155-vhost-golden/www;
+    index index.php index.html;
+
+    # -------------------------------------------------------------------------
+    # Ограничение доступа согласно руководству
+    # -------------------------------------------------------------------------
+
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    allow 127.0.0.1;
+    allow ::1;
+
+    deny all;
+
+    # -------------------------------------------------------------------------
+    # Требование руководства
+    # -------------------------------------------------------------------------
+
+    client_max_body_size 210M;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    access_log /var/log/nginx/mail-proxy-access.log;
+    error_log  /var/log/nginx/mail-proxy-error.log;
+
+    location / {
+
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+
+        include snippets/fastcgi-php.conf;
+
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+
+        include fastcgi_params;
+
+        fastcgi_param HTTP_X_REAL_IP $remote_addr;
+        fastcgi_param HTTP_X_FORWARDED_FOR $proxy_add_x_forwarded_for;
+    }
+
+    location ~ /\. {
+
+        deny all;
+    }
+}
