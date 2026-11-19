@@ -262,6 +262,8 @@ class SupervisorSyncStopTests(unittest.TestCase):
     def test_sync_database_state_stops_registering_on_signal(self) -> None:
         daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
         daemon._stop_event = threading.Event()
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
         daemon._watch_registered_referent_ids = set()
         daemon._relationship_referent_id = {}
         daemon._watched_relationship_ids = set()
@@ -671,6 +673,155 @@ class Acc102LifecycleSubprocessTests(unittest.TestCase):
     def test_subprocess_sigterm_during_db_read_timeout_error(self) -> None:
         proc = _run_acc102_child('timeout', block_sec=0.25)
         self._assert_acc102_timing(proc, 'timeout')
+
+
+class SupervisorMaxStatementTimeTests(unittest.TestCase):
+    """DEV-56 option C — SET STATEMENT on supervisor SELECTs (tests 1–9)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mpd = _load_daemon()
+        from supervisor_db import MARIADB_ER_STATEMENT_TIMEOUT, SUPERVISOR_MAX_STATEMENT_TIME_SEC
+
+        cls.MARIADB_ER = MARIADB_ER_STATEMENT_TIMEOUT
+        cls.DEFAULT_CAP = SUPERVISOR_MAX_STATEMENT_TIME_SEC
+
+    def test_1_format_set_statement_wraps_select(self) -> None:
+        from supervisor_db import format_set_statement_select
+
+        inner = 'SELECT id FROM referents WHERE active = 1'
+        wrapped = format_set_statement_select(inner, 12.0)
+        self.assertTrue(wrapped.startswith('SET STATEMENT max_statement_time=12 FOR '))
+        self.assertIn(inner, wrapped)
+        self.assertNotIn('SET SESSION', wrapped)
+
+    def test_2_format_rejects_non_select(self) -> None:
+        from supervisor_db import format_set_statement_select
+
+        with self.assertRaises(ValueError):
+            format_set_statement_select('UPDATE referents SET active=0', 1.0)
+
+    def test_3_is_mariadb_statement_timeout_errno_1969_only(self) -> None:
+        import mysql.connector
+
+        from supervisor_db import is_mariadb_statement_timeout
+
+        err1969 = mysql.connector.Error()
+        err1969.errno = 1969
+        err3024 = mysql.connector.Error()
+        err3024.errno = 3024
+        self.assertTrue(is_mariadb_statement_timeout(err1969))
+        self.assertFalse(is_mariadb_statement_timeout(err3024))
+
+    def test_4_cap_tightens_to_remaining_shutdown_budget(self) -> None:
+        from supervisor_db import supervisor_max_statement_seconds
+
+        deadline = time.monotonic() + 4.0
+        cap = supervisor_max_statement_seconds(
+            self.DEFAULT_CAP,
+            deadline,
+            self.mpd._shutdown_remaining_seconds,
+        )
+        self.assertLessEqual(cap, self.DEFAULT_CAP)
+        self.assertGreaterEqual(cap, 1.0)
+        self.assertLess(cap, 4.0)
+
+    def test_5_supervisor_sql_permitted_false_after_signal(self) -> None:
+        daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+        daemon._stop_event = threading.Event()
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        self.assertTrue(daemon._supervisor_sql_permitted())
+        daemon._initiate_shutdown_schedule()
+        self.assertFalse(daemon._supervisor_sql_permitted())
+
+    def test_6_load_referents_skips_new_sql_after_signal(self) -> None:
+        daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+        daemon._stop_event = threading.Event()
+        daemon._shutdown_signaled_mono = time.monotonic()
+        daemon._shutdown_deadline_mono = time.monotonic() + 55
+        daemon._db = MagicMock()
+        refs = daemon._load_referents()
+        self.assertEqual(refs, [])
+        daemon._db.get_connection.assert_not_called()
+
+    def test_7_load_referents_uses_set_statement_on_execute(self) -> None:
+        daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+        daemon._stop_event = threading.Event()
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [{'id': 1}]
+        conn.cursor.return_value = cursor
+        daemon._db = MagicMock()
+        daemon._db.get_connection.return_value = conn
+        daemon._load_referents()
+        executed_sql = cursor.execute.call_args[0][0]
+        self.assertIn('SET STATEMENT max_statement_time=', executed_sql)
+        self.assertIn('FROM referents WHERE active = 1', executed_sql)
+
+    def test_8_never_set_session_max_statement_time_in_supervisor_paths(self) -> None:
+        for path in (
+            ROOT / 'mail-proxy-daemon.py',
+            ROOT / 'relationship_lookup.py',
+            ROOT / 'supervisor_db.py',
+        ):
+            text = path.read_text(encoding='utf-8')
+            self.assertNotIn(
+                'SET SESSION max_statement_time',
+                text,
+                msg=str(path),
+            )
+
+    def test_9_pool_reuse_after_1969_rolls_back_and_closes(self) -> None:
+        import mysql.connector
+        from supervisor_db import rollback_connection_quietly
+
+        conn = MagicMock()
+        err = mysql.connector.Error()
+        err.errno = self.MARIADB_ER
+        rollback_connection_quietly(conn)
+        conn.rollback.assert_called_once()
+        calls = {'n': 0}
+
+        def get_connection():
+            calls['n'] += 1
+            return conn
+
+        conn2 = get_connection()
+        self.assertIs(conn2, conn)
+        self.assertEqual(calls['n'], 1)
+
+    @unittest.skipUnless(
+        os.environ.get('SUPERVISOR_DB_INTEGRATION') == '1',
+        'Set SUPERVISOR_DB_INTEGRATION=1 with live MariaDB (DEV-56 option C)',
+    )
+    def test_mariadb_integration_set_statement_sleep_raises_1969(self) -> None:
+        import mysql.connector
+        from supervisor_db import format_set_statement_select, is_mariadb_statement_timeout
+
+        kwargs = {
+            'host': os.environ.get('RELATIONSHIP_TEST_DB_HOST', '127.0.0.1'),
+            'port': int(os.environ.get('RELATIONSHIP_TEST_DB_PORT', '3306')),
+            'user': os.environ.get('RELATIONSHIP_TEST_DB_USER', 'root'),
+            'password': os.environ.get('RELATIONSHIP_TEST_DB_PASS', ''),
+            'autocommit': False,
+        }
+        conn = mysql.connector.connect(**kwargs)
+        try:
+            cur = conn.cursor()
+            sql = format_set_statement_select('SELECT SLEEP(2)', 0.1)
+            with self.assertRaises(mysql.connector.Error) as ctx:
+                cur.execute(sql)
+                cur.fetchall()
+            self.assertTrue(is_mariadb_statement_timeout(ctx.exception))
+            conn.rollback()
+            cur2 = conn.cursor()
+            cur2.execute('SELECT 1')
+            self.assertEqual(cur2.fetchone(), (1,))
+        finally:
+            conn.close()
 
 
 class SupervisorLoopDeadlineTests(unittest.TestCase):

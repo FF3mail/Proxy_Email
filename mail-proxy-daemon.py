@@ -36,6 +36,13 @@ from watchdog.events import FileSystemEventHandler
 # PROMPT-58: RelationshipLookup for live relationship resolution (inbound/outbound).
 # relationship_lookup.py has no top-level side effects beyond class/function defs.
 from relationship_lookup import RelationshipLookup
+from supervisor_db import (
+    SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+    format_set_statement_select,
+    is_mariadb_statement_timeout,
+    rollback_connection_quietly,
+    supervisor_max_statement_seconds,
+)
 from relationship_routing import (
     InboundDeliveryPlan,
     InboundProcessResult,
@@ -119,6 +126,8 @@ DB_POOL_SIZE = 12
 DB_CONNECT_TIMEOUT_SEC = 10
 DB_READ_TIMEOUT_SEC = 30
 DB_WRITE_TIMEOUT_SEC = 30
+# DEV-56 option C: MariaDB SET STATEMENT max_statement_time on supervisor SELECTs only.
+# See supervisor_db.py (never SET SESSION — shared pool serves workers).
 # Директория для временных файлов демона
 TEMP_DIR = '/var/spool/mail-proxy/tmp'
 # Default maximum inbound message size in bytes.
@@ -2071,9 +2080,13 @@ class ProxyDaemon:
     def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
         """Register relationship-level outbound watches for one referent."""
         ref_id = int(ref['id'])
+        if not self._supervisor_sql_permitted():
+            return
+        cap = self._supervisor_max_statement_seconds()
         targets = (
             self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                ref_id
+                ref_id,
+                max_statement_time=cap,
             )
         )
         for target in targets:
@@ -2088,18 +2101,37 @@ class ProxyDaemon:
         must not be used for relationship routing or disposal notify addresses.
         """
         data: Dict[str, Any] = {'id': int(referent_id)}
+        if not self._supervisor_sql_permitted():
+            return data
         conn = None
         cursor = None
+        cap = self._supervisor_max_statement_seconds()
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} FROM referents WHERE id = %s",
-                (int(referent_id),),
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} FROM referents WHERE id = %s'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql, (int(referent_id),))
             row = cursor.fetchone()
             if row:
                 data.update(dict(row))
+        except mysql.connector.Error as exc:
+            rollback_connection_quietly(conn)
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'Supervisor referent handler data hit max_statement_time '
+                    '(%ss, referent_id=%s)',
+                    cap,
+                    referent_id,
+                )
+            elif not self._supervisor_db_abort_no_retry(exc):
+                logger.error(
+                    'Failed to load referent %s for handler data: %s',
+                    referent_id,
+                    exc,
+                )
         except Exception as exc:
             logger.error(
                 'Failed to load referent %s for handler data: %s',
@@ -2504,24 +2536,45 @@ class ProxyDaemon:
 
     def _load_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
-        if self._stop_event.is_set():
+        if not self._supervisor_sql_permitted():
             return []
         conn = None
         cursor = None
+        cap = self._supervisor_max_statement_seconds()
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} "
-                "FROM referents WHERE active = 1"
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} '
+                'FROM referents WHERE active = 1'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql)
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'Supervisor referent list hit max_statement_time (%ss)',
+                    cap,
+                )
+                rollback_connection_quietly(conn)
+                return []
+            if self._supervisor_db_abort_no_retry(exc):
+                rollback_connection_quietly(conn)
+                return []
+            logger.critical(
+                f'Failed to load referents: {exc}',
+                exc_info=True,
+            )
+            return []
         except Exception as e:
             logger.critical(f"Failed to load referents: {e}", exc_info=True)
             return []
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
     def _sync_database_state(self) -> None:
         """
         Периодическая синхронизация конфигурации демона с актуальным состоянием БД.
@@ -2534,7 +2587,7 @@ class ProxyDaemon:
         - Пулы воркеров не пересоздаются — они обслуживают общие очереди задач
           и не зависят от количества референтов.
         """
-        if self._stop_event.is_set():
+        if not self._supervisor_sql_permitted():
             return
         current_refs = self._load_referents()
         if self._stop_event.is_set():
@@ -2592,15 +2645,17 @@ class ProxyDaemon:
 
     def _sync_relationship_watches(self) -> None:
         """Reconcile relationship watches for all active referents."""
-        if self._stop_event.is_set():
+        if not self._supervisor_sql_permitted():
             return
         targets: List[Dict[str, Any]] = []
         for ref in self._load_referents():
-            if self._stop_event.is_set():
+            if not self._supervisor_sql_permitted():
                 break
+            cap = self._supervisor_max_statement_seconds()
             targets.extend(
                 self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                    int(ref['id'])
+                    int(ref['id']),
+                    max_statement_time=cap,
                 )
             )
         current_by_id = {
@@ -2712,6 +2767,30 @@ class ProxyDaemon:
                 relationship_id,
                 e,
             )
+
+    def _supervisor_sql_permitted(self) -> bool:
+        """False after stop signal — do not start new supervisor DB statements."""
+        if self._stop_event.is_set():
+            return False
+        if getattr(self, '_shutdown_signaled_mono', None) is not None:
+            return False
+        if self._past_shutdown_deadline():
+            return False
+        return True
+
+    def _supervisor_max_statement_seconds(self) -> float:
+        return supervisor_max_statement_seconds(
+            SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+            self._shutdown_deadline_mono,
+            _shutdown_remaining_seconds,
+        )
+
+    def _supervisor_db_abort_no_retry(self, exc: BaseException) -> bool:
+        if is_mariadb_statement_timeout(exc):
+            return True
+        if self._shutdown_signaled_mono is not None:
+            return True
+        return False
 
     def _initiate_shutdown_schedule(self) -> float:
         """
