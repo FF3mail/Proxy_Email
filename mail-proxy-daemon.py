@@ -104,6 +104,11 @@ VALID_ENCRYPTION_MODES = ('none', 'ssl', 'tls')
 # Размеры пулов воркеров
 IMAP_WORKER_COUNT = 20
 SMTP_WORKER_COUNT = 20
+# Graceful shutdown (NFR-9, ACC-102): _shutdown() must finish below systemd TimeoutStopSec.
+SYSTEMD_TIMEOUT_STOP_SEC = 60
+SHUTDOWN_BUDGET_SEC = 55
+SHUTDOWN_OBSERVER_JOIN_SEC = 10
+SUPERVISOR_SYNC_INTERVAL_SEC = 60
 # Максимальный размер централизованных очередей задач
 IMAP_QUEUE_MAXSIZE = 5000
 SMTP_QUEUE_MAXSIZE = 1000
@@ -1615,6 +1620,39 @@ class MailHandler:
                     rebuild_temp.unlink(missing_ok=True)
                 except OSError:
                     pass
+def _shutdown_remaining_seconds(deadline: float) -> float:
+    """Seconds left until monotonic shutdown deadline (0 if expired)."""
+    return max(0.0, deadline - time.monotonic())
+
+
+def _join_threads_until_deadline(
+    threads: List[threading.Thread],
+    deadline: float,
+    label: str,
+) -> None:
+    """
+  Wait for threads to exit until deadline (parallel join, NFR-9).
+
+  Uses a single wall-clock budget shared across all threads instead of
+  applying a per-thread timeout sequentially (DEV-56).
+    """
+    for t in threads:
+        if not t.is_alive():
+            continue
+        remaining = _shutdown_remaining_seconds(deadline)
+        if remaining <= 0:
+            break
+        t.join(timeout=remaining)
+    alive = [t.name for t in threads if t.is_alive()]
+    if alive:
+        logger.warning(
+            "Shutdown deadline reached for %s: %d thread(s) still alive: %s",
+            label,
+            len(alive),
+            ", ".join(alive[:10]) + ("..." if len(alive) > 10 else ""),
+        )
+
+
 # =============================================================================
 # Пул IMAP-воркеров
 # =============================================================================
@@ -1658,10 +1696,11 @@ class ImapWorkerPool:
                     self._queue.task_done()
             except queue.Empty:
                 continue
-    def join(self, timeout: float = 30.0) -> None:
-        """Ожидает завершения всех потоков пула."""
-        for t in self._workers:
-            t.join(timeout=timeout)
+
+    def join_until_deadline(self, deadline: float) -> None:
+        """Ожидает завершения воркеров до общего дедлайна остановки (NFR-9)."""
+        _join_threads_until_deadline(self._workers, deadline, "IMAP worker pool")
+
 # =============================================================================
 # Пул SMTP-воркеров
 # =============================================================================
@@ -1723,10 +1762,11 @@ class SmtpWorkerPool:
                 logger.info(f"Deleted processed file: {file_path.name}")
         except Exception as e:
             logger.error(f"Failed to delete file {file_path}: {e}")
-    def join(self, timeout: float = 30.0) -> None:
-        """Ожидает завершения всех потоков пула."""
-        for t in self._workers:
-            t.join(timeout=timeout)
+
+    def join_until_deadline(self, deadline: float) -> None:
+        """Ожидает завершения воркеров до общего дедлайна остановки (NFR-9)."""
+        _join_threads_until_deadline(self._workers, deadline, "SMTP worker pool")
+
 # =============================================================================
 # Планировщик IMAP-опроса
 # =============================================================================
@@ -1998,7 +2038,10 @@ class ProxyDaemon:
                 self._sync_database_state()
             except Exception as e:
                 logger.error(f"Supervisor sync error: {e}")
-            time.sleep(60)
+            for _ in range(SUPERVISOR_SYNC_INTERVAL_SEC):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(1)
     def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
         """Register relationship-level outbound watches for one referent."""
         ref_id = int(ref['id'])
@@ -2669,18 +2712,28 @@ class ProxyDaemon:
                 return
             self._is_shutdown = True
         logger.info("Graceful shutdown: stopping all components...")
-        # Шаг 1: Останавливаем watchdog — прекращаем поступление новых задач
+        deadline = time.monotonic() + SHUTDOWN_BUDGET_SEC
+        # Шаг 1: Останавливаем watchdog — прекращаем поступление новых SMTP-задач
         if self._observer:
             try:
                 self._observer.stop()
                 if self._observer_started:
-                    self._observer.join(timeout=10)
+                    observer_wait = min(
+                        SHUTDOWN_OBSERVER_JOIN_SEC,
+                        _shutdown_remaining_seconds(deadline),
+                    )
+                    if observer_wait > 0:
+                        self._observer.join(timeout=observer_wait)
                 logger.info("Watchdog observer stopped")
             except Exception as e:
                 logger.error(f"Error stopping watchdog: {e}")
-        # Шаг 2: Ожидаем завершения воркеров (флаг _stop_event уже установлен)
-        self._imap_pool.join(timeout=30)
-        self._smtp_pool.join(timeout=30)
+        # Шаг 2: IMAP poller — прекращаем постановку новых IMAP-задач в очередь
+        poller_wait = _shutdown_remaining_seconds(deadline)
+        if poller_wait > 0 and self._imap_poller.is_alive():
+            self._imap_poller.join(timeout=poller_wait)
+        # Шаг 3: Ожидаем завершения активных воркеров (единый дедлайн, DMN-5)
+        all_workers = self._imap_pool._workers + self._smtp_pool._workers
+        _join_threads_until_deadline(all_workers, deadline, "IMAP+SMTP worker pools")
         logger.info("ProxyDaemon shutdown complete")
 def write_pid_file(path: str = PID_FILE) -> None:
     """Best-effort PID file for panel monitor (no shell). Failures are logged only."""
