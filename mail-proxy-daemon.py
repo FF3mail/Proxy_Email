@@ -113,6 +113,11 @@ SUPERVISOR_SYNC_INTERVAL_SEC = 60
 IMAP_QUEUE_MAXSIZE = 5000
 SMTP_QUEUE_MAXSIZE = 1000
 DB_POOL_SIZE = 12
+# MariaDB pool socket timeouts (mysql-connector-python>=8.4.0 connect args).
+# connect_timeout: TCP/handshake; read_timeout/write_timeout: query I/O wait.
+DB_CONNECT_TIMEOUT_SEC = 10
+DB_READ_TIMEOUT_SEC = 30
+DB_WRITE_TIMEOUT_SEC = 30
 # Директория для временных файлов демона
 TEMP_DIR = '/var/spool/mail-proxy/tmp'
 # Default maximum inbound message size in bytes.
@@ -288,6 +293,9 @@ class Database:
             charset='utf8mb4',
             collation='utf8mb4_unicode_ci',
             autocommit=False,
+            connect_timeout=DB_CONNECT_TIMEOUT_SEC,
+            read_timeout=DB_READ_TIMEOUT_SEC,
+            write_timeout=DB_WRITE_TIMEOUT_SEC,
         )
 
     def _load_config(self) -> Dict[str, str]:
@@ -2010,7 +2018,6 @@ class ProxyDaemon:
         # Monotonic instant of first stop signal (ACC-102 measurement).
         self._shutdown_signaled_mono: Optional[float] = None
         self._shutdown_deadline_mono: Optional[float] = None
-        self._shutdown_deadline_lock = threading.Lock()
         # Регистрация сигналов POSIX для graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -2496,6 +2503,8 @@ class ProxyDaemon:
 
     def _load_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
+        if self._stop_event.is_set():
+            return []
         conn = None
         cursor = None
         try:
@@ -2524,7 +2533,11 @@ class ProxyDaemon:
         - Пулы воркеров не пересоздаются — они обслуживают общие очереди задач
           и не зависят от количества референтов.
         """
+        if self._stop_event.is_set():
+            return
         current_refs = self._load_referents()
+        if self._stop_event.is_set():
+            return
         current_ids = {int(r['id']) for r in current_refs}
         current_refs_by_id = {int(r['id']): r for r in current_refs}
 
@@ -2578,8 +2591,12 @@ class ProxyDaemon:
 
     def _sync_relationship_watches(self) -> None:
         """Reconcile relationship watches for all active referents."""
+        if self._stop_event.is_set():
+            return
         targets: List[Dict[str, Any]] = []
         for ref in self._load_referents():
+            if self._stop_event.is_set():
+                break
             targets.extend(
                 self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
                     int(ref['id'])
@@ -2695,32 +2712,43 @@ class ProxyDaemon:
                 e,
             )
 
-    def _arm_shutdown_deadline(self) -> float:
-        """Set the single process-wide shutdown deadline (first signal or _shutdown)."""
-        with self._shutdown_deadline_lock:
-            if self._shutdown_deadline_mono is None:
-                self._shutdown_deadline_mono = (
-                    time.monotonic() + SHUTDOWN_BUDGET_SEC
-                )
-            return self._shutdown_deadline_mono
+    def _initiate_shutdown_schedule(self) -> float:
+        """
+        Arm first-signal deadline without locks or logging (signal-safe).
+
+        Idempotent: repeated signals keep the earliest timestamp/deadline.
+        """
+        now = time.monotonic()
+        if self._shutdown_signaled_mono is None:
+            self._shutdown_signaled_mono = now
+        if self._shutdown_deadline_mono is None:
+            self._shutdown_deadline_mono = now + SHUTDOWN_BUDGET_SEC
+        self._stop_event.set()
+        return self._shutdown_deadline_mono
+
+    def _ensure_shutdown_deadline(self) -> float:
+        """Deadline for _shutdown() when no signal was received (exception path)."""
+        if self._shutdown_deadline_mono is None:
+            self._shutdown_deadline_mono = (
+                time.monotonic() + SHUTDOWN_BUDGET_SEC
+            )
+        return self._shutdown_deadline_mono
 
     def _past_shutdown_deadline(self) -> bool:
-        with self._shutdown_deadline_lock:
-            deadline = self._shutdown_deadline_mono
+        deadline = self._shutdown_deadline_mono
         if deadline is None:
             return False
         return time.monotonic() >= deadline
 
     def _handle_signal(self, signum, frame) -> None:
         """Обработчик POSIX-сигналов — инициирует graceful shutdown."""
-        logger.info(
-            f"Received signal {signum}, initiating graceful shutdown..."
-        )
-        with self._shutdown_deadline_lock:
-            if self._shutdown_signaled_mono is None:
-                self._shutdown_signaled_mono = time.monotonic()
-        self._arm_shutdown_deadline()
-        self._stop_event.set()
+        self._initiate_shutdown_schedule()
+        try:
+            logger.info(
+                f"Received signal {signum}, initiating graceful shutdown..."
+            )
+        except Exception:
+            pass
 
     def _handle_log_reopen(self, signum, frame) -> None:
         """
@@ -2768,7 +2796,7 @@ class ProxyDaemon:
                 return
             self._is_shutdown = True
         self._stop_event.set()
-        deadline = self._arm_shutdown_deadline()
+        deadline = self._ensure_shutdown_deadline()
         logger.info("Graceful shutdown: stopping all components...")
         # Шаг 1: Останавливаем watchdog — прекращаем поступление новых SMTP-задач
         if self._observer:

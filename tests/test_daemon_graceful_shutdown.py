@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import configparser
 import importlib.util
+import logging
 import queue
+import subprocess
 import sys
 import tempfile
 import threading
@@ -102,7 +105,6 @@ class ShutdownDeadlineTests(unittest.TestCase):
         daemon._stop_event = threading.Event()
         daemon._shutdown_signaled_mono = None
         daemon._shutdown_deadline_mono = None
-        daemon._shutdown_deadline_lock = threading.Lock()
         daemon._observer = None
         daemon._observer_started = False
         daemon._imap_poller = MagicMock()
@@ -127,6 +129,89 @@ class ShutdownDeadlineTests(unittest.TestCase):
         self.assertFalse(daemon._stop_event.is_set())
         daemon._shutdown()
         self.assertTrue(daemon._stop_event.is_set())
+
+
+class SignalHandlerOrderingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mpd = _load_daemon()
+
+    def test_deadline_armed_before_logger_info(self) -> None:
+        daemon = ShutdownDeadlineTests()._minimal_daemon()
+        armed = threading.Event()
+
+        def info_hook(*args, **kwargs):
+            self.assertIsNotNone(daemon._shutdown_deadline_mono)
+            self.assertIsNotNone(daemon._shutdown_signaled_mono)
+            self.assertTrue(daemon._stop_event.is_set())
+            armed.set()
+
+        with patch.object(logging.Logger, 'info', side_effect=info_hook):
+            daemon._handle_signal(15, None)
+        self.assertTrue(armed.wait(timeout=1.0))
+
+    def test_repeated_signal_keeps_first_deadline(self) -> None:
+        daemon = ShutdownDeadlineTests()._minimal_daemon()
+        daemon._handle_signal(15, None)
+        first_deadline = daemon._shutdown_deadline_mono
+        first_signal = daemon._shutdown_signaled_mono
+        time.sleep(0.02)
+        daemon._handle_signal(2, None)
+        self.assertEqual(daemon._shutdown_deadline_mono, first_deadline)
+        self.assertEqual(daemon._shutdown_signaled_mono, first_signal)
+
+    def test_past_deadline_during_handler_never_blocks_on_lock(self) -> None:
+        daemon = ShutdownDeadlineTests()._minimal_daemon()
+        deadline = threading.Thread(
+            target=lambda: (
+                daemon._handle_signal(15, None),
+                daemon._past_shutdown_deadline(),
+            ),
+            daemon=True,
+        )
+        deadline.start()
+        deadline.join(timeout=2.0)
+        self.assertFalse(deadline.is_alive())
+
+
+class DatabasePoolTimeoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mpd = _load_daemon()
+
+    def test_pool_passes_connector_timeouts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conf_path = Path(tmp) / 'db.conf'
+            cfg = configparser.ConfigParser()
+            cfg['db'] = {
+                'db_host': '127.0.0.1',
+                'db_user': 'mailproxy',
+                'db_pass': 'secret',
+                'db_name': 'mailproxy',
+                'db_port': '3306',
+            }
+            with conf_path.open('w', encoding='utf-8') as fh:
+                cfg.write(fh)
+            captured = {}
+
+            def fake_pool(**kwargs):
+                captured.update(kwargs)
+                raise RuntimeError('stop-after-capture')
+
+            with patch.object(self.mpd.pooling, 'MySQLConnectionPool', side_effect=fake_pool):
+                with self.assertRaises(RuntimeError):
+                    self.mpd.Database(str(conf_path))
+            self.assertEqual(
+                captured.get('connect_timeout'), self.mpd.DB_CONNECT_TIMEOUT_SEC
+            )
+            self.assertEqual(captured.get('read_timeout'), self.mpd.DB_READ_TIMEOUT_SEC)
+            self.assertEqual(captured.get('write_timeout'), self.mpd.DB_WRITE_TIMEOUT_SEC)
+
+    def test_load_referents_skips_when_stopping(self) -> None:
+        daemon = ShutdownDeadlineTests._minimal_daemon(self)
+        daemon._db = MagicMock()
+        daemon._stop_event.set()
+        self.assertEqual(daemon._load_referents(), [])
 
 
 class ImapPollerStopSchedulingTests(unittest.TestCase):
@@ -251,6 +336,70 @@ class OutboundPreservationTests(unittest.TestCase):
             send_block.set()
             pool.join_until_deadline(time.monotonic() + 2.0)
 
+    def test_interrupted_smtp_file_rediscoverable_after_release(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            new_dir = Path(tmp) / 'new'
+            new_dir.mkdir()
+            mail_path = new_dir / 'retrymsg'
+            mail_path.write_bytes(
+                b'To: user@example.com\r\nFrom: x@y.z\r\nSubject: t\r\n\r\nbody'
+            )
+            task_q: queue.Queue = queue.Queue()
+            stop = threading.Event()
+            send_block = threading.Event()
+            send_started = threading.Event()
+
+            daemon_stub = MagicMock()
+            daemon_stub._queued_outgoing_files = set()
+            daemon_stub._queued_files_lock = threading.Lock()
+
+            key = str(mail_path.resolve())
+
+            def reserve(path):
+                with daemon_stub._queued_files_lock:
+                    if key in daemon_stub._queued_outgoing_files:
+                        return False
+                    daemon_stub._queued_outgoing_files.add(key)
+                    return True
+
+            def release(path):
+                with daemon_stub._queued_files_lock:
+                    daemon_stub._queued_outgoing_files.discard(str(path.resolve()))
+
+            daemon_stub._release_outgoing_file = release
+
+            class Handler:
+                _daemon = daemon_stub
+
+                def send_via_external_smtp(self, task):
+                    send_started.set()
+                    send_block.wait(timeout=30.0)
+                    return False
+
+            pool = self.mpd.SmtpWorkerPool(task_q, Handler(), stop)
+
+            with patch.object(self.mpd, 'SMTP_WORKER_COUNT', 1):
+                pool.start()
+
+            task = self.mpd.SmtpTask(
+                referent_data={'id': 1},
+                account={'email': 'a@b.c'},
+                recipients=['user@example.com'],
+                file_path=mail_path,
+            )
+            self.assertTrue(reserve(mail_path))
+            task_q.put(task)
+            self.assertTrue(send_started.wait(timeout=2.0))
+            stop.set()
+            pool.join_until_deadline(time.monotonic() + 1.0)
+            send_block.set()
+            pool.join_until_deadline(time.monotonic() + 2.0)
+
+            self.assertTrue(mail_path.is_file())
+            with daemon_stub._queued_files_lock:
+                self.assertNotIn(key, daemon_stub._queued_outgoing_files)
+            self.assertTrue(reserve(mail_path))
+
     def test_successful_smtp_still_deletes_only_after_send(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             mail_path = Path(tmp) / 'okmsg'
@@ -317,7 +466,6 @@ class Acc102EndToEndTimingTests(unittest.TestCase):
         daemon._stop_event = threading.Event()
         daemon._shutdown_signaled_mono = None
         daemon._shutdown_deadline_mono = None
-        daemon._shutdown_deadline_lock = threading.Lock()
         daemon._observer = None
         daemon._observer_started = False
         daemon._imap_poller = MagicMock()
@@ -395,6 +543,30 @@ class Acc102EndToEndTimingTests(unittest.TestCase):
         )
 
 
+class Acc102LifecycleSubprocessTests(unittest.TestCase):
+    def test_subprocess_sigterm_during_db_to_shutdown_under_cap(self) -> None:
+        harness = (
+            ROOT / 'tests' / 'harness' / 'dev56_acc102_lifecycle_child.py'
+        )
+        proc = subprocess.Popen(
+            [sys.executable, str(harness)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, stderr)
+        elapsed_line = next(
+            (ln for ln in stdout.splitlines() if ln.startswith('ELAPSED=')),
+            None,
+        )
+        self.assertIsNotNone(elapsed_line)
+        elapsed = float(elapsed_line.split('=', 1)[1])
+        mpd = _load_daemon()
+        self.assertLess(elapsed, mpd.SYSTEMD_TIMEOUT_STOP_SEC)
+        self.assertIn('IN_DB', stdout)
+
+
 class SupervisorLoopDeadlineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -404,7 +576,6 @@ class SupervisorLoopDeadlineTests(unittest.TestCase):
         daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
         daemon._stop_event = threading.Event()
         daemon._shutdown_deadline_mono = time.monotonic() - 0.01
-        daemon._shutdown_deadline_lock = threading.Lock()
         self.assertTrue(daemon._past_shutdown_deadline())
 
 
