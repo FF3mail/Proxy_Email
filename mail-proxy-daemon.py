@@ -104,7 +104,7 @@ VALID_ENCRYPTION_MODES = ('none', 'ssl', 'tls')
 # Размеры пулов воркеров
 IMAP_WORKER_COUNT = 20
 SMTP_WORKER_COUNT = 20
-# Graceful shutdown (NFR-9, ACC-102): _shutdown() must finish below systemd TimeoutStopSec.
+# Graceful shutdown (NFR-9, ACC-102): process stop budget from first SIGTERM/SIGINT.
 SYSTEMD_TIMEOUT_STOP_SEC = 60
 SHUTDOWN_BUDGET_SEC = 55
 SHUTDOWN_OBSERVER_JOIN_SEC = 10
@@ -1804,13 +1804,21 @@ class ImapPoller(threading.Thread):
         logger.info("ImapPoller stopped")
     def _enqueue_imap_tasks(self) -> None:
         """Загружает активных референтов и их аккаунты, создаёт задачи для пула."""
+        if self._stop_event.is_set():
+            return
         referents = self._load_active_referents()
+        if self._stop_event.is_set():
+            return
         task_count = 0
         for ref in referents:
+            if self._stop_event.is_set():
+                break
             if self._referent_enricher is not None:
                 ref = self._referent_enricher(ref)
             accounts = self._load_accounts_for_referent(ref['id'])
             for acc in accounts:
+                if self._stop_event.is_set():
+                    break
                 if not acc.get('imap_host'):
                     continue
                 task = ImapTask(referent_data=ref, account=acc)
@@ -1909,6 +1917,8 @@ class MaildirHandler(FileSystemEventHandler):
         # Обрабатываем только файлы непосредственно в директории new
         if file_path.parent.name != 'new':
             return
+        if self._daemon._stop_event.is_set():
+            return
         if self.watch_source == 'relationship':
             logger.info(
                 f"Watchdog: new email file for relationship "
@@ -1997,6 +2007,10 @@ class ProxyDaemon:
         # Защита от двойного вызова _shutdown()
         self._shutdown_lock = threading.Lock()
         self._is_shutdown = False
+        # Monotonic instant of first stop signal (ACC-102 measurement).
+        self._shutdown_signaled_mono: Optional[float] = None
+        self._shutdown_deadline_mono: Optional[float] = None
+        self._shutdown_deadline_lock = threading.Lock()
         # Регистрация сигналов POSIX для graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -2020,6 +2034,8 @@ class ProxyDaemon:
         if not referents:
             logger.warning("No active referents found in database.")
         for ref in referents:
+            if self._stop_event.is_set() or self._past_shutdown_deadline():
+                break
             self._register_watches_for_referent(ref)
         if self._watched_relationship_ids and not self._observer_started:
             self._observer.start()
@@ -2034,12 +2050,14 @@ class ProxyDaemon:
         )
         # Главный цикл супервизора: синхронизирует список референтов с БД
         while not self._stop_event.is_set():
+            if self._past_shutdown_deadline():
+                break
             try:
                 self._sync_database_state()
             except Exception as e:
                 logger.error(f"Supervisor sync error: {e}")
             for _ in range(SUPERVISOR_SYNC_INTERVAL_SEC):
-                if self._stop_event.is_set():
+                if self._stop_event.is_set() or self._past_shutdown_deadline():
                     break
                 time.sleep(1)
     def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
@@ -2255,6 +2273,8 @@ class ProxyDaemon:
         source: str,
     ) -> None:
         """Parse outbound message, plan account routing, enqueue SmtpTask if allowed."""
+        if self._stop_event.is_set():
+            return
         try:
             from email.parser import BytesHeaderParser
 
@@ -2445,6 +2465,8 @@ class ProxyDaemon:
             )
             referent_data = {'id': referent_id}
             for f in files:
+                if self._stop_event.is_set():
+                    break
                 try:
                     self._enqueue_outbound_file(
                         referent_data=referent_data,
@@ -2509,6 +2531,8 @@ class ProxyDaemon:
         registered = set(self._watch_registered_referent_ids)
         new_ref_ids = current_ids - registered
         for ref_id in new_ref_ids:
+            if self._stop_event.is_set():
+                break
             ref = current_refs_by_id[ref_id]
             logger.info(
                 f"Sync: new active referent detected (ID={ref_id}, "
@@ -2518,6 +2542,8 @@ class ProxyDaemon:
 
         removed_ref_ids = registered - current_ids
         for ref_id in removed_ref_ids:
+            if self._stop_event.is_set():
+                break
             logger.info(
                 f"Sync: referent ID={ref_id} is no longer active, "
                 f"removing relationship watches"
@@ -2532,6 +2558,8 @@ class ProxyDaemon:
                 f"{len(current_ids)} total active referents"
             )
 
+        if self._stop_event.is_set():
+            return
         self._sync_relationship_watches()
     def _unschedule_watches_for_referent(self, referent_id: int) -> None:
         """Remove all relationship-level watches owned by a referent."""
@@ -2567,6 +2595,8 @@ class ProxyDaemon:
 
         new_ids = current_ids - watched_snapshot
         for relationship_id in new_ids:
+            if self._stop_event.is_set():
+                break
             target = current_by_id[relationship_id]
             logger.info(
                 'Sync: new valid relationship detected (ID=%s), '
@@ -2578,6 +2608,8 @@ class ProxyDaemon:
 
         removed_ids = watched_snapshot - current_ids
         for relationship_id in removed_ids:
+            if self._stop_event.is_set():
+                break
             logger.info(
                 'Sync: relationship ID=%s no longer valid, '
                 'removing from relationship watchdog',
@@ -2586,6 +2618,8 @@ class ProxyDaemon:
             self._unschedule_watchdog_for_relationship(relationship_id)
 
         for relationship_id in current_ids & watched_snapshot:
+            if self._stop_event.is_set():
+                break
             target = current_by_id[relationship_id]
             maildir_new = self._validate_relationship_maildir_for_watch(
                 target['local_client_maildir'], relationship_id
@@ -2606,6 +2640,8 @@ class ProxyDaemon:
                 self._setup_watchdog_for_relationship(target)
 
         for relationship_id in current_ids:
+            if self._stop_event.is_set():
+                break
             self._scan_existing_outgoing_for_relationship(
                 current_by_id[relationship_id]
             )
@@ -2659,11 +2695,31 @@ class ProxyDaemon:
                 e,
             )
 
+    def _arm_shutdown_deadline(self) -> float:
+        """Set the single process-wide shutdown deadline (first signal or _shutdown)."""
+        with self._shutdown_deadline_lock:
+            if self._shutdown_deadline_mono is None:
+                self._shutdown_deadline_mono = (
+                    time.monotonic() + SHUTDOWN_BUDGET_SEC
+                )
+            return self._shutdown_deadline_mono
+
+    def _past_shutdown_deadline(self) -> bool:
+        with self._shutdown_deadline_lock:
+            deadline = self._shutdown_deadline_mono
+        if deadline is None:
+            return False
+        return time.monotonic() >= deadline
+
     def _handle_signal(self, signum, frame) -> None:
         """Обработчик POSIX-сигналов — инициирует graceful shutdown."""
         logger.info(
             f"Received signal {signum}, initiating graceful shutdown..."
         )
+        with self._shutdown_deadline_lock:
+            if self._shutdown_signaled_mono is None:
+                self._shutdown_signaled_mono = time.monotonic()
+        self._arm_shutdown_deadline()
         self._stop_event.set()
 
     def _handle_log_reopen(self, signum, frame) -> None:
@@ -2711,8 +2767,9 @@ class ProxyDaemon:
             if self._is_shutdown:
                 return
             self._is_shutdown = True
+        self._stop_event.set()
+        deadline = self._arm_shutdown_deadline()
         logger.info("Graceful shutdown: stopping all components...")
-        deadline = time.monotonic() + SHUTDOWN_BUDGET_SEC
         # Шаг 1: Останавливаем watchdog — прекращаем поступление новых SMTP-задач
         if self._observer:
             try:
