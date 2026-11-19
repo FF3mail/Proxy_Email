@@ -390,6 +390,7 @@ sys.path = [str(staged), *kept]
 loaded_from = []
 for name in (
     "relationship_lookup",
+    "supervisor_db",
     "relationship_routing",
     "message_rebuild",
     "attachment_policy",
@@ -415,6 +416,7 @@ for node in tree.body:
             direct.append(node.module)
 expected_direct = {
     "relationship_lookup",
+    "supervisor_db",
     "relationship_routing",
     "message_rebuild",
     "attachment_policy",

@@ -1643,6 +1643,35 @@ def _shutdown_remaining_seconds(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
+def daemon_supervisor_sql_permitted(daemon: Any) -> bool:
+    """Whether the supervisor may start a new MariaDB statement (works on stubs)."""
+    stop = getattr(daemon, '_stop_event', None)
+    if stop is not None and stop.is_set():
+        return False
+    if getattr(daemon, '_shutdown_signaled_mono', None) is not None:
+        return False
+    past = getattr(daemon, '_past_shutdown_deadline', None)
+    if callable(past) and past():
+        return False
+    return True
+
+
+def daemon_supervisor_statement_cap(daemon: Any) -> float:
+    return supervisor_max_statement_seconds(
+        SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+        getattr(daemon, '_shutdown_deadline_mono', None),
+        _shutdown_remaining_seconds,
+    )
+
+
+def daemon_supervisor_db_abort_no_retry(daemon: Any, exc: BaseException) -> bool:
+    if is_mariadb_statement_timeout(exc):
+        return True
+    if getattr(daemon, '_shutdown_signaled_mono', None) is not None:
+        return True
+    return False
+
+
 def _join_threads_until_deadline(
     threads: List[threading.Thread],
     deadline: float,
@@ -2080,9 +2109,9 @@ class ProxyDaemon:
     def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
         """Register relationship-level outbound watches for one referent."""
         ref_id = int(ref['id'])
-        if not self._supervisor_sql_permitted():
+        if not daemon_supervisor_sql_permitted(self):
             return
-        cap = self._supervisor_max_statement_seconds()
+        cap = daemon_supervisor_statement_cap(self)
         targets = (
             self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
                 ref_id,
@@ -2101,11 +2130,11 @@ class ProxyDaemon:
         must not be used for relationship routing or disposal notify addresses.
         """
         data: Dict[str, Any] = {'id': int(referent_id)}
-        if not self._supervisor_sql_permitted():
+        if not daemon_supervisor_sql_permitted(self):
             return data
         conn = None
         cursor = None
-        cap = self._supervisor_max_statement_seconds()
+        cap = daemon_supervisor_statement_cap(self)
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
@@ -2126,7 +2155,7 @@ class ProxyDaemon:
                     cap,
                     referent_id,
                 )
-            elif not self._supervisor_db_abort_no_retry(exc):
+            elif not daemon_supervisor_db_abort_no_retry(self, exc):
                 logger.error(
                     'Failed to load referent %s for handler data: %s',
                     referent_id,
@@ -2536,11 +2565,11 @@ class ProxyDaemon:
 
     def _load_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
-        if not self._supervisor_sql_permitted():
+        if not daemon_supervisor_sql_permitted(self):
             return []
         conn = None
         cursor = None
-        cap = self._supervisor_max_statement_seconds()
+        cap = daemon_supervisor_statement_cap(self)
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
@@ -2559,7 +2588,7 @@ class ProxyDaemon:
                 )
                 rollback_connection_quietly(conn)
                 return []
-            if self._supervisor_db_abort_no_retry(exc):
+            if daemon_supervisor_db_abort_no_retry(self, exc):
                 rollback_connection_quietly(conn)
                 return []
             logger.critical(
@@ -2587,7 +2616,7 @@ class ProxyDaemon:
         - Пулы воркеров не пересоздаются — они обслуживают общие очереди задач
           и не зависят от количества референтов.
         """
-        if not self._supervisor_sql_permitted():
+        if not daemon_supervisor_sql_permitted(self):
             return
         current_refs = self._load_referents()
         if self._stop_event.is_set():
@@ -2645,13 +2674,13 @@ class ProxyDaemon:
 
     def _sync_relationship_watches(self) -> None:
         """Reconcile relationship watches for all active referents."""
-        if not self._supervisor_sql_permitted():
+        if not daemon_supervisor_sql_permitted(self):
             return
         targets: List[Dict[str, Any]] = []
         for ref in self._load_referents():
-            if not self._supervisor_sql_permitted():
+            if not daemon_supervisor_sql_permitted(self):
                 break
-            cap = self._supervisor_max_statement_seconds()
+            cap = daemon_supervisor_statement_cap(self)
             targets.extend(
                 self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
                     int(ref['id']),
@@ -2770,27 +2799,13 @@ class ProxyDaemon:
 
     def _supervisor_sql_permitted(self) -> bool:
         """False after stop signal — do not start new supervisor DB statements."""
-        if self._stop_event.is_set():
-            return False
-        if getattr(self, '_shutdown_signaled_mono', None) is not None:
-            return False
-        if self._past_shutdown_deadline():
-            return False
-        return True
+        return daemon_supervisor_sql_permitted(self)
 
     def _supervisor_max_statement_seconds(self) -> float:
-        return supervisor_max_statement_seconds(
-            SUPERVISOR_MAX_STATEMENT_TIME_SEC,
-            self._shutdown_deadline_mono,
-            _shutdown_remaining_seconds,
-        )
+        return daemon_supervisor_statement_cap(self)
 
     def _supervisor_db_abort_no_retry(self, exc: BaseException) -> bool:
-        if is_mariadb_statement_timeout(exc):
-            return True
-        if self._shutdown_signaled_mono is not None:
-            return True
-        return False
+        return daemon_supervisor_db_abort_no_retry(self, exc)
 
     def _initiate_shutdown_schedule(self) -> float:
         """
