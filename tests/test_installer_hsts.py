@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Issue #155 — optional panel vhost HSTS per D-111 (installer logic and vhost output)."""
+"""Issue #155 / #180 — optional panel vhost HSTS per D-111 (installer logic and vhost output)."""
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -14,6 +15,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "delta-transit-install.sh"
+
+
+def _bash_executable() -> str:
+    """Prefer real Git Bash on Windows; System32\\bash.exe is the WSL stub."""
+    override = os.environ.get("DELTA_TEST_BASH", "").strip()
+    if override:
+        return override
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    if os.name == "nt" and git_bash.is_file():
+        return str(git_bash)
+    return "bash"
 
 HSTS_DIRECTIVE = 'add_header Strict-Transport-Security "max-age=31536000" always;'
 REQUIRED_HEADERS = (
@@ -210,7 +222,7 @@ def _panel_hsts_existing_check(
         panel_certificate_is_valid_for_hsts && exit 0 || exit 1
         """
     )
-    return subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode
+    return subprocess.run([_bash_executable(), "-c", script], env=env, capture_output=True).returncode
 
 
 def _extract_vhost_template(source: str) -> str:
@@ -295,7 +307,7 @@ def _run_create_vhost(
         create_mail_proxy_virtual_host
         """
     )
-    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+    subprocess.run([_bash_executable(), "-c", script], env=env, check=True, capture_output=True, text=True)
     return vhost_out.read_text(encoding="utf-8")
 
 
@@ -472,7 +484,7 @@ class InstallerHstsCertificateRule(unittest.TestCase):
                 if panel_certificate_is_valid_for_hsts; then exit 0; else exit 11; fi
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], env={**os.environ, **env}, capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], env={**os.environ, **env}, capture_output=True)
             self.assertEqual(proc.returncode, 0)
 
     def test_self_signed_invalid(self) -> None:
@@ -510,7 +522,7 @@ class InstallerHstsCertificateRule(unittest.TestCase):
                 panel_certificate_is_valid_for_hsts && exit 0 || exit 12
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], capture_output=True)
             self.assertEqual(proc.returncode, 12)
 
     def test_expired_invalid(self) -> None:
@@ -565,7 +577,7 @@ class InstallerHstsCertificateRule(unittest.TestCase):
                 panel_certificate_is_valid_for_hsts && exit 0 || exit 13
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], env={**os.environ, **env}, capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], env={**os.environ, **env}, capture_output=True)
             self.assertEqual(proc.returncode, 13)
 
     def test_wrong_host_invalid(self) -> None:
@@ -584,7 +596,7 @@ class InstallerHstsCertificateRule(unittest.TestCase):
                 panel_certificate_is_valid_for_hsts && exit 0 || exit 14
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], env={**os.environ, **env}, capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], env={**os.environ, **env}, capture_output=True)
             self.assertEqual(proc.returncode, 14)
 
     def test_untrusted_ca_invalid(self) -> None:
@@ -606,9 +618,188 @@ class InstallerHstsCertificateRule(unittest.TestCase):
                 panel_certificate_is_valid_for_hsts && exit 0 || exit 15
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], env={**os.environ, **env}, capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], env={**os.environ, **env}, capture_output=True)
             self.assertEqual(proc.returncode, 15)
             _ = ca_pem
+
+
+class InstallerHstsHashedCapathAnchor(unittest.TestCase):
+    """Issue #180 — a self-signed leaf hashed into a CApath must not become HSTS-eligible."""
+
+    @staticmethod
+    def _assert_proc(proc: subprocess.CompletedProcess[bytes], *, expect_ok: bool, label: str) -> None:
+        ok = proc.returncode == 0
+        if ok != expect_ok:
+            raise AssertionError(
+                f"{label}: expect_ok={expect_ok} rc={proc.returncode}\n"
+                f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+            )
+
+    def test_isolated_hashed_self_signed_rejected_without_host_trust_store(self) -> None:
+        """Reproduce lab failure mode via SSL_CERT_DIR + openssl rehash; never touch /etc/ssl/certs."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            host = "panel.hash-anchor.test"
+            leaf = tmp / "mail-proxy.crt"
+            key = tmp / "mail-proxy.key"
+            subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-keyout",
+                    str(key),
+                    "-out",
+                    str(leaf),
+                    "-days",
+                    "30",
+                    "-subj",
+                    f"/CN={host}",
+                    "-addext",
+                    f"subjectAltName=DNS:{host}",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            capath = tmp / "capath"
+            capath.mkdir()
+            shutil.copy(leaf, capath / "mail-proxy.crt")
+            subprocess.run(
+                ["openssl", "rehash", str(capath)],
+                check=True,
+                capture_output=True,
+            )
+            hash_links = list(capath.glob("*.0"))
+            self.assertTrue(hash_links, "openssl rehash must create a subject-hash symlink")
+
+            env_poisoned = {
+                **os.environ,
+                "SSL_CERT_DIR": str(capath),
+            }
+            env_poisoned.pop("SSL_CERT_FILE", None)
+            env_poisoned.pop("DELTA_TLS_CA_FILE", None)
+            env_poisoned.pop("DELTA_TLS_CA_PATH", None)
+            env_poisoned.pop("DELTA_TLS_UNTRUSTED_FILE", None)
+
+            old = subprocess.run(
+                ["openssl", "verify", "-untrusted", str(leaf), str(leaf)],
+                env=env_poisoned,
+                capture_output=True,
+            )
+            self._assert_proc(
+                old,
+                expect_ok=True,
+                label="precondition: unrestricted openssl verify under SSL_CERT_DIR=isolated CApath",
+            )
+
+            script = textwrap.dedent(
+                f"""
+                set -euo pipefail
+                cd "{ROOT}"
+                source "./delta-transit-install.sh"
+                unset DELTA_TLS_CA_FILE DELTA_TLS_CA_PATH DELTA_TLS_UNTRUSTED_FILE || true
+                SSL_MODE="existing"
+                NGINX_SSL_CERT="{leaf}"
+                NGINX_SERVER_NAME="{host}"
+                if panel_certificate_is_valid_for_hsts; then
+                    echo "UNEXPECTED_OK reason=${{PANEL_HSTS_INVALID_REASON-}}"
+                    exit 0
+                fi
+                echo "REJECTED reason=${{PANEL_HSTS_INVALID_REASON-}}"
+                exit 21
+                """
+            )
+            fixed = subprocess.run(
+                [_bash_executable(), "-c", script],
+                env=env_poisoned,
+                capture_output=True,
+            )
+            self._assert_proc(
+                fixed,
+                expect_ok=False,
+                label="installer HSTS check must reject hashed self-signed even when SSL_CERT_DIR is poisoned",
+            )
+            self.assertEqual(fixed.returncode, 21)
+            rejected = (fixed.stdout or b"") + (fixed.stderr or b"")
+            self.assertIn(b"REJECTED", rejected)
+            self.assertRegex(
+                rejected.decode("utf-8", errors="replace"),
+                r"not trusted by the system CA store|system CA bundle not found",
+            )
+
+    def test_ca_signed_accepted_with_explicit_root_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            host = "panel.explicit-trust.test"
+            ca_pem, leaf_pem, _ = _openssl_ca_signed_pair(tmp, cn=host)
+            # Ensure SAN/checkhost works: leaf from _openssl_ca_signed_pair uses CN only;
+            # OpenSSL -checkhost matches CN when no SAN is present on many builds.
+            env = {
+                **os.environ,
+                "DELTA_TLS_CA_FILE": str(ca_pem),
+            }
+            env.pop("DELTA_TLS_CA_PATH", None)
+            env.pop("DELTA_TLS_UNTRUSTED_FILE", None)
+            script = textwrap.dedent(
+                f"""
+                set -euo pipefail
+                cd "{ROOT}"
+                source "./delta-transit-install.sh"
+                SSL_MODE="existing"
+                NGINX_SSL_CERT="{leaf_pem}"
+                NGINX_SERVER_NAME="{host}"
+                if panel_certificate_is_valid_for_hsts; then
+                    echo "OK"
+                    exit 0
+                fi
+                echo "FAIL reason=${{PANEL_HSTS_INVALID_REASON-}}"
+                exit 22
+                """
+            )
+            proc = subprocess.run([_bash_executable(), "-c", script], env=env, capture_output=True)
+            self._assert_proc(proc, expect_ok=True, label="explicit DELTA_TLS_CA_FILE must accept CA-signed leaf")
+
+    def test_explicit_ca_path_with_rehashed_root_accepts_fullchain(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            host = "panel.capath-trust.test"
+            material = _openssl_panel_chain(tmp, host)
+            capath = tmp / "trusted-capath"
+            capath.mkdir()
+            shutil.copy(material["root_pem"], capath / "root.pem")
+            subprocess.run(["openssl", "rehash", str(capath)], check=True, capture_output=True)
+            env = {
+                **os.environ,
+                "DELTA_TLS_CA_PATH": str(capath),
+            }
+            env.pop("DELTA_TLS_CA_FILE", None)
+            env.pop("DELTA_TLS_UNTRUSTED_FILE", None)
+            script = textwrap.dedent(
+                f"""
+                set -euo pipefail
+                cd "{ROOT}"
+                source "./delta-transit-install.sh"
+                unset DELTA_TLS_CA_FILE DELTA_TLS_UNTRUSTED_FILE || true
+                SSL_MODE="existing"
+                NGINX_SSL_CERT="{material['fullchain_pem']}"
+                NGINX_SERVER_NAME="{host}"
+                if panel_certificate_is_valid_for_hsts; then
+                    echo "OK"
+                    exit 0
+                fi
+                echo "FAIL reason=${{PANEL_HSTS_INVALID_REASON-}}"
+                exit 23
+                """
+            )
+            proc = subprocess.run([_bash_executable(), "-c", script], env=env, capture_output=True)
+            self._assert_proc(
+                proc,
+                expect_ok=True,
+                label="DELTA_TLS_CA_PATH with rehashed root must accept fullchain",
+            )
 
 
 class InstallerHstsFullchainCertificateRule(unittest.TestCase):
@@ -692,7 +883,7 @@ class InstallerHstsPersistence(unittest.TestCase):
                 write_panel_hsts_intent_file "enabled"
                 """
             )
-            subprocess.run(["bash", "-c", script], check=True)
+            subprocess.run([_bash_executable(), "-c", script], check=True)
             self.assertEqual(intent.read_text(encoding="utf-8").strip(), "enabled")
             mode = stat.S_IMODE(intent.stat().st_mode)
             self.assertEqual(mode, 0o640)
@@ -712,7 +903,7 @@ class InstallerHstsPersistence(unittest.TestCase):
                 """
             )
             out = subprocess.run(
-                ["bash", "-c", script2],
+                [_bash_executable(), "-c", script2],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -738,7 +929,7 @@ class InstallerHstsPersistence(unittest.TestCase):
                 [[ -f "$PANEL_HSTS_CONF" ]] && exit 9 || exit 0
                 """
             )
-            proc = subprocess.run(["bash", "-c", script], capture_output=True)
+            proc = subprocess.run([_bash_executable(), "-c", script], capture_output=True)
             self.assertEqual(proc.returncode, 0)
 
     def test_disabled_intent_removes_header_on_regen(self) -> None:
@@ -778,7 +969,7 @@ class InstallerHstsDialog(unittest.TestCase):
                 grep -qx enabled "$PANEL_HSTS_CONF"
                 """
             )
-            subprocess.run(["bash", "-c", script], check=True)
+            subprocess.run([_bash_executable(), "-c", script], check=True)
 
     def test_dialog_invalid_reasked(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -805,7 +996,7 @@ class InstallerHstsDialog(unittest.TestCase):
                 grep -qx disabled "$PANEL_HSTS_CONF"
                 """
             )
-            subprocess.run(["bash", "-c", script], check=True)
+            subprocess.run([_bash_executable(), "-c", script], check=True)
 
 
 class InstallerHstsGoldenVhost(unittest.TestCase):

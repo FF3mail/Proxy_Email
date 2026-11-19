@@ -2932,16 +2932,59 @@ write_panel_hsts_intent_file() {
     PANEL_HSTS_INTENT="$value"
 }
 
+# System CA bundle for HSTS chain checks (NFR-15: Ubuntu 24.04). Prefer the
+# concatenated trust store from ca-certificates — never the hashed CApath
+# (/etc/ssl/certs), where an ad-hoc panel leaf can become a trust anchor after
+# openssl rehash (issue #180).
+panel_tls_system_ca_bundle() {
+    local candidate=""
+    for candidate in \
+        /etc/ssl/certs/ca-certificates.crt \
+        /etc/ssl/cert.pem
+    do
+        if [[ -f "$candidate" && -r "$candidate" ]]
+        then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Populate openssl verify trust flags for HSTS. Returns 1 (fail closed) when no
+# usable trust source is available. Explicit DELTA_TLS_CA_FILE / DELTA_TLS_CA_PATH
+# override the system bundle (tests and private PKI).
+# Always pass -no-CAstore (OpenSSL 3 / Ubuntu 24.04). When trust is a file, also
+# pass -no-CApath so a hashed leaf under the default certs dir cannot self-anchor.
+# When trust is an explicit CApath, pass -no-CAfile instead (do not pass -no-CApath).
 panel_tls_ca_verify_args() {
     local -n _out_ref=$1
     _out_ref=()
     if [[ -n "${DELTA_TLS_CA_FILE:-}" ]]
     then
-        _out_ref=(-CAfile "$DELTA_TLS_CA_FILE")
-    elif [[ -n "${DELTA_TLS_CA_PATH:-}" ]]
-    then
-        _out_ref=(-CApath "$DELTA_TLS_CA_PATH")
+        if [[ ! -f "$DELTA_TLS_CA_FILE" || ! -r "$DELTA_TLS_CA_FILE" ]]
+        then
+            return 1
+        fi
+        _out_ref=(-CAfile "$DELTA_TLS_CA_FILE" -no-CApath -no-CAstore)
+        return 0
     fi
+    if [[ -n "${DELTA_TLS_CA_PATH:-}" ]]
+    then
+        if [[ ! -d "$DELTA_TLS_CA_PATH" ]]
+        then
+            return 1
+        fi
+        _out_ref=(-CApath "$DELTA_TLS_CA_PATH" -no-CAfile -no-CAstore)
+        return 0
+    fi
+    local bundle=""
+    if ! bundle="$(panel_tls_system_ca_bundle)"
+    then
+        return 1
+    fi
+    _out_ref=(-CAfile "$bundle" -no-CApath -no-CAstore)
+    return 0
 }
 
 panel_tls_untrusted_bundle() {
@@ -2979,10 +3022,21 @@ panel_certificate_is_valid_for_hsts() {
             fi
             local ca_args=()
             local untrusted_bundle=""
-            panel_tls_ca_verify_args ca_args
+            if ! panel_tls_ca_verify_args ca_args
+            then
+                if [[ -n "${DELTA_TLS_CA_FILE:-}" || -n "${DELTA_TLS_CA_PATH:-}" ]]
+                then
+                    PANEL_HSTS_INVALID_REASON="configured TLS CA trust source is missing or unreadable"
+                else
+                    PANEL_HSTS_INVALID_REASON="system CA bundle not found for trust verification"
+                fi
+                return 1
+            fi
             untrusted_bundle="$(panel_tls_untrusted_bundle)"
             # Leaf to verify is the first cert in NGINX_SSL_CERT; intermediates from the same PEM
             # (or DELTA_TLS_UNTRUSTED_FILE) are passed as -untrusted, matching openssl fullchain usage.
+            # Trust comes only from ca_args (explicit CAfile/CApath); never from the default hashed
+            # CApath where a panel self-signed leaf may have been rehashed (issue #180).
             if ! openssl verify "${ca_args[@]}" -untrusted "$untrusted_bundle" "$NGINX_SSL_CERT" >/dev/null 2>&1
             then
                 PANEL_HSTS_INVALID_REASON="certificate chain is not trusted by the system CA store"
