@@ -36,6 +36,17 @@ from watchdog.events import FileSystemEventHandler
 # PROMPT-58: RelationshipLookup for live relationship resolution (inbound/outbound).
 # relationship_lookup.py has no top-level side effects beyond class/function defs.
 from relationship_lookup import RelationshipLookup
+from supervisor_db import (
+    SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+    SupervisorQueryFailed,
+    format_set_statement_select,
+    is_mariadb_statement_timeout,
+    poller_db_permitted,
+    poller_statement_cap,
+    release_mysql_connection,
+    rollback_connection_quietly,
+    supervisor_max_statement_seconds,
+)
 from relationship_routing import (
     InboundDeliveryPlan,
     InboundProcessResult,
@@ -104,10 +115,23 @@ VALID_ENCRYPTION_MODES = ('none', 'ssl', 'tls')
 # Размеры пулов воркеров
 IMAP_WORKER_COUNT = 20
 SMTP_WORKER_COUNT = 20
+# Graceful shutdown (NFR-9, ACC-102): process stop budget from first SIGTERM/SIGINT.
+SYSTEMD_TIMEOUT_STOP_SEC = 60
+SHUTDOWN_BUDGET_SEC = 55
+SHUTDOWN_OBSERVER_JOIN_SEC = 10
+SUPERVISOR_SYNC_INTERVAL_SEC = 60
 # Максимальный размер централизованных очередей задач
 IMAP_QUEUE_MAXSIZE = 5000
 SMTP_QUEUE_MAXSIZE = 1000
 DB_POOL_SIZE = 12
+# MariaDB pool socket timeouts (mysql-connector-python>=9.2.0 connect args).
+# connect_timeout: TCP/handshake; read_timeout/write_timeout: per socket I/O wait
+# (not guaranteed wall-clock bound for an entire multi-read SQL operation).
+DB_CONNECT_TIMEOUT_SEC = 10
+DB_READ_TIMEOUT_SEC = 30
+DB_WRITE_TIMEOUT_SEC = 30
+# DEV-56 option C: SET STATEMENT max_statement_time on supervisor + ImapPoller SELECTs.
+# See supervisor_db.py (never SET SESSION — shared pool serves workers).
 # Директория для временных файлов демона
 TEMP_DIR = '/var/spool/mail-proxy/tmp'
 # Default maximum inbound message size in bytes.
@@ -283,6 +307,9 @@ class Database:
             charset='utf8mb4',
             collation='utf8mb4_unicode_ci',
             autocommit=False,
+            connect_timeout=DB_CONNECT_TIMEOUT_SEC,
+            read_timeout=DB_READ_TIMEOUT_SEC,
+            write_timeout=DB_WRITE_TIMEOUT_SEC,
         )
 
     def _load_config(self) -> Dict[str, str]:
@@ -1615,6 +1642,68 @@ class MailHandler:
                     rebuild_temp.unlink(missing_ok=True)
                 except OSError:
                     pass
+def _shutdown_remaining_seconds(deadline: float) -> float:
+    """Seconds left until monotonic shutdown deadline (0 if expired)."""
+    return max(0.0, deadline - time.monotonic())
+
+
+def daemon_supervisor_sql_permitted(daemon: Any) -> bool:
+    """Whether the supervisor may start a new MariaDB statement (works on stubs)."""
+    stop = getattr(daemon, '_stop_event', None)
+    if stop is not None and stop.is_set():
+        return False
+    if getattr(daemon, '_shutdown_signaled_mono', None) is not None:
+        return False
+    past = getattr(daemon, '_past_shutdown_deadline', None)
+    if callable(past) and past():
+        return False
+    return True
+
+
+def daemon_supervisor_statement_cap(daemon: Any) -> float:
+    return supervisor_max_statement_seconds(
+        SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+        getattr(daemon, '_shutdown_deadline_mono', None),
+        _shutdown_remaining_seconds,
+    )
+
+
+def daemon_supervisor_db_abort_no_retry(daemon: Any, exc: BaseException) -> bool:
+    if is_mariadb_statement_timeout(exc):
+        return True
+    if getattr(daemon, '_shutdown_signaled_mono', None) is not None:
+        return True
+    return False
+
+
+def _join_threads_until_deadline(
+    threads: List[threading.Thread],
+    deadline: float,
+    label: str,
+) -> None:
+    """
+  Wait for threads to exit until deadline (parallel join, NFR-9).
+
+  Uses a single wall-clock budget shared across all threads instead of
+  applying a per-thread timeout sequentially (DEV-56).
+    """
+    for t in threads:
+        if not t.is_alive():
+            continue
+        remaining = _shutdown_remaining_seconds(deadline)
+        if remaining <= 0:
+            break
+        t.join(timeout=remaining)
+    alive = [t.name for t in threads if t.is_alive()]
+    if alive:
+        logger.warning(
+            "Shutdown deadline reached for %s: %d thread(s) still alive: %s",
+            label,
+            len(alive),
+            ", ".join(alive[:10]) + ("..." if len(alive) > 10 else ""),
+        )
+
+
 # =============================================================================
 # Пул IMAP-воркеров
 # =============================================================================
@@ -1658,10 +1747,11 @@ class ImapWorkerPool:
                     self._queue.task_done()
             except queue.Empty:
                 continue
-    def join(self, timeout: float = 30.0) -> None:
-        """Ожидает завершения всех потоков пула."""
-        for t in self._workers:
-            t.join(timeout=timeout)
+
+    def join_until_deadline(self, deadline: float) -> None:
+        """Ожидает завершения воркеров до общего дедлайна остановки (NFR-9)."""
+        _join_threads_until_deadline(self._workers, deadline, "IMAP worker pool")
+
 # =============================================================================
 # Пул SMTP-воркеров
 # =============================================================================
@@ -1723,10 +1813,11 @@ class SmtpWorkerPool:
                 logger.info(f"Deleted processed file: {file_path.name}")
         except Exception as e:
             logger.error(f"Failed to delete file {file_path}: {e}")
-    def join(self, timeout: float = 30.0) -> None:
-        """Ожидает завершения всех потоков пула."""
-        for t in self._workers:
-            t.join(timeout=timeout)
+
+    def join_until_deadline(self, deadline: float) -> None:
+        """Ожидает завершения воркеров до общего дедлайна остановки (NFR-9)."""
+        _join_threads_until_deadline(self._workers, deadline, "SMTP worker pool")
+
 # =============================================================================
 # Планировщик IMAP-опроса
 # =============================================================================
@@ -1742,12 +1833,14 @@ class ImapPoller(threading.Thread):
         db: Database,
         stop_event: threading.Event,
         referent_enricher=None,
+        daemon_ref: Optional[Any] = None,
     ):
         super().__init__(name='ImapPoller', daemon=True)
         self._queue = imap_task_queue
         self._db = db
         self._stop_event = stop_event
         self._referent_enricher = referent_enricher
+        self._daemon_ref = daemon_ref
         self._skipped_tasks = 0
     def run(self) -> None:
         logger.info("ImapPoller started")
@@ -1764,13 +1857,21 @@ class ImapPoller(threading.Thread):
         logger.info("ImapPoller stopped")
     def _enqueue_imap_tasks(self) -> None:
         """Загружает активных референтов и их аккаунты, создаёт задачи для пула."""
+        if self._stop_event.is_set():
+            return
         referents = self._load_active_referents()
+        if self._stop_event.is_set():
+            return
         task_count = 0
         for ref in referents:
+            if self._stop_event.is_set():
+                break
             if self._referent_enricher is not None:
                 ref = self._referent_enricher(ref)
             accounts = self._load_accounts_for_referent(ref['id'])
             for acc in accounts:
+                if self._stop_event.is_set():
+                    break
                 if not acc.get('imap_host'):
                     continue
                 task = ImapTask(referent_data=ref, account=acc)
@@ -1789,52 +1890,126 @@ class ImapPoller(threading.Thread):
             self._skipped_tasks = 0
         if task_count:
             logger.info(f"ImapPoller enqueued {task_count} IMAP tasks")
+
+    def _poller_shutdown_signaled_mono(self) -> Optional[float]:
+        daemon = self._daemon_ref
+        if daemon is None:
+            return None
+        return getattr(daemon, '_shutdown_signaled_mono', None)
+
+    def _poller_shutdown_deadline_mono(self) -> Optional[float]:
+        daemon = self._daemon_ref
+        if daemon is None:
+            return None
+        return getattr(daemon, '_shutdown_deadline_mono', None)
+
+    def _poller_statement_cap(self) -> float:
+        return poller_statement_cap(
+            self._poller_shutdown_deadline_mono(),
+            self._poller_shutdown_signaled_mono(),
+            self._stop_event,
+            _shutdown_remaining_seconds,
+        )
+
+    def _poller_discard_connection(self) -> bool:
+        return self._stop_event.is_set() or self._poller_shutdown_signaled_mono() is not None
+
     def _load_active_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
+        if not poller_db_permitted(
+            self._stop_event, self._poller_shutdown_signaled_mono()
+        ):
+            return []
         conn = None
         cursor = None
+        cap = self._poller_statement_cap()
+        discard = False
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} "
-                "FROM referents WHERE active = 1"
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} '
+                'FROM referents WHERE active = 1'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql)
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            discard = self._poller_discard_connection()
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'ImapPoller referent list hit max_statement_time (%ss)',
+                    cap,
+                )
+                rollback_connection_quietly(conn)
+                return []
+            logger.error(f'ImapPoller: failed to load referents: {exc}')
+            rollback_connection_quietly(conn)
+            return []
         except Exception as e:
-            logger.error(f"ImapPoller: failed to load referents: {e}")
+            logger.error(f'ImapPoller: failed to load referents: {e}')
             return []
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                release_mysql_connection(
+                    conn, discard=discard or self._poller_discard_connection()
+                )
+
     def _load_accounts_for_referent(self, referent_id: int) -> List[Dict[str, Any]]:
         """Загружает активные аккаунты референта из БД."""
+        if not poller_db_permitted(
+            self._stop_event, self._poller_shutdown_signaled_mono()
+        ):
+            return []
         conn = None
         cursor = None
+        cap = self._poller_statement_cap()
+        discard = False
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
+            base_sql = """
                 SELECT id, email, auth_type, imap_host, imap_port,
                        username, password_enc, imap_encryption,
                        smtp_host, smtp_port, smtp_encryption,
                        provider, client_id, client_secret_enc
                 FROM external_accounts
                 WHERE referent_id = %s AND active = 1
-                """,
-                (referent_id,)
-            )
+            """
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql, (referent_id,))
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            discard = self._poller_discard_connection()
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'ImapPoller account list hit max_statement_time '
+                    '(%ss, referent_id=%s)',
+                    cap,
+                    referent_id,
+                )
+                rollback_connection_quietly(conn)
+                return []
+            logger.error(
+                f'ImapPoller: failed to load accounts for referent {referent_id}: {exc}'
+            )
+            rollback_connection_quietly(conn)
+            return []
         except Exception as e:
             logger.error(
-                f"ImapPoller: failed to load accounts for referent {referent_id}: {e}"
+                f'ImapPoller: failed to load accounts for referent {referent_id}: {e}'
             )
             return []
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
-            
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                release_mysql_connection(
+                    conn, discard=discard or self._poller_discard_connection()
+                )
+
 # =============================================================================
 # Обработчик watchdog для отслеживания новых файлов в Maildir/new
 # =============================================================================
@@ -1868,6 +2043,8 @@ class MaildirHandler(FileSystemEventHandler):
         file_path = Path(event.src_path)
         # Обрабатываем только файлы непосредственно в директории new
         if file_path.parent.name != 'new':
+            return
+        if self._daemon._stop_event.is_set():
             return
         if self.watch_source == 'relationship':
             logger.info(
@@ -1922,6 +2099,7 @@ class ProxyDaemon:
             self._imap_task_queue,
             self._db,
             self._stop_event,
+            daemon_ref=self,
         )
         # Watchdog-наблюдатель за Maildir/new
         self._observer: Optional[Observer] = None
@@ -1957,6 +2135,9 @@ class ProxyDaemon:
         # Защита от двойного вызова _shutdown()
         self._shutdown_lock = threading.Lock()
         self._is_shutdown = False
+        # Monotonic instant of first stop signal (ACC-102 measurement).
+        self._shutdown_signaled_mono: Optional[float] = None
+        self._shutdown_deadline_mono: Optional[float] = None
         # Регистрация сигналов POSIX для graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -1976,10 +2157,20 @@ class ProxyDaemon:
         self._imap_poller.start()
         # Шаг 3: watchdog per referent effective watch mode (PROMPT-73)
         self._observer = Observer()
-        referents = self._load_referents()
-        if not referents:
+        referent_load_deferred = False
+        try:
+            referents = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Startup: referent list unavailable (%s); watches deferred', exc
+            )
+            referents = []
+            referent_load_deferred = True
+        if not referents and not referent_load_deferred:
             logger.warning("No active referents found in database.")
         for ref in referents:
+            if self._stop_event.is_set() or self._past_shutdown_deadline():
+                break
             self._register_watches_for_referent(ref)
         if self._watched_relationship_ids and not self._observer_started:
             self._observer.start()
@@ -1994,19 +2185,34 @@ class ProxyDaemon:
         )
         # Главный цикл супервизора: синхронизирует список референтов с БД
         while not self._stop_event.is_set():
+            if self._past_shutdown_deadline():
+                break
             try:
                 self._sync_database_state()
             except Exception as e:
                 logger.error(f"Supervisor sync error: {e}")
-            time.sleep(60)
+            for _ in range(SUPERVISOR_SYNC_INTERVAL_SEC):
+                if self._stop_event.is_set() or self._past_shutdown_deadline():
+                    break
+                time.sleep(1)
     def _register_watches_for_referent(self, ref: Dict[str, Any]) -> None:
         """Register relationship-level outbound watches for one referent."""
         ref_id = int(ref['id'])
-        targets = (
-            self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                ref_id
+        if not daemon_supervisor_sql_permitted(self):
+            return
+        cap = daemon_supervisor_statement_cap(self)
+        try:
+            targets = (
+                self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                    ref_id,
+                    max_statement_time=cap,
+                )
             )
-        )
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Register watches skipped for referent %s (%s)', ref_id, exc
+            )
+            return
         for target in targets:
             self._setup_watchdog_for_relationship(target)
             self._scan_existing_outgoing_for_relationship(target)
@@ -2019,18 +2225,37 @@ class ProxyDaemon:
         must not be used for relationship routing or disposal notify addresses.
         """
         data: Dict[str, Any] = {'id': int(referent_id)}
+        if not daemon_supervisor_sql_permitted(self):
+            return data
         conn = None
         cursor = None
+        cap = daemon_supervisor_statement_cap(self)
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} FROM referents WHERE id = %s",
-                (int(referent_id),),
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} FROM referents WHERE id = %s'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql, (int(referent_id),))
             row = cursor.fetchone()
             if row:
                 data.update(dict(row))
+        except mysql.connector.Error as exc:
+            rollback_connection_quietly(conn)
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'Supervisor referent handler data hit max_statement_time '
+                    '(%ss, referent_id=%s)',
+                    cap,
+                    referent_id,
+                )
+            elif not daemon_supervisor_db_abort_no_retry(self, exc):
+                logger.error(
+                    'Failed to load referent %s for handler data: %s',
+                    referent_id,
+                    exc,
+                )
         except Exception as exc:
             logger.error(
                 'Failed to load referent %s for handler data: %s',
@@ -2212,6 +2437,8 @@ class ProxyDaemon:
         source: str,
     ) -> None:
         """Parse outbound message, plan account routing, enqueue SmtpTask if allowed."""
+        if self._stop_event.is_set():
+            return
         try:
             from email.parser import BytesHeaderParser
 
@@ -2402,6 +2629,8 @@ class ProxyDaemon:
             )
             referent_data = {'id': referent_id}
             for f in files:
+                if self._stop_event.is_set():
+                    break
                 try:
                     self._enqueue_outbound_file(
                         referent_data=referent_data,
@@ -2431,22 +2660,50 @@ class ProxyDaemon:
 
     def _load_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
+        if not daemon_supervisor_sql_permitted(self):
+            return []
         conn = None
         cursor = None
+        cap = daemon_supervisor_statement_cap(self)
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} "
-                "FROM referents WHERE active = 1"
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} '
+                'FROM referents WHERE active = 1'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql)
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            rollback_connection_quietly(conn)
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'Supervisor referent list hit max_statement_time (%ss)',
+                    cap,
+                )
+                raise SupervisorQueryFailed(
+                    'supervisor referent list max_statement_time'
+                ) from exc
+            if daemon_supervisor_db_abort_no_retry(self, exc):
+                raise SupervisorQueryFailed(
+                    'supervisor referent list aborted during shutdown'
+                ) from exc
+            logger.critical(
+                f'Failed to load referents: {exc}',
+                exc_info=True,
+            )
+            raise SupervisorQueryFailed('supervisor referent list failed') from exc
+        except SupervisorQueryFailed:
+            raise
         except Exception as e:
             logger.critical(f"Failed to load referents: {e}", exc_info=True)
-            return []
+            raise SupervisorQueryFailed('supervisor referent list failed') from e
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
     def _sync_database_state(self) -> None:
         """
         Периодическая синхронизация конфигурации демона с актуальным состоянием БД.
@@ -2459,13 +2716,25 @@ class ProxyDaemon:
         - Пулы воркеров не пересоздаются — они обслуживают общие очереди задач
           и не зависят от количества референтов.
         """
-        current_refs = self._load_referents()
+        if not daemon_supervisor_sql_permitted(self):
+            return
+        try:
+            current_refs = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Sync skipped: referent list unavailable (%s)', exc
+            )
+            return
+        if self._stop_event.is_set():
+            return
         current_ids = {int(r['id']) for r in current_refs}
         current_refs_by_id = {int(r['id']): r for r in current_refs}
 
         registered = set(self._watch_registered_referent_ids)
         new_ref_ids = current_ids - registered
         for ref_id in new_ref_ids:
+            if self._stop_event.is_set():
+                break
             ref = current_refs_by_id[ref_id]
             logger.info(
                 f"Sync: new active referent detected (ID={ref_id}, "
@@ -2475,6 +2744,8 @@ class ProxyDaemon:
 
         removed_ref_ids = registered - current_ids
         for ref_id in removed_ref_ids:
+            if self._stop_event.is_set():
+                break
             logger.info(
                 f"Sync: referent ID={ref_id} is no longer active, "
                 f"removing relationship watches"
@@ -2489,6 +2760,8 @@ class ProxyDaemon:
                 f"{len(current_ids)} total active referents"
             )
 
+        if self._stop_event.is_set():
+            return
         self._sync_relationship_watches()
     def _unschedule_watches_for_referent(self, referent_id: int) -> None:
         """Remove all relationship-level watches owned by a referent."""
@@ -2507,13 +2780,37 @@ class ProxyDaemon:
 
     def _sync_relationship_watches(self) -> None:
         """Reconcile relationship watches for all active referents."""
-        targets: List[Dict[str, Any]] = []
-        for ref in self._load_referents():
-            targets.extend(
-                self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                    int(ref['id'])
-                )
+        if not daemon_supervisor_sql_permitted(self):
+            return
+        try:
+            active_refs = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Relationship sync skipped: referent list unavailable (%s)', exc
             )
+            return
+        targets: List[Dict[str, Any]] = []
+        failed_referent_ids: set = set()
+        for ref in active_refs:
+            if not daemon_supervisor_sql_permitted(self):
+                # Shutdown path: do not reconcile partial listings (NFR-9).
+                return
+            ref_id = int(ref['id'])
+            cap = daemon_supervisor_statement_cap(self)
+            try:
+                targets.extend(
+                    self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                        ref_id,
+                        max_statement_time=cap,
+                    )
+                )
+            except SupervisorQueryFailed as exc:
+                failed_referent_ids.add(ref_id)
+                logger.warning(
+                    'Relationship sync skipped for referent %s (%s)',
+                    ref_id,
+                    exc,
+                )
         current_by_id = {
             int(t['relationship']['relationship_id']): t for t in targets
         }
@@ -2524,6 +2821,8 @@ class ProxyDaemon:
 
         new_ids = current_ids - watched_snapshot
         for relationship_id in new_ids:
+            if self._stop_event.is_set():
+                break
             target = current_by_id[relationship_id]
             logger.info(
                 'Sync: new valid relationship detected (ID=%s), '
@@ -2535,6 +2834,11 @@ class ProxyDaemon:
 
         removed_ids = watched_snapshot - current_ids
         for relationship_id in removed_ids:
+            if self._stop_event.is_set():
+                break
+            owner_ref = self._relationship_referent_id.get(relationship_id)
+            if owner_ref is not None and int(owner_ref) in failed_referent_ids:
+                continue
             logger.info(
                 'Sync: relationship ID=%s no longer valid, '
                 'removing from relationship watchdog',
@@ -2543,6 +2847,8 @@ class ProxyDaemon:
             self._unschedule_watchdog_for_relationship(relationship_id)
 
         for relationship_id in current_ids & watched_snapshot:
+            if self._stop_event.is_set():
+                break
             target = current_by_id[relationship_id]
             maildir_new = self._validate_relationship_maildir_for_watch(
                 target['local_client_maildir'], relationship_id
@@ -2563,6 +2869,8 @@ class ProxyDaemon:
                 self._setup_watchdog_for_relationship(target)
 
         for relationship_id in current_ids:
+            if self._stop_event.is_set():
+                break
             self._scan_existing_outgoing_for_relationship(
                 current_by_id[relationship_id]
             )
@@ -2616,12 +2924,53 @@ class ProxyDaemon:
                 e,
             )
 
+    def _supervisor_sql_permitted(self) -> bool:
+        """False after stop signal — do not start new supervisor DB statements."""
+        return daemon_supervisor_sql_permitted(self)
+
+    def _supervisor_max_statement_seconds(self) -> float:
+        return daemon_supervisor_statement_cap(self)
+
+    def _supervisor_db_abort_no_retry(self, exc: BaseException) -> bool:
+        return daemon_supervisor_db_abort_no_retry(self, exc)
+
+    def _initiate_shutdown_schedule(self) -> float:
+        """
+        Arm first-signal deadline without locks or logging (signal-safe).
+
+        Idempotent: repeated signals keep the earliest timestamp/deadline.
+        """
+        now = time.monotonic()
+        if self._shutdown_signaled_mono is None:
+            self._shutdown_signaled_mono = now
+        if self._shutdown_deadline_mono is None:
+            self._shutdown_deadline_mono = now + SHUTDOWN_BUDGET_SEC
+        self._stop_event.set()
+        return self._shutdown_deadline_mono
+
+    def _ensure_shutdown_deadline(self) -> float:
+        """Deadline for _shutdown() when no signal was received (exception path)."""
+        if self._shutdown_deadline_mono is None:
+            self._shutdown_deadline_mono = (
+                time.monotonic() + SHUTDOWN_BUDGET_SEC
+            )
+        return self._shutdown_deadline_mono
+
+    def _past_shutdown_deadline(self) -> bool:
+        deadline = self._shutdown_deadline_mono
+        if deadline is None:
+            return False
+        return time.monotonic() >= deadline
+
     def _handle_signal(self, signum, frame) -> None:
         """Обработчик POSIX-сигналов — инициирует graceful shutdown."""
-        logger.info(
-            f"Received signal {signum}, initiating graceful shutdown..."
-        )
-        self._stop_event.set()
+        self._initiate_shutdown_schedule()
+        try:
+            logger.info(
+                f"Received signal {signum}, initiating graceful shutdown..."
+            )
+        except Exception:
+            pass
 
     def _handle_log_reopen(self, signum, frame) -> None:
         """
@@ -2668,19 +3017,30 @@ class ProxyDaemon:
             if self._is_shutdown:
                 return
             self._is_shutdown = True
+        self._stop_event.set()
+        deadline = self._ensure_shutdown_deadline()
         logger.info("Graceful shutdown: stopping all components...")
-        # Шаг 1: Останавливаем watchdog — прекращаем поступление новых задач
+        # Шаг 1: Останавливаем watchdog — прекращаем поступление новых SMTP-задач
         if self._observer:
             try:
                 self._observer.stop()
                 if self._observer_started:
-                    self._observer.join(timeout=10)
+                    observer_wait = min(
+                        SHUTDOWN_OBSERVER_JOIN_SEC,
+                        _shutdown_remaining_seconds(deadline),
+                    )
+                    if observer_wait > 0:
+                        self._observer.join(timeout=observer_wait)
                 logger.info("Watchdog observer stopped")
             except Exception as e:
                 logger.error(f"Error stopping watchdog: {e}")
-        # Шаг 2: Ожидаем завершения воркеров (флаг _stop_event уже установлен)
-        self._imap_pool.join(timeout=30)
-        self._smtp_pool.join(timeout=30)
+        # Шаг 2: IMAP poller — прекращаем постановку новых IMAP-задач в очередь
+        poller_wait = _shutdown_remaining_seconds(deadline)
+        if poller_wait > 0 and self._imap_poller.is_alive():
+            self._imap_poller.join(timeout=poller_wait)
+        # Шаг 3: Ожидаем завершения активных воркеров (единый дедлайн, DMN-5)
+        all_workers = self._imap_pool._workers + self._smtp_pool._workers
+        _join_threads_until_deadline(all_workers, deadline, "IMAP+SMTP worker pools")
         logger.info("ProxyDaemon shutdown complete")
 def write_pid_file(path: str = PID_FILE) -> None:
     """Best-effort PID file for panel monitor (no shell). Failures are logged only."""

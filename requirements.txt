@@ -15,7 +15,7 @@ cryptography>=42.0.0
 watchdog>=4.0.0
 
 # Пул соединений с MariaDB (Database-класс, DB_POOL_SIZE=12)
-mysql-connector-python>=8.4.0
+mysql-connector-python>=9.2.0
 
 # HTTP-запросы к OAuth2-эндпоинтам (обновление токенов в _refresh_oauth_token)
 requests>=2.32.0

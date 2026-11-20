@@ -105,6 +105,7 @@ GROUP_CRYPTO="mail-proxy-crypto"
 # (прямые импорты и транзитивное замыкание, включая referent_notify.py).
 DAEMON_RUNTIME_MODULES=(
     "./relationship_lookup.py"
+    "./supervisor_db.py"
     "./relationship_routing.py"
     "./message_rebuild.py"
     "./attachment_policy.py"

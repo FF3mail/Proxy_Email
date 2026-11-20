@@ -11,8 +11,18 @@ Importing this module has no side effects beyond class/function definitions.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Protocol
+
+from supervisor_db import (
+    SupervisorQueryFailed,
+    format_set_statement_select,
+    is_mariadb_statement_timeout,
+    rollback_connection_quietly,
+)
+
+logger = logging.getLogger('mail-proxy')
 
 # Shared SELECT list: relationship + account + referent context for transport.
 _RELATIONSHIP_SELECT = """
@@ -362,7 +372,9 @@ class RelationshipLookup:
         ]
 
     def list_watch_targets(
-        self, referent_id: Optional[int] = None
+        self,
+        referent_id: Optional[int] = None,
+        max_statement_time: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         PROMPT-53 §10: Maildir paths to watch for outbound pickup.
@@ -380,7 +392,19 @@ class RelationshipLookup:
             sql += ' AND c.referent_id = %s'
             params = (int(referent_id),)
         sql += ' ORDER BY c.id'
-        rows = self._fetch_all(sql, params)
+        try:
+            rows = self._fetch_all(sql, params, max_statement_time=max_statement_time)
+        except Exception as exc:
+            if max_statement_time is not None and is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'list_watch_targets hit max_statement_time (%ss, referent_id=%s)',
+                    max_statement_time,
+                    referent_id,
+                )
+                raise SupervisorQueryFailed(
+                    f'list_watch_targets max_statement_time referent={referent_id!r}'
+                ) from exc
+            raise
         return [
             {
                 'local_client_maildir': dto.local_client_maildir,
@@ -390,9 +414,14 @@ class RelationshipLookup:
         ]
 
     def list_watch_targets_for_referent(
-        self, referent_id: int
+        self,
+        referent_id: int,
+        max_statement_time: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        return self.list_watch_targets(referent_id=int(referent_id))
+        return self.list_watch_targets(
+            referent_id=int(referent_id),
+            max_statement_time=max_statement_time,
+        )
 
     def _fetch_one(
         self, sql: str, params: tuple
@@ -413,15 +442,27 @@ class RelationshipLookup:
             if conn is not None:
                 conn.close()
 
-    def _fetch_all(self, sql: str, params: tuple = ()) -> List[ClientRelationshipDTO]:
+    def _fetch_all(
+        self,
+        sql: str,
+        params: tuple = (),
+        max_statement_time: Optional[float] = None,
+    ) -> List[ClientRelationshipDTO]:
         conn = None
         cursor = None
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(sql, params)
+            exec_sql = sql
+            if max_statement_time is not None:
+                exec_sql = format_set_statement_select(sql, max_statement_time)
+            cursor.execute(exec_sql, params)
             rows = cursor.fetchall() or []
             return [ClientRelationshipDTO.from_row(row) for row in rows]
+        except Exception:
+            if conn is not None:
+                rollback_connection_quietly(conn)
+            raise
         finally:
             if cursor is not None:
                 cursor.close()
