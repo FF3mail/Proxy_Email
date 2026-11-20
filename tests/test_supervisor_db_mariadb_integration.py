@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Live MariaDB integration for DEV-56 option C — owner cases (a)–(f).
+Live MariaDB integration for DEV-56 (cases a–l).
 
-Skipped unless DELTA_TEST_MARIADB_DSN is set:
-  export DELTA_TEST_MARIADB_DSN='mysql://USER:PASS@127.0.0.1:3306/DATABASE'
+Requires DELTA_TEST_MARIADB_DSN pointing at a dedicated throwaway database
+(name must match (?i)(test|tmp|throwaway|scratch) or set
+DELTA_TEST_MARIADB_ALLOW_DESTRUCTIVE=1). Tests DELETE rows and must never
+run against a production database name.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -57,6 +60,8 @@ from supervisor_db import (
 )
 
 DSN_ENV = 'DELTA_TEST_MARIADB_DSN'
+DESTRUCTIVE_ALLOW_ENV = 'DELTA_TEST_MARIADB_ALLOW_DESTRUCTIVE'
+_THROWAWAY_DB_RE = re.compile(r'(?i)(test|tmp|throwaway|scratch|dev56)')
 _REFERENT_COLUMNS = 'id, username, local_inbox, local_outbox'
 _TOLERANCE_SLOW_SEC = 1.5
 
@@ -79,6 +84,53 @@ def _parse_dsn(dsn: str) -> Dict[str, Any]:
 
 def _dsn_configured() -> bool:
     return bool(os.environ.get(DSN_ENV, '').strip())
+
+
+def destructive_mariadb_allowed(dsn: Optional[str] = None) -> bool:
+    """True when live tests may DELETE/TRUNCATE on the DSN target database."""
+    raw = (dsn if dsn is not None else os.environ.get(DSN_ENV, '')).strip()
+    if not raw:
+        return False
+    if os.environ.get(DESTRUCTIVE_ALLOW_ENV, '').strip() == '1':
+        return True
+    db = _parse_dsn(raw)['database']
+    return _THROWAWAY_DB_RE.search(db) is not None
+
+
+def live_mariadb_skip_reason() -> Optional[str]:
+    """None when live MariaDB tests may run; otherwise skip reason string."""
+    if not _dsn_configured():
+        return f'{DSN_ENV} not set (live MariaDB required)'
+    if not destructive_mariadb_allowed():
+        db = _parse_dsn(os.environ[DSN_ENV].strip())['database']
+        return (
+            f'destructive live tests refused: database {db!r} is not throwaway '
+            f'(name must match test|tmp|throwaway|scratch case-insensitively, '
+            f'or set {DESTRUCTIVE_ALLOW_ENV}=1)'
+        )
+    return None
+
+
+_LIVE_SKIP = live_mariadb_skip_reason()
+
+
+def _require_destructive_mariadb() -> None:
+    reason = live_mariadb_skip_reason()
+    if reason is not None:
+        raise unittest.SkipTest(reason)
+
+
+def _unlock_tables_best_effort() -> None:
+    if not _dsn_configured():
+        return
+    try:
+        conn = _connect_direct(connect_timeout=3, read_timeout=3, write_timeout=3)
+        try:
+            conn.cursor().execute('UNLOCK TABLES')
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 def _cfg() -> Dict[str, Any]:
@@ -164,6 +216,7 @@ sys.modules['mail_proxy_daemon_import'] = _mpd_import
 
 
 def _mysql_cli(sql: str) -> None:
+    _require_destructive_mariadb()
     if not _dsn_configured():
         return
     cfg = _cfg()
@@ -185,6 +238,8 @@ def _mysql_cli(sql: str) -> None:
 
 
 def _reset_seed_data() -> int:
+    _require_destructive_mariadb()
+    _unlock_tables_best_effort()
     conn = _connect_direct()
     try:
         cur = conn.cursor()
@@ -246,7 +301,7 @@ class _CountingDb:
         return _CountingConnection()
 
 
-@unittest.skipUnless(_dsn_configured(), f'{DSN_ENV} not set (live MariaDB required)')
+@unittest.skipIf(_LIVE_SKIP is not None, _LIVE_SKIP or '')
 class SupervisorDbMariaDbIntegrationTests(unittest.TestCase):
     """Owner-required cases (a)–(f). Method names map 1:1 to spec letters."""
 
@@ -570,7 +625,7 @@ class _PoolDb:
         return self._pool.get_connection()
 
 
-@unittest.skipUnless(_dsn_configured(), f'{DSN_ENV} not set (live MariaDB required)')
+@unittest.skipIf(_LIVE_SKIP is not None, _LIVE_SKIP or '')
 class ImapPollerMariaDbIntegrationTests(unittest.TestCase):
     """Owner-required cases (g)–(i) for ImapPoller shutdown DB hardening."""
 
@@ -735,6 +790,8 @@ class ImapPollerMariaDbIntegrationTests(unittest.TestCase):
 
 def _seed_referent_with_relationship() -> tuple:
     """Returns (referent_id, relationship_id)."""
+    _require_destructive_mariadb()
+    _unlock_tables_best_effort()
     conn = _connect_direct()
     try:
         cur = conn.cursor()
@@ -816,7 +873,7 @@ def _sync_daemon_stub(mpd, pool, ref_id: int, rel_id: int):
     return daemon, removed_referents, removed_relationships
 
 
-@unittest.skipUnless(_dsn_configured(), f'{DSN_ENV} not set (live MariaDB required)')
+@unittest.skipIf(_LIVE_SKIP is not None, _LIVE_SKIP or '')
 class SupervisorSyncMariaDbIntegrationTests(unittest.TestCase):
     """Cases (j)–(l): sync must not teardown on query failure."""
 
@@ -841,15 +898,10 @@ class SupervisorSyncMariaDbIntegrationTests(unittest.TestCase):
         self.pool = _production_pool(pool_name=f'dev56_sync_{id(self)}')
         self.mpd = _load_mpd()
 
-    def test_j_pre_fix_empty_list_would_teardown_model(self) -> None:
-        """Proves unfixed semantics: failed load as [] removes all registered referents."""
-        registered = {self.ref_id}
-        current_refs: List[Dict[str, Any]] = []
-        removed = registered - {int(r['id']) for r in current_refs}
-        self.assertEqual(removed, {self.ref_id})
-
     def test_j_locked_referent_sync_keeps_registry(self) -> None:
-        from supervisor_db import SupervisorQueryFailed
+        expect_legacy_teardown = (
+            os.environ.get('DEV56_J_EXPECT_LEGACY_TEARDOWN', '').strip() == '1'
+        )
 
         daemon, removed_refs, removed_rels = _sync_daemon_stub(
             self.mpd, self.pool, self.ref_id, self.rel_id
@@ -858,15 +910,22 @@ class SupervisorSyncMariaDbIntegrationTests(unittest.TestCase):
         try:
             conn_lock.cursor().execute('LOCK TABLES referents WRITE')
             t0 = time.monotonic()
-            try:
-                self.mpd.ProxyDaemon._sync_database_state(daemon)
-            except SupervisorQueryFailed:
-                self.fail('sync should catch SupervisorQueryFailed')
+            self.mpd.ProxyDaemon._sync_database_state(daemon)
             elapsed = time.monotonic() - t0
             conn_lock.cursor().execute('UNLOCK TABLES')
         finally:
             conn_lock.close()
         self.measured['j_elapsed_sec'] = f'{elapsed:.3f}'
+        if expect_legacy_teardown:
+            self.assertIn(
+                self.ref_id,
+                removed_refs,
+                'pre-fix: empty failed load must unschedule registered referent',
+            )
+            print(
+                f'MEASURED j_legacy elapsed={elapsed:.3f}s removed_refs={removed_refs}'
+            )
+            return
         self.assertIn(self.ref_id, daemon._watch_registered_referent_ids)
         self.assertIn(self.rel_id, daemon._watched_relationship_ids)
         self.assertEqual(removed_refs, [])
