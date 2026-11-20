@@ -2157,6 +2157,7 @@ class ProxyDaemon:
         self._imap_poller.start()
         # Шаг 3: watchdog per referent effective watch mode (PROMPT-73)
         self._observer = Observer()
+        referent_load_deferred = False
         try:
             referents = self._load_referents()
         except SupervisorQueryFailed as exc:
@@ -2164,7 +2165,8 @@ class ProxyDaemon:
                 'Startup: referent list unavailable (%s); watches deferred', exc
             )
             referents = []
-        if not referents:
+            referent_load_deferred = True
+        if not referents and not referent_load_deferred:
             logger.warning("No active referents found in database.")
         for ref in referents:
             if self._stop_event.is_set() or self._past_shutdown_deadline():
@@ -2791,7 +2793,8 @@ class ProxyDaemon:
         failed_referent_ids: set = set()
         for ref in active_refs:
             if not daemon_supervisor_sql_permitted(self):
-                break
+                # Shutdown path: do not reconcile partial listings (NFR-9).
+                return
             ref_id = int(ref['id'])
             cap = daemon_supervisor_statement_cap(self)
             try:

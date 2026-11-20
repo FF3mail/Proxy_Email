@@ -1031,6 +1031,102 @@ class SupervisorSyncQueryFailedTests(unittest.TestCase):
         self.assertEqual(refs, [])
         daemon._db.get_connection.assert_not_called()
 
+    def test_register_failure_not_marked_watch_registered(self) -> None:
+        daemon = self._daemon_with_registry(set(), set(), {})
+        daemon._mail_handler._relationship_lookup.list_watch_targets_for_referent = (
+            MagicMock(side_effect=self.SupervisorQueryFailed('cap'))
+        )
+        daemon._register_watches_for_referent({'id': 5, 'username': 'u'})
+        self.assertNotIn(5, daemon._watch_registered_referent_ids)
+
+    def test_startup_failure_then_sync_registers_on_retry(self) -> None:
+        daemon = self._daemon_with_registry(set(), set(), {})
+        load_calls = {'n': 0}
+
+        def load_refs():
+            load_calls['n'] += 1
+            if load_calls['n'] == 1:
+                raise self.SupervisorQueryFailed('startup')
+            return [{'id': 9, 'username': 'nine'}]
+
+        daemon._load_referents = load_refs
+        registered = []
+
+        def register(ref):
+            registered.append(int(ref['id']))
+            daemon._watch_registered_referent_ids.add(int(ref['id']))
+
+        daemon._register_watches_for_referent = register
+        daemon._sync_relationship_watches = MagicMock()
+        try:
+            daemon._load_referents()
+        except self.SupervisorQueryFailed:
+            pass
+        self.assertEqual(registered, [])
+        daemon._sync_database_state()
+        self.assertEqual(registered, [9])
+        self.assertIn(9, daemon._watch_registered_referent_ids)
+
+    def test_sql_not_permitted_mid_relationship_sync_returns_no_unschedule(
+        self,
+    ) -> None:
+        daemon = self._daemon_with_registry(set(), {10, 20}, {10: 1, 20: 2})
+        daemon._load_referents = MagicMock(
+            return_value=[{'id': 1, 'username': 'a'}, {'id': 2, 'username': 'b'}]
+        )
+
+        def list_targets(ref_id, max_statement_time=None):
+            if ref_id == 1:
+                daemon._stop_event.set()
+                return [
+                    {
+                        'relationship': {'relationship_id': 10},
+                        'local_client_maildir': '/m',
+                    }
+                ]
+            raise AssertionError('should not list ref 2 after stop')
+
+        daemon._mail_handler._relationship_lookup.list_watch_targets_for_referent = (
+            list_targets
+        )
+        daemon._sync_relationship_watches()
+        daemon._unschedule_watchdog_for_relationship.assert_not_called()
+
+    def test_mixed_failure_and_genuine_relationship_removal(self) -> None:
+        daemon = self._daemon_with_registry(
+            {1, 2}, {10, 20, 21}, {10: 1, 20: 2, 21: 2}
+        )
+        daemon._load_referents = MagicMock(
+            return_value=[
+                {'id': 1, 'username': 'a'},
+                {'id': 2, 'username': 'b'},
+            ]
+        )
+
+        def list_targets(ref_id, max_statement_time=None):
+            if ref_id == 1:
+                raise self.SupervisorQueryFailed('ref1')
+            return [
+                {
+                    'relationship': {'relationship_id': 20},
+                    'local_client_maildir': '/m',
+                }
+            ]
+
+        daemon._mail_handler._relationship_lookup.list_watch_targets_for_referent = (
+            list_targets
+        )
+        daemon._sync_relationship_watches()
+        daemon._unschedule_watchdog_for_relationship.assert_called_once_with(21)
+
+    def test_deactivated_referent_still_unschedules_on_success(self) -> None:
+        daemon = self._daemon_with_registry({5, 6}, {99}, {99: 5})
+        daemon._load_referents = MagicMock(return_value=[{'id': 6, 'username': 'six'}])
+        daemon._sync_relationship_watches = MagicMock()
+        daemon._sync_database_state()
+        daemon._unschedule_watches_for_referent.assert_called_once_with(5)
+        self.assertNotIn(5, daemon._watch_registered_referent_ids)
+
 
 class SupervisorLoopDeadlineTests(unittest.TestCase):
     @classmethod

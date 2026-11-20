@@ -15,14 +15,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Protocol
 
-logger = logging.getLogger('mail-proxy')
-
 from supervisor_db import (
     SupervisorQueryFailed,
     format_set_statement_select,
     is_mariadb_statement_timeout,
     rollback_connection_quietly,
 )
+
+logger = logging.getLogger('mail-proxy')
 
 # Shared SELECT list: relationship + account + referent context for transport.
 _RELATIONSHIP_SELECT = """
