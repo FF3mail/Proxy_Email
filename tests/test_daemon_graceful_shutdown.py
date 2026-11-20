@@ -943,6 +943,95 @@ class ImapPollerShutdownDbTests(unittest.TestCase):
         conn.close.assert_called_once()
 
 
+class SupervisorSyncQueryFailedTests(unittest.TestCase):
+    """Empty list vs query failure — no teardown on SupervisorQueryFailed."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mpd = _load_daemon()
+        from supervisor_db import SupervisorQueryFailed
+
+        cls.SupervisorQueryFailed = SupervisorQueryFailed
+
+    def _daemon_with_registry(self, registered: set, watched: set, rel_owner: dict):
+        daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+        daemon._stop_event = threading.Event()
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        daemon._watch_registered_referent_ids = set(registered)
+        daemon._watched_relationship_ids = watched
+        daemon._relationship_referent_id = dict(rel_owner)
+        daemon._watched_lock = threading.Lock()
+        daemon._relationship_id_to_watch_path = {}
+        daemon._mail_handler = MagicMock()
+        daemon._unschedule_watches_for_referent = MagicMock()
+        daemon._unschedule_watchdog_for_relationship = MagicMock()
+        daemon._setup_watchdog_for_relationship = MagicMock()
+        daemon._scan_existing_outgoing_for_relationship = MagicMock()
+        daemon._validate_relationship_maildir_for_watch = MagicMock(return_value=None)
+        return daemon
+
+    def test_load_referents_1969_skips_sync_no_teardown(self) -> None:
+        import mysql.connector
+
+        daemon = self._daemon_with_registry({7, 8}, {101, 102}, {101: 7, 102: 8})
+        conn = MagicMock()
+        cur = MagicMock()
+        err = mysql.connector.Error()
+        err.errno = 1969
+        cur.execute.side_effect = err
+        conn.cursor.return_value = cur
+        daemon._db = MagicMock()
+        daemon._db.get_connection.return_value = conn
+        daemon._sync_relationship_watches = MagicMock()
+        with self.assertRaises(self.SupervisorQueryFailed):
+            daemon._load_referents()
+        daemon._unschedule_watches_for_referent.assert_not_called()
+        daemon._load_referents = MagicMock(
+            side_effect=self.SupervisorQueryFailed('test')
+        )
+        daemon._sync_database_state()
+        daemon._unschedule_watches_for_referent.assert_not_called()
+        daemon._sync_relationship_watches.assert_not_called()
+
+    def test_partial_watch_list_failure_keeps_failed_referent_watchers(self) -> None:
+        daemon = self._daemon_with_registry({1, 2}, {10, 20}, {10: 1, 20: 2})
+        daemon._load_referents = MagicMock(
+            return_value=[
+                {'id': 1, 'username': 'a'},
+                {'id': 2, 'username': 'b'},
+            ]
+        )
+
+        def list_targets(ref_id, max_statement_time=None):
+            if ref_id == 1:
+                raise self.SupervisorQueryFailed('timeout ref 1')
+            return [{'relationship': {'relationship_id': 20}, 'local_client_maildir': '/m'}]
+
+        daemon._mail_handler._relationship_lookup.list_watch_targets_for_referent = (
+            list_targets
+        )
+        daemon._sync_relationship_watches()
+        daemon._unschedule_watchdog_for_relationship.assert_not_called()
+
+    def test_empty_success_still_removes_watchers(self) -> None:
+        daemon = self._daemon_with_registry(set(), {99}, {99: 5})
+        daemon._load_referents = MagicMock(return_value=[{'id': 5, 'username': 'x'}])
+        daemon._mail_handler._relationship_lookup.list_watch_targets_for_referent = (
+            MagicMock(return_value=[])
+        )
+        daemon._sync_relationship_watches()
+        daemon._unschedule_watchdog_for_relationship.assert_called_once_with(99)
+
+    def test_stopping_skips_load_fast_no_raise(self) -> None:
+        daemon = self._daemon_with_registry({1}, set(), {})
+        daemon._stop_event.set()
+        daemon._db = MagicMock()
+        refs = daemon._load_referents()
+        self.assertEqual(refs, [])
+        daemon._db.get_connection.assert_not_called()
+
+
 class SupervisorLoopDeadlineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

@@ -38,6 +38,7 @@ from watchdog.events import FileSystemEventHandler
 from relationship_lookup import RelationshipLookup
 from supervisor_db import (
     SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+    SupervisorQueryFailed,
     format_set_statement_select,
     is_mariadb_statement_timeout,
     poller_db_permitted,
@@ -2156,7 +2157,13 @@ class ProxyDaemon:
         self._imap_poller.start()
         # Шаг 3: watchdog per referent effective watch mode (PROMPT-73)
         self._observer = Observer()
-        referents = self._load_referents()
+        try:
+            referents = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Startup: referent list unavailable (%s); watches deferred', exc
+            )
+            referents = []
         if not referents:
             logger.warning("No active referents found in database.")
         for ref in referents:
@@ -2192,12 +2199,18 @@ class ProxyDaemon:
         if not daemon_supervisor_sql_permitted(self):
             return
         cap = daemon_supervisor_statement_cap(self)
-        targets = (
-            self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                ref_id,
-                max_statement_time=cap,
+        try:
+            targets = (
+                self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                    ref_id,
+                    max_statement_time=cap,
+                )
             )
-        )
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Register watches skipped for referent %s (%s)', ref_id, exc
+            )
+            return
         for target in targets:
             self._setup_watchdog_for_relationship(target)
             self._scan_existing_outgoing_for_relationship(target)
@@ -2661,24 +2674,29 @@ class ProxyDaemon:
             cursor.execute(sql)
             return cursor.fetchall()
         except mysql.connector.Error as exc:
+            rollback_connection_quietly(conn)
             if is_mariadb_statement_timeout(exc):
                 logger.warning(
                     'Supervisor referent list hit max_statement_time (%ss)',
                     cap,
                 )
-                rollback_connection_quietly(conn)
-                return []
+                raise SupervisorQueryFailed(
+                    'supervisor referent list max_statement_time'
+                ) from exc
             if daemon_supervisor_db_abort_no_retry(self, exc):
-                rollback_connection_quietly(conn)
-                return []
+                raise SupervisorQueryFailed(
+                    'supervisor referent list aborted during shutdown'
+                ) from exc
             logger.critical(
                 f'Failed to load referents: {exc}',
                 exc_info=True,
             )
-            return []
+            raise SupervisorQueryFailed('supervisor referent list failed') from exc
+        except SupervisorQueryFailed:
+            raise
         except Exception as e:
             logger.critical(f"Failed to load referents: {e}", exc_info=True)
-            return []
+            raise SupervisorQueryFailed('supervisor referent list failed') from e
         finally:
             if cursor:
                 cursor.close()
@@ -2698,7 +2716,13 @@ class ProxyDaemon:
         """
         if not daemon_supervisor_sql_permitted(self):
             return
-        current_refs = self._load_referents()
+        try:
+            current_refs = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Sync skipped: referent list unavailable (%s)', exc
+            )
+            return
         if self._stop_event.is_set():
             return
         current_ids = {int(r['id']) for r in current_refs}
@@ -2756,17 +2780,34 @@ class ProxyDaemon:
         """Reconcile relationship watches for all active referents."""
         if not daemon_supervisor_sql_permitted(self):
             return
+        try:
+            active_refs = self._load_referents()
+        except SupervisorQueryFailed as exc:
+            logger.warning(
+                'Relationship sync skipped: referent list unavailable (%s)', exc
+            )
+            return
         targets: List[Dict[str, Any]] = []
-        for ref in self._load_referents():
+        failed_referent_ids: set = set()
+        for ref in active_refs:
             if not daemon_supervisor_sql_permitted(self):
                 break
+            ref_id = int(ref['id'])
             cap = daemon_supervisor_statement_cap(self)
-            targets.extend(
-                self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
-                    int(ref['id']),
-                    max_statement_time=cap,
+            try:
+                targets.extend(
+                    self._mail_handler._relationship_lookup.list_watch_targets_for_referent(
+                        ref_id,
+                        max_statement_time=cap,
+                    )
                 )
-            )
+            except SupervisorQueryFailed as exc:
+                failed_referent_ids.add(ref_id)
+                logger.warning(
+                    'Relationship sync skipped for referent %s (%s)',
+                    ref_id,
+                    exc,
+                )
         current_by_id = {
             int(t['relationship']['relationship_id']): t for t in targets
         }
@@ -2792,6 +2833,9 @@ class ProxyDaemon:
         for relationship_id in removed_ids:
             if self._stop_event.is_set():
                 break
+            owner_ref = self._relationship_referent_id.get(relationship_id)
+            if owner_ref is not None and int(owner_ref) in failed_referent_ids:
+                continue
             logger.info(
                 'Sync: relationship ID=%s no longer valid, '
                 'removing from relationship watchdog',

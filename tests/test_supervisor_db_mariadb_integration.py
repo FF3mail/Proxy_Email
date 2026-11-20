@@ -733,5 +733,168 @@ class ImapPollerMariaDbIntegrationTests(unittest.TestCase):
         print(f'MEASURED i_discard_elapsed={self.measured["i_discard_elapsed_sec"]}')
 
 
+def _seed_referent_with_relationship() -> tuple:
+    """Returns (referent_id, relationship_id)."""
+    conn = _connect_direct()
+    try:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM clients')
+        cur.execute('DELETE FROM external_accounts')
+        cur.execute('DELETE FROM referents')
+        conn.commit()
+        cur.execute(
+            """
+            INSERT INTO referents (username, local_inbox, local_outbox, active)
+            VALUES ('sync-jk', 'in@test', '/var/mail/sync/Maildir', 1)
+            """
+        )
+        conn.commit()
+        cur.execute("SELECT id FROM referents WHERE username='sync-jk'")
+        ref_id = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            INSERT INTO external_accounts (
+                referent_id, email, auth_type, active,
+                imap_host, imap_port, smtp_host, smtp_port
+            ) VALUES (%s, 'ea@test', 'plain', 1, 'imap', 993, 'smtp', 465)
+            """,
+            (ref_id,),
+        )
+        conn.commit()
+        acc_id = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO clients (
+                email, referent_id, external_client_email, local_client_email,
+                local_referent_email, external_account_id, local_client_maildir, active
+            ) VALUES (
+                'legacy@test', %s, 'ext@c', 'loc@c', 'ref@c', %s, '/tmp/maildir', 1
+            )
+            """,
+            (ref_id, acc_id),
+        )
+        conn.commit()
+        rel_id = int(cur.lastrowid)
+        cur.close()
+        return ref_id, rel_id
+    finally:
+        conn.close()
+
+
+def _sync_daemon_stub(mpd, pool, ref_id: int, rel_id: int):
+    daemon = mpd.ProxyDaemon.__new__(mpd.ProxyDaemon)
+    daemon._stop_event = threading.Event()
+    daemon._shutdown_signaled_mono = None
+    daemon._shutdown_deadline_mono = None
+    daemon._watch_registered_referent_ids = {ref_id}
+    daemon._watched_relationship_ids = {rel_id}
+    daemon._relationship_referent_id = {rel_id: ref_id}
+    daemon._watched_lock = threading.Lock()
+    daemon._relationship_id_to_watch_path = {rel_id: '/tmp/maildir/new'}
+    daemon._watch_path_relationship_ids = {}
+    daemon._relationship_observer_paths = set()
+    daemon._db = _PoolDb(pool)
+    daemon._mail_handler = MagicMock()
+    daemon._mail_handler._relationship_lookup = RelationshipLookup(_PoolDb(pool))
+    removed_referents: List[int] = []
+    removed_relationships: List[int] = []
+
+    def _unschedule_ref(rid: int) -> None:
+        removed_referents.append(int(rid))
+        daemon._watch_registered_referent_ids.discard(int(rid))
+
+    def _unschedule_rel(rid: int) -> None:
+        removed_relationships.append(int(rid))
+        daemon._watched_relationship_ids.discard(int(rid))
+
+    daemon._unschedule_watches_for_referent = _unschedule_ref
+    daemon._unschedule_watchdog_for_relationship = _unschedule_rel
+    daemon._setup_watchdog_for_relationship = MagicMock()
+    daemon._scan_existing_outgoing_for_relationship = MagicMock()
+    daemon._validate_relationship_maildir_for_watch = MagicMock(return_value=None)
+    daemon._register_watches_for_referent = MagicMock()
+    return daemon, removed_referents, removed_relationships
+
+
+@unittest.skipUnless(_dsn_configured(), f'{DSN_ENV} not set (live MariaDB required)')
+class SupervisorSyncMariaDbIntegrationTests(unittest.TestCase):
+    """Cases (j)–(l): sync must not teardown on query failure."""
+
+    ref_id: int = 0
+    rel_id: int = 0
+    measured: Dict[str, str] = {}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.ref_id, cls.rel_id = _seed_referent_with_relationship()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        _mysql_cli(
+            'UNLOCK TABLES; '
+            'DELETE FROM clients; '
+            'DELETE FROM external_accounts; '
+            'DELETE FROM referents;'
+        )
+
+    def setUp(self) -> None:
+        self.pool = _production_pool(pool_name=f'dev56_sync_{id(self)}')
+        self.mpd = _load_mpd()
+
+    def test_j_pre_fix_empty_list_would_teardown_model(self) -> None:
+        """Proves unfixed semantics: failed load as [] removes all registered referents."""
+        registered = {self.ref_id}
+        current_refs: List[Dict[str, Any]] = []
+        removed = registered - {int(r['id']) for r in current_refs}
+        self.assertEqual(removed, {self.ref_id})
+
+    def test_j_locked_referent_sync_keeps_registry(self) -> None:
+        from supervisor_db import SupervisorQueryFailed
+
+        daemon, removed_refs, removed_rels = _sync_daemon_stub(
+            self.mpd, self.pool, self.ref_id, self.rel_id
+        )
+        conn_lock = _connect_direct()
+        try:
+            conn_lock.cursor().execute('LOCK TABLES referents WRITE')
+            t0 = time.monotonic()
+            try:
+                self.mpd.ProxyDaemon._sync_database_state(daemon)
+            except SupervisorQueryFailed:
+                self.fail('sync should catch SupervisorQueryFailed')
+            elapsed = time.monotonic() - t0
+            conn_lock.cursor().execute('UNLOCK TABLES')
+        finally:
+            conn_lock.close()
+        self.measured['j_elapsed_sec'] = f'{elapsed:.3f}'
+        self.assertIn(self.ref_id, daemon._watch_registered_referent_ids)
+        self.assertIn(self.rel_id, daemon._watched_relationship_ids)
+        self.assertEqual(removed_refs, [])
+        self.assertEqual(removed_rels, [])
+        self.assertLess(elapsed, SUPERVISOR_MAX_STATEMENT_TIME_SEC + _TOLERANCE_SLOW_SEC)
+        print(f'MEASURED j_elapsed={self.measured["j_elapsed_sec"]}')
+
+    def test_k_after_unlock_next_sync_unchanged(self) -> None:
+        daemon, _, _ = _sync_daemon_stub(
+            self.mpd, self.pool, self.ref_id, self.rel_id
+        )
+        self.mpd.ProxyDaemon._sync_database_state(daemon)
+        self.assertIn(self.ref_id, daemon._watch_registered_referent_ids)
+        self.assertIn(self.rel_id, daemon._watched_relationship_ids)
+
+    def test_l_empty_db_success_removes_watchers(self) -> None:
+        daemon, removed_refs, removed_rels = _sync_daemon_stub(
+            self.mpd, self.pool, self.ref_id, self.rel_id
+        )
+        _mysql_cli(
+            'DELETE FROM clients; '
+            'DELETE FROM external_accounts; '
+            'DELETE FROM referents;'
+        )
+        self.mpd.ProxyDaemon._sync_database_state(daemon)
+        self.assertIn(self.ref_id, removed_refs)
+        self.assertIn(self.rel_id, removed_rels)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

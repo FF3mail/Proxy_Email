@@ -22,6 +22,10 @@ SUPERVISOR_MAX_STATEMENT_BUDGET_MARGIN_SEC = 2.0
 MARIADB_ER_STATEMENT_TIMEOUT = 1969
 
 
+class SupervisorQueryFailed(Exception):
+    """Supervisor SELECT did not complete; must not be treated as an empty result set."""
+
+
 def format_set_statement_select(select_sql: str, max_seconds: float) -> str:
     """Wrap a SELECT in SET STATEMENT max_statement_time=N FOR … (MariaDB)."""
     sql = select_sql.strip()

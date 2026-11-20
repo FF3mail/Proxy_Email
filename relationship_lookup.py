@@ -11,10 +11,14 @@ Importing this module has no side effects beyond class/function definitions.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Protocol
 
+logger = logging.getLogger('mail-proxy')
+
 from supervisor_db import (
+    SupervisorQueryFailed,
     format_set_statement_select,
     is_mariadb_statement_timeout,
     rollback_connection_quietly,
@@ -392,7 +396,14 @@ class RelationshipLookup:
             rows = self._fetch_all(sql, params, max_statement_time=max_statement_time)
         except Exception as exc:
             if max_statement_time is not None and is_mariadb_statement_timeout(exc):
-                return []
+                logger.warning(
+                    'list_watch_targets hit max_statement_time (%ss, referent_id=%s)',
+                    max_statement_time,
+                    referent_id,
+                )
+                raise SupervisorQueryFailed(
+                    f'list_watch_targets max_statement_time referent={referent_id!r}'
+                ) from exc
             raise
         return [
             {
