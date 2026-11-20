@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-DEV-56 option C: MariaDB SET STATEMENT max_statement_time for supervisor SELECTs.
+DEV-56 option C: MariaDB SET STATEMENT max_statement_time for capped SELECTs.
 
-Used only from the main-thread supervisor paths in mail-proxy-daemon.py.
-Worker/poller DB access must not pass max_statement_time (no SET STATEMENT wrapper).
+Supervisor (main thread) and ImapPoller referent/account loads use SET STATEMENT.
+Other worker DB paths must not wrap statements (no SET STATEMENT).
 """
 
 from __future__ import annotations
@@ -64,5 +64,75 @@ def rollback_connection_quietly(conn: Any) -> None:
         return
     try:
         conn.rollback()
+    except Exception:
+        pass
+
+
+def poller_db_permitted(
+    stop_event: Any,
+    shutdown_signaled_mono: Optional[float] = None,
+) -> bool:
+    """Whether ImapPoller may start a new MariaDB statement."""
+    if stop_event is not None and stop_event.is_set():
+        return False
+    if shutdown_signaled_mono is not None:
+        return False
+    return True
+
+
+def poller_statement_cap(
+    shutdown_deadline_mono: Optional[float],
+    shutdown_signaled_mono: Optional[float],
+    stop_event: Any,
+    remaining_fn,
+    default_cap: float = SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+) -> float:
+    """
+    Per-query cap for ImapPoller: default until shutdown is signalled, then
+    tightened to remaining shutdown budget (same rules as supervisor).
+    """
+    stopping = shutdown_signaled_mono is not None or (
+        stop_event is not None and stop_event.is_set()
+    )
+    if not stopping:
+        return float(default_cap)
+    if shutdown_deadline_mono is None:
+        return float(default_cap)
+    return supervisor_max_statement_seconds(
+        default_cap, shutdown_deadline_mono, remaining_fn
+    )
+
+
+def release_mysql_connection(conn: Any, *, discard: bool = False) -> None:
+    """
+    Return a pooled connection to the pool, or discard it during shutdown.
+
+    PooledMySQLConnection.close() always calls reset_session() (server round
+    trip) before add_connection(); that can block when MariaDB is stalled.
+    When discard=True, shut down the underlying socket via the public
+    MySQLConnection.shutdown() API and drop the wrapper without ping/reset.
+    """
+    if conn is None:
+        return
+    if not discard:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return
+    rollback_connection_quietly(conn)
+    inner = getattr(conn, '_cnx', None)
+    if inner is not None:
+        try:
+            inner.shutdown()
+        except Exception:
+            pass
+        try:
+            setattr(conn, '_cnx', None)
+        except Exception:
+            pass
+        return
+    try:
+        conn.close()
     except Exception:
         pass

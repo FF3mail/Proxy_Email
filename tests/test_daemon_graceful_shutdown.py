@@ -824,6 +824,125 @@ class SupervisorMaxStatementTimeTests(unittest.TestCase):
             conn.close()
 
 
+class ImapPollerShutdownDbTests(unittest.TestCase):
+    """DEV-56 ImapPoller option C + discard release (unit, stubbed)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mpd = _load_daemon()
+        from supervisor_db import (
+            MARIADB_ER_STATEMENT_TIMEOUT,
+            SUPERVISOR_MAX_STATEMENT_TIME_SEC,
+            poller_db_permitted,
+            poller_statement_cap,
+            release_mysql_connection,
+        )
+
+        cls.MARIADB_ER = MARIADB_ER_STATEMENT_TIMEOUT
+        cls.DEFAULT_CAP = SUPERVISOR_MAX_STATEMENT_TIME_SEC
+        cls.poller_db_permitted = poller_db_permitted
+        cls.poller_statement_cap = poller_statement_cap
+        cls.release_mysql_connection = release_mysql_connection
+
+    def _make_poller(self) -> object:
+        stop = threading.Event()
+        daemon = self.mpd.ProxyDaemon.__new__(self.mpd.ProxyDaemon)
+        daemon._stop_event = stop
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        poller = self.mpd.ImapPoller(
+            queue.Queue(),
+            MagicMock(),
+            stop,
+            daemon_ref=daemon,
+        )
+        return poller, daemon, stop
+
+    def test_poller_cap_default_before_signal(self) -> None:
+        poller, daemon, _ = self._make_poller()
+        self.assertEqual(poller._poller_statement_cap(), self.DEFAULT_CAP)
+
+    def test_poller_cap_tightens_after_shutdown_signal(self) -> None:
+        poller, daemon, stop = self._make_poller()
+        daemon._shutdown_signaled_mono = time.monotonic()
+        daemon._shutdown_deadline_mono = time.monotonic() + 4.0
+        cap = poller._poller_statement_cap()
+        self.assertLess(cap, self.DEFAULT_CAP)
+        self.assertGreaterEqual(cap, 1.0)
+
+    def test_poller_skips_sql_when_stopping(self) -> None:
+        poller, daemon, stop = self._make_poller()
+        stop.set()
+        poller._db = MagicMock()
+        refs = poller._load_active_referents()
+        self.assertEqual(refs, [])
+        poller._db.get_connection.assert_not_called()
+
+    def test_poller_uses_set_statement_when_running(self) -> None:
+        poller, daemon, stop = self._make_poller()
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [{'id': 1, 'username': 'u'}]
+        conn.cursor.return_value = cursor
+        poller._db = MagicMock()
+        poller._db.get_connection.return_value = conn
+        poller._load_active_referents()
+        sql = cursor.execute.call_args[0][0]
+        self.assertIn('SET STATEMENT max_statement_time=', sql)
+        self.assertIn('FROM referents WHERE active = 1', sql)
+
+    def test_poller_1969_no_retry_returns_empty(self) -> None:
+        import mysql.connector
+        from supervisor_db import release_mysql_connection
+
+        poller, daemon, stop = self._make_poller()
+        conn = MagicMock()
+        cursor = MagicMock()
+        err = mysql.connector.Error()
+        err.errno = self.MARIADB_ER
+        cursor.execute.side_effect = err
+        conn.cursor.return_value = cursor
+        poller._db = MagicMock()
+        poller._db.get_connection.return_value = conn
+        with self.assertLogs('mail-proxy', level='WARNING') as logs:
+            refs = poller._load_active_referents()
+        self.assertEqual(refs, [])
+        self.assertEqual(cursor.execute.call_count, 1)
+        self.assertTrue(
+            any('ImapPoller referent list hit max_statement_time' in m for m in logs.output)
+        )
+        release_mysql_connection(conn, discard=False)
+
+    def test_release_discard_skips_pooled_close_ping(self) -> None:
+        from supervisor_db import release_mysql_connection
+
+        inner = MagicMock()
+        pool = MagicMock()
+
+        class _PooledWrapper:
+            def __init__(self) -> None:
+                self._cnx = inner
+                self._cnx_pool = pool
+
+            def close(self) -> None:
+                raise AssertionError('pooled close must not run when discarding')
+
+            def rollback(self) -> None:
+                pass
+
+        wrapper = _PooledWrapper()
+        release_mysql_connection(wrapper, discard=True)
+        inner.shutdown.assert_called_once()
+        self.assertIsNone(wrapper._cnx)
+
+    def test_release_normal_uses_close(self) -> None:
+        from supervisor_db import release_mysql_connection
+
+        conn = MagicMock()
+        release_mysql_connection(conn, discard=False)
+        conn.close.assert_called_once()
+
+
 class SupervisorLoopDeadlineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

@@ -40,6 +40,9 @@ from supervisor_db import (
     SUPERVISOR_MAX_STATEMENT_TIME_SEC,
     format_set_statement_select,
     is_mariadb_statement_timeout,
+    poller_db_permitted,
+    poller_statement_cap,
+    release_mysql_connection,
     rollback_connection_quietly,
     supervisor_max_statement_seconds,
 )
@@ -126,7 +129,7 @@ DB_POOL_SIZE = 12
 DB_CONNECT_TIMEOUT_SEC = 10
 DB_READ_TIMEOUT_SEC = 30
 DB_WRITE_TIMEOUT_SEC = 30
-# DEV-56 option C: MariaDB SET STATEMENT max_statement_time on supervisor SELECTs only.
+# DEV-56 option C: SET STATEMENT max_statement_time on supervisor + ImapPoller SELECTs.
 # See supervisor_db.py (never SET SESSION — shared pool serves workers).
 # Директория для временных файлов демона
 TEMP_DIR = '/var/spool/mail-proxy/tmp'
@@ -1829,12 +1832,14 @@ class ImapPoller(threading.Thread):
         db: Database,
         stop_event: threading.Event,
         referent_enricher=None,
+        daemon_ref: Optional[Any] = None,
     ):
         super().__init__(name='ImapPoller', daemon=True)
         self._queue = imap_task_queue
         self._db = db
         self._stop_event = stop_event
         self._referent_enricher = referent_enricher
+        self._daemon_ref = daemon_ref
         self._skipped_tasks = 0
     def run(self) -> None:
         logger.info("ImapPoller started")
@@ -1884,52 +1889,126 @@ class ImapPoller(threading.Thread):
             self._skipped_tasks = 0
         if task_count:
             logger.info(f"ImapPoller enqueued {task_count} IMAP tasks")
+
+    def _poller_shutdown_signaled_mono(self) -> Optional[float]:
+        daemon = self._daemon_ref
+        if daemon is None:
+            return None
+        return getattr(daemon, '_shutdown_signaled_mono', None)
+
+    def _poller_shutdown_deadline_mono(self) -> Optional[float]:
+        daemon = self._daemon_ref
+        if daemon is None:
+            return None
+        return getattr(daemon, '_shutdown_deadline_mono', None)
+
+    def _poller_statement_cap(self) -> float:
+        return poller_statement_cap(
+            self._poller_shutdown_deadline_mono(),
+            self._poller_shutdown_signaled_mono(),
+            self._stop_event,
+            _shutdown_remaining_seconds,
+        )
+
+    def _poller_discard_connection(self) -> bool:
+        return self._stop_event.is_set() or self._poller_shutdown_signaled_mono() is not None
+
     def _load_active_referents(self) -> List[Dict[str, Any]]:
         """Загружает список активных референтов из БД."""
+        if not poller_db_permitted(
+            self._stop_event, self._poller_shutdown_signaled_mono()
+        ):
+            return []
         conn = None
         cursor = None
+        cap = self._poller_statement_cap()
+        discard = False
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                f"SELECT {_REFERENT_ROW_COLUMNS} "
-                "FROM referents WHERE active = 1"
+            base_sql = (
+                f'SELECT {_REFERENT_ROW_COLUMNS} '
+                'FROM referents WHERE active = 1'
             )
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql)
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            discard = self._poller_discard_connection()
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'ImapPoller referent list hit max_statement_time (%ss)',
+                    cap,
+                )
+                rollback_connection_quietly(conn)
+                return []
+            logger.error(f'ImapPoller: failed to load referents: {exc}')
+            rollback_connection_quietly(conn)
+            return []
         except Exception as e:
-            logger.error(f"ImapPoller: failed to load referents: {e}")
+            logger.error(f'ImapPoller: failed to load referents: {e}')
             return []
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                release_mysql_connection(
+                    conn, discard=discard or self._poller_discard_connection()
+                )
+
     def _load_accounts_for_referent(self, referent_id: int) -> List[Dict[str, Any]]:
         """Загружает активные аккаунты референта из БД."""
+        if not poller_db_permitted(
+            self._stop_event, self._poller_shutdown_signaled_mono()
+        ):
+            return []
         conn = None
         cursor = None
+        cap = self._poller_statement_cap()
+        discard = False
         try:
             conn = self._db.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(
-                """
+            base_sql = """
                 SELECT id, email, auth_type, imap_host, imap_port,
                        username, password_enc, imap_encryption,
                        smtp_host, smtp_port, smtp_encryption,
                        provider, client_id, client_secret_enc
                 FROM external_accounts
                 WHERE referent_id = %s AND active = 1
-                """,
-                (referent_id,)
-            )
+            """
+            sql = format_set_statement_select(base_sql, cap)
+            cursor.execute(sql, (referent_id,))
             return cursor.fetchall()
+        except mysql.connector.Error as exc:
+            discard = self._poller_discard_connection()
+            if is_mariadb_statement_timeout(exc):
+                logger.warning(
+                    'ImapPoller account list hit max_statement_time '
+                    '(%ss, referent_id=%s)',
+                    cap,
+                    referent_id,
+                )
+                rollback_connection_quietly(conn)
+                return []
+            logger.error(
+                f'ImapPoller: failed to load accounts for referent {referent_id}: {exc}'
+            )
+            rollback_connection_quietly(conn)
+            return []
         except Exception as e:
             logger.error(
-                f"ImapPoller: failed to load accounts for referent {referent_id}: {e}"
+                f'ImapPoller: failed to load accounts for referent {referent_id}: {e}'
             )
             return []
         finally:
-            if cursor: cursor.close()
-            if conn: conn.close()
-            
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                release_mysql_connection(
+                    conn, discard=discard or self._poller_discard_connection()
+                )
+
 # =============================================================================
 # Обработчик watchdog для отслеживания новых файлов в Maildir/new
 # =============================================================================
@@ -2019,6 +2098,7 @@ class ProxyDaemon:
             self._imap_task_queue,
             self._db,
             self._stop_event,
+            daemon_ref=self,
         )
         # Watchdog-наблюдатель за Maildir/new
         self._observer: Optional[Observer] = None

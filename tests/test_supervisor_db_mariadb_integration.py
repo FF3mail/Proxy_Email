@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -49,6 +50,8 @@ from supervisor_db import (
     SUPERVISOR_MAX_STATEMENT_TIME_SEC,
     format_set_statement_select,
     is_mariadb_statement_timeout,
+    poller_statement_cap,
+    release_mysql_connection,
     rollback_connection_quietly,
     supervisor_max_statement_seconds,
 )
@@ -557,6 +560,177 @@ class SupervisorDbMariaDbIntegrationTests(unittest.TestCase):
             f'read={_mpd_import.DB_READ_TIMEOUT_SEC} '
             f'write={_mpd_import.DB_WRITE_TIMEOUT_SEC}'
         )
+
+
+class _PoolDb:
+    def __init__(self, pool: pooling.MySQLConnectionPool) -> None:
+        self._pool = pool
+
+    def get_connection(self):
+        return self._pool.get_connection()
+
+
+@unittest.skipUnless(_dsn_configured(), f'{DSN_ENV} not set (live MariaDB required)')
+class ImapPollerMariaDbIntegrationTests(unittest.TestCase):
+    """Owner-required cases (g)–(i) for ImapPoller shutdown DB hardening."""
+
+    ref_id: int = 0
+    measured: Dict[str, str] = {}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.ref_id = _reset_seed_data()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        time.sleep(0.5)
+        _mysql_cli(
+            'UNLOCK TABLES; '
+            'DELETE FROM clients; '
+            'DELETE FROM external_accounts; '
+            'DELETE FROM referents;'
+        )
+
+    def setUp(self) -> None:
+        self.pool = _production_pool(pool_name=f'dev56_poller_{id(self)}')
+
+    def test_g_poller_referent_load_capped_under_metadata_lock(self) -> None:
+        mpd = _load_mpd()
+        stop = threading.Event()
+        daemon = mpd.ProxyDaemon.__new__(mpd.ProxyDaemon)
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        daemon._stop_event = stop
+        cap = SUPERVISOR_MAX_STATEMENT_TIME_SEC
+        poller = mpd.ImapPoller(queue.Queue(), _PoolDb(self.pool), stop, daemon_ref=daemon)
+        conn_lock = _connect_direct()
+        conn_wait = _connect_direct()
+        try:
+            conn_lock.cursor().execute('LOCK TABLES referents WRITE')
+            t0 = time.monotonic()
+            refs = poller._load_active_referents()
+            elapsed = time.monotonic() - t0
+            self.measured['g_cap_sec'] = f'{cap:g}'
+            self.measured['g_elapsed_sec'] = f'{elapsed:.3f}'
+            self.assertEqual(refs, [])
+            self.assertLess(elapsed, cap + _TOLERANCE_SLOW_SEC)
+            self.assertGreater(elapsed, cap - 1.0)
+            conn_lock.cursor().execute('UNLOCK TABLES')
+        finally:
+            conn_lock.close()
+            conn_wait.close()
+        print(
+            f'MEASURED g_cap={self.measured["g_cap_sec"]} '
+            f'elapsed={self.measured["g_elapsed_sec"]}'
+        )
+
+    def test_h_poller_thread_join_bounded_under_lock(self) -> None:
+        mpd = _load_mpd()
+        mpd.IMAP_POLL_INTERVAL = 2
+
+        class _FastPoller(mpd.ImapPoller):
+            def run(self) -> None:
+                while not self._stop_event.is_set():
+                    self._enqueue_imap_tasks()
+                    for _ in range(4):
+                        if self._stop_event.is_set():
+                            return
+                        time.sleep(0.05)
+
+        stop = threading.Event()
+        daemon = mpd.ProxyDaemon.__new__(mpd.ProxyDaemon)
+        daemon._shutdown_signaled_mono = None
+        daemon._shutdown_deadline_mono = None
+        daemon._stop_event = stop
+        poller = _FastPoller(queue.Queue(), _PoolDb(self.pool), stop, daemon_ref=daemon)
+
+        conn_lock = _connect_direct()
+        holder_ready = threading.Event()
+        try:
+            cur = conn_lock.cursor()
+            cur.execute('LOCK TABLES referents WRITE')
+            holder_ready.set()
+            poller.start()
+            self.assertTrue(holder_ready.wait(timeout=3.0))
+            time.sleep(0.2)
+            now = time.monotonic()
+            daemon._shutdown_signaled_mono = now
+            daemon._shutdown_deadline_mono = now + 7.0
+            stop.set()
+            cap = poller._poller_statement_cap()
+            t0 = time.monotonic()
+            poller.join(timeout=25.0)
+            elapsed = time.monotonic() - t0
+            self.measured['h_cap_sec'] = f'{cap:g}'
+            self.measured['h_join_elapsed_sec'] = f'{elapsed:.3f}'
+            self.assertFalse(poller.is_alive())
+            self.assertLess(
+                elapsed,
+                SUPERVISOR_MAX_STATEMENT_TIME_SEC + _TOLERANCE_SLOW_SEC + 2.0,
+            )
+            self.assertGreater(elapsed, 0.2)
+            cur.execute('UNLOCK TABLES')
+        finally:
+            conn_lock.close()
+        print(
+            f'MEASURED h_cap={self.measured["h_cap_sec"]} '
+            f'join_elapsed={self.measured["h_join_elapsed_sec"]}'
+        )
+
+    def test_h_baseline_plain_select_under_lock_timed(self) -> None:
+        """Pre-fix style: plain SELECT (no SET STATEMENT) under LOCK TABLES."""
+        conn_lock = _connect_direct()
+        conn = _connect_direct(read_timeout=4)
+        try:
+            conn_lock.cursor().execute('LOCK TABLES referents WRITE')
+            t0 = time.monotonic()
+            err: Optional[MySQLError] = None
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    f'SELECT {_REFERENT_COLUMNS} FROM referents WHERE active = 1'
+                )
+                cur.fetchall()
+                cur.close()
+            except MySQLError as exc:
+                err = exc
+            elapsed = time.monotonic() - t0
+            conn_lock.cursor().execute('UNLOCK TABLES')
+        finally:
+            conn.close()
+            conn_lock.close()
+        self.measured['h_baseline_plain_elapsed_sec'] = f'{elapsed:.3f}'
+        self.measured['h_baseline_plain_errno'] = str(getattr(err, 'errno', None))
+        print(
+            'MEASURED h_baseline plain_select '
+            f'elapsed={self.measured["h_baseline_plain_elapsed_sec"]} '
+            f'errno={self.measured["h_baseline_plain_errno"]}'
+        )
+        self.assertLess(elapsed, _mpd_import.DB_READ_TIMEOUT_SEC + _TOLERANCE_SLOW_SEC)
+
+    def test_i_discard_release_bounded_pool_still_works(self) -> None:
+        conn_lock = _connect_direct()
+        try:
+            conn_lock.cursor().execute('LOCK TABLES referents WRITE')
+            conn = self.pool.get_connection()
+            cur = conn.cursor()
+            t0 = time.monotonic()
+            release_mysql_connection(conn, discard=True)
+            elapsed = time.monotonic() - t0
+            self.measured['i_discard_elapsed_sec'] = f'{elapsed:.3f}'
+            self.assertLess(elapsed, 2.0)
+            conn_lock.cursor().execute('UNLOCK TABLES')
+        finally:
+            conn_lock.close()
+        conn2 = self.pool.get_connection()
+        try:
+            cur2 = conn2.cursor()
+            cur2.execute('SELECT 1')
+            self.assertEqual(cur2.fetchone(), (1,))
+            cur2.close()
+        finally:
+            conn2.close()
+        print(f'MEASURED i_discard_elapsed={self.measured["i_discard_elapsed_sec"]}')
 
 
 if __name__ == '__main__':
